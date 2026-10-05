@@ -1,7 +1,60 @@
 import { expect, test } from "bun:test";
 
-import { appearanceLogoURL, normalizePublicAppearance } from "../src/stores/use-appearance-store";
+import { appearanceLogoURL, applyAppearanceMetadata, DEFAULT_PUBLIC_APPEARANCE, normalizePublicAppearance } from "../src/stores/use-appearance-store";
 import { moduleGroupSource } from "./helpers/module-group-source";
+
+type FakeElement = {
+    tag: string;
+    attrs: Record<string, string>;
+    content: string;
+    rel: string;
+    href: string;
+    setAttribute: (name: string, value: string) => void;
+    remove: () => void;
+};
+
+// 轻量 document 替身：足够支撑 applyAppearanceMetadata 的 meta/favicon 写入路径。
+function createMetadataDocument(dark = false) {
+    const registered = new Map<string, FakeElement>();
+    const appended: FakeElement[] = [];
+    const createElement = (tag: string): FakeElement => {
+        const element: FakeElement = {
+            tag,
+            attrs: {},
+            content: "",
+            rel: "",
+            href: "",
+            setAttribute(name, value) {
+                element.attrs[name] = value;
+            },
+            remove() {
+                for (const [key, value] of registered) if (value === element) registered.delete(key);
+            },
+        };
+        return element;
+    };
+    const documentMock = {
+        title: "",
+        documentElement: { classList: { contains: (name: string) => name === "dark" && dark } },
+        head: {
+            appendChild: (element: FakeElement) => {
+                appended.push(element);
+                if (element.tag === "meta") {
+                    const attribute = element.attrs.name !== undefined ? "name" : "property";
+                    registered.set(`${attribute}=${element.attrs[attribute]}`, element);
+                }
+            },
+        },
+        defaultView: undefined,
+        querySelector: (selector: string) => {
+            if (selector === 'link[rel~="icon"]') return null;
+            const match = selector.match(/^meta\[(name|property)="(.+)"\]$/);
+            return match ? registered.get(`${match[1]}=${match[2]}`) ?? null : null;
+        },
+        createElement,
+    };
+    return { documentMock, registered, appended };
+}
 
 test("initial HTML stays brand neutral until the public appearance is resolved", async () => {
     const [html, mainSource] = await Promise.all([Bun.file(new URL("../index.html", import.meta.url)).text(), Bun.file(new URL("../src/main.tsx", import.meta.url)).text()]);
@@ -129,4 +182,47 @@ test("appearance management exposes a server-side reset to the built-in Yingce b
     expect(pageSource).toContain("resetAdminAppearance()");
     expect(pageSource).toContain("已上传文件仍保留在存储资源中");
     expect(apiSource).toContain('http.delete<{ setting: AdminAppearance }>("/admin/settings/appearance")');
+});
+
+test("metadata uses the displayed wordmark while the stored appearance keeps the configured brand", () => {
+    const legacy = normalizePublicAppearance({});
+    const { documentMock, registered } = createMetadataDocument();
+    applyAppearanceMetadata(legacy, documentMock as unknown as Document);
+
+    expect(documentMock.title).toBe("源铭振跃");
+    expect(registered.get("property=og:title")?.content).toBe("源铭振跃");
+    expect(registered.get("name=twitter:title")?.content).toBe("源铭振跃");
+    expect(registered.get("property=og:site_name")?.content).toBe("源铭振跃");
+    // 版权页脚与原始配置不改：展示映射只作用于浏览器标签与分享卡。
+    expect(legacy.brandName).toBe(DEFAULT_PUBLIC_APPEARANCE.brandName);
+    expect(legacy.footerCopyright).toContain("影策");
+
+    const custom = normalizePublicAppearance({ brandName: "HIMA Studio", brandSlug: "hima-studio", seoTitle: "HIMA Studio - AI 影视工作台" });
+    const customDocument = createMetadataDocument();
+    applyAppearanceMetadata(custom, customDocument.documentMock as unknown as Document);
+    expect(customDocument.documentMock.title).toBe("HIMA Studio - AI 影视工作台");
+    expect(customDocument.registered.get("property=og:site_name")?.content).toBe("HIMA Studio");
+});
+
+test("the welcome entry resolves availability and appearance before rendering", async () => {
+    const source = await Bun.file(new URL("../src/welcome-application.tsx", import.meta.url)).text();
+
+    expect(source).toContain("getWelcomeAvailability");
+    expect(source).toContain('window.location.replace("/")');
+    expect(source).toContain("await bootstrapAppearance()");
+    expect(source.indexOf("bootstrapAppearance()")).toBeLessThan(source.indexOf("<WelcomePage />"));
+});
+
+test("the welcome page consumes the displayed brand for title, opening chapter and labels", async () => {
+    const [pageSource, storySource] = await Promise.all([
+        Bun.file(new URL("../src/pages/welcome/index.tsx", import.meta.url)).text(),
+        Bun.file(new URL("../src/pages/welcome/story.ts", import.meta.url)).text(),
+    ]);
+
+    expect(pageSource).toContain("displayBrandName(appearance.brandName)");
+    expect(pageSource).toContain("getWelcomeChapters(brandName)");
+    expect(pageSource).toContain("document.title = `${brandName} · 让一个故事从文字走向银幕`");
+    expect(pageSource).toContain("aria-label={`${brandName}创作之旅`}");
+    expect(pageSource).not.toContain("影策 · 让一个故事");
+    expect(storySource).not.toContain('title: "影策"');
 });

@@ -282,6 +282,12 @@ body:has(.welcome-page) {
 .welcome-opening {
     bottom: 15%;
 }
+/* 首章 h1 直接渲染品牌字标：四字中文名比原两字宽一倍，
+   用 min() 压缩字号防止水平溢出；仅作用于新品牌首章，其他自定义长名称保持原规则。 */
+.welcome-opening h1 {
+    white-space: nowrap;
+    font-size: min(var(--welcome-display), 18vw);
+}
 .welcome-subtitle {
     font-size: 19px;
     color: var(--welcome-paper);

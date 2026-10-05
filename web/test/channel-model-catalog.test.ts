@@ -7,14 +7,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CanvasVideoSettingsPopover } from "../src/components/canvas/canvas-video-settings-popover";
 import { VideoSettingsPanel } from "../src/components/video-settings-panel";
 import { canvasThemes } from "../src/lib/canvas-theme";
-import { mergeFetchedChannelModelCosts, type ChannelModelCatalogItem } from "../src/lib/channel-model-catalog";
+import { ensureChannelModelCosts, mergeFetchedChannelModelCosts, type ChannelModelCatalogItem } from "../src/lib/channel-model-catalog";
 import { defaultModelCapabilityConfig, pluginWorkflowCapabilityConfig } from "../src/lib/model-capabilities";
 import { ChannelModelSettings } from "../src/pages/settings/channel-video-pricing";
 import { fetchChannelModels } from "../src/services/api/image";
 import { apiClient } from "../src/services/api/request";
 import { fetchPluginProviderCatalog } from "../src/services/api/plugin-catalog";
 import { createVideoGenerationTask } from "../src/services/api/video";
-import { createModelChannel, defaultConfig, modelDisplayName, normalizeConfigSnapshot, resolveModelRequestConfig, selectableModelsByCapability, type AiConfig } from "../src/stores/use-config-store";
+import { createModelChannel, defaultConfig, encodeChannelModel, modelDisplayName, normalizeConfigSnapshot, resolveModelRequestConfig, selectableModelsByCapability, type AiConfig } from "../src/stores/use-config-store";
 
 const originalAxiosRequest = axios.request;
 const originalApiRequest = apiClient.request;
@@ -439,5 +439,31 @@ describe("public channel model catalog", () => {
         expect(html).toContain("768P竖 · 16:9 · 8s");
         expect(panelHtml).toMatch(/aria-pressed="true"[^>]*>768P竖<\/button>/);
         expect(body.resolution_name).toBe("768p竖");
+    });
+
+    test("user custom text model without saved protocol still uses chat-completion", () => {
+        const channel = createModelChannel({
+            id: "cpa",
+            name: "CPA",
+            scope: "user",
+            apiFormat: "openai",
+            baseUrl: "http://localhost:18317",
+            apiKey: "k",
+            models: ["gemini-3.8-flash-high"],
+        });
+        channel.interfaceType = undefined;
+        channel.modelCosts = [];
+        const model = encodeChannelModel("cpa", "gemini-3.8-flash-high");
+        const config = { ...defaultConfig, channels: [channel], model, textModel: model };
+        expect(resolveModelRequestConfig(config, model)).toMatchObject({
+            channelId: "",
+            interfaceType: "chat-completion",
+            model: "gemini-3.8-flash-high",
+        });
+        expect(ensureChannelModelCosts(channel)[0]).toMatchObject({
+            model: "gemini-3.8-flash-high",
+            capability: "text",
+            protocol: "chat-completion",
+        });
     });
 });

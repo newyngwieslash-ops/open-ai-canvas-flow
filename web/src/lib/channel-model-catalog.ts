@@ -105,6 +105,31 @@ export function mergeFetchedChannelModelCosts(channel: ModelChannel, catalog: Ch
     return next;
 }
 
+export function ensureChannelModelCosts(channel: ModelChannel): ChannelModelCost[] {
+    const existingByModel = new Map((channel.modelCosts || []).map((cost) => [cost.model, cost]));
+    return uniqueRawModelsForCosts(channel.models).map((model) => {
+        const existing = existingByModel.get(model);
+        if (existing?.protocol && existing.capability) return existing;
+        const capability = existing?.capability || "text";
+        const protocol = existing?.protocol || protocolTemplateForNewCatalogModel(capability, channel.interfaceType) || "chat-completion";
+        return {
+            model,
+            capability,
+            protocol,
+            billingMode: existing?.billingMode || "fixed_request",
+            unitPriceMicrocredits: existing?.unitPriceMicrocredits || 0,
+            ...existing,
+            model,
+            capability,
+            protocol,
+        };
+    });
+}
+
+function uniqueRawModelsForCosts(models: string[]) {
+    return Array.from(new Set((models || []).map((model) => { const trimmed = model.trim(); const index = trimmed.indexOf("::"); return (index >= 0 ? trimmed.slice(index + 2) : trimmed).trim(); }).filter(Boolean)));
+}
+
 function protocolTemplateForNewCatalogModel(capability: ChannelModelCost["capability"] | undefined, channelProtocol: ModelProtocol | undefined): ModelProtocol | undefined {
     if (!capability) return channelProtocol;
     if (modelProtocolCapability(channelProtocol) === capability) return channelProtocol;

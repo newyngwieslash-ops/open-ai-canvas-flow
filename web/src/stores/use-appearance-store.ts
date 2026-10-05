@@ -4,6 +4,7 @@ import { DEFAULT_UPDATE_ANNOUNCEMENT, normalizeUpdateAnnouncement } from "@/lib/
 
 import type { PublicAppearance } from "@/services/api/appearance";
 import { applySkinTheme, DEFAULT_CLASSIC_SKIN, normalizeSkinDefinition } from "@/lib/skin-themes";
+import { displayBrandName, displayBrandTitle } from "@/lib/brand-display";
 
 export const DEFAULT_PUBLIC_APPEARANCE: PublicAppearance = {
     updates: DEFAULT_UPDATE_ANNOUNCEMENT,
@@ -110,15 +111,18 @@ export function commitPublicAppearance(value?: Partial<PublicAppearance> | null)
 
 export function applyAppearanceMetadata(appearance: PublicAppearance, targetDocument: Document | undefined = typeof document === "undefined" ? undefined : document) {
     if (!targetDocument) return;
-    targetDocument.title = appearance.seoTitle || appearance.brandName;
+    // 浏览器标签与分享卡元数据使用 UI 展示名；appearance 配置、版权页脚与协议标题保持原值。
+    const name = displayBrandName(appearance.brandName);
+    const title = displayBrandTitle(appearance.seoTitle, appearance.brandName);
+    targetDocument.title = title;
     setMeta(targetDocument, "name", "description", appearance.seoDescription);
     setMeta(targetDocument, "name", "keywords", appearance.seoKeywords);
-    setMeta(targetDocument, "property", "og:title", appearance.seoTitle || appearance.brandName);
+    setMeta(targetDocument, "property", "og:title", title);
     setMeta(targetDocument, "property", "og:description", appearance.seoDescription);
-    setMeta(targetDocument, "property", "og:site_name", appearance.brandName);
+    setMeta(targetDocument, "property", "og:site_name", name);
     setMeta(targetDocument, "property", "og:type", "website");
     setMeta(targetDocument, "name", "twitter:card", "summary");
-    setMeta(targetDocument, "name", "twitter:title", appearance.seoTitle || appearance.brandName);
+    setMeta(targetDocument, "name", "twitter:title", title);
     setMeta(targetDocument, "name", "twitter:description", appearance.seoDescription);
     const mode = targetDocument.documentElement.classList.contains("dark") ? "dark" : "light";
     setMeta(targetDocument, "name", "theme-color", appearance.activeSkin.tokens[mode].canvas);

@@ -1,0 +1,335 @@
+源铭振跃 UI 品牌字标替换实现方案
+适用项目：https://github.com/ddcat-ai/open-ai-canvas
+源码核查基线：main，commit 125864f69252d1de8cf76b4036fe4cf60a2d7e1b
+核查日期：2026-10-05。实施时以用户本地实际分支为准，不强制切换或覆盖本地版本。
+
+一、可直接执行的任务约束
+
+目标：在真实产品界面的品牌 LOGO/字标位置，将“影策”显示为“源铭振跃”，保证四字名称在登录页、工作区侧栏、管理后台与欢迎页完整可读。默认保留现有图形标识与配色，不设计新图标，不把四字文字塞进小 favicon。
+
+本任务默认是“UI 字标替换”，不是整个项目改名。不得全仓库批量替换“影策”、yingce、open-ai-canvas 或 infinite-canvas。不得修改 LICENSE、NOTICE、第三方署名、协议正文、版权主体、历史记录、用户数据、API 路由、存储 key、插件协议、数据库 schema、包名和部署服务名。不得自动发布、推送或部署。
+
+先检查 git status、根 AGENTS.md、相关目录约定与用户已有变更；不使用 reset --hard、checkout --、清库、清缓存等破坏操作。本方案只完成只读研究，没有修改项目或安装运行依赖。下述代码是实施建议，执行 agent 应在本地真实源码中应用、测试。
+
+默认推荐执行第六节“展示层方案”。理由：当前服务端 brandName 同时决定邮件品牌、协议默认标题和版权页脚，直接改配置或后端默认值会超出纯 UI LOGO 范围。若用户明确要全站品牌重命名，再采用第九节扩展方案，不混用两条路线。
+
+二、真实技术栈与启动入口
+
+1. web/：React 19.2.7、TypeScript ^7.0.2、Vite ^8.1.5、React Router ^8.2.0、Ant Design ^6.5.1、Tailwind ^4.3.3、Zustand ^5.0.14
+2. web/package.json 指定 packageManager 为 bun@1.3.9；使用 web/bun.lock，不额外生成 npm/pnpm 锁文件
+3. backend/：Go 1.25、Gin、GORM；本次最小方案无需改后端
+4. docs/ 是独立 Next.js/Fumadocs 文档站，不是主 UI。默认不替换其中的原项目名
+5. 主入口 web/src/main.tsx → appearance-bootstrap → application；/welcome 特殊分流到 web/src/welcome-application.tsx
+
+已核实命令：
+  cd web
+  bun install --frozen-lockfile
+  bun run typecheck
+  bun run build
+  bun run lint
+  bun test test/appearance-bootstrap.test.ts
+  bun run dev
+其中 build = tsc --noEmit && vite build；lint = eslint src test，仓库说明它主要检查特定 UI 禁用规则，不等同完整质量保证。不要默认跑 format --write 全仓库。
+dev 使用 0.0.0.0:3000；只有用户允许本地预览/联调后才启动。已有本地服务优先复用。后端或依赖缺失属于验证阻碍，不可宣称已通过运行验收。
+
+三、源码关键结论
+
+A. 品牌不是散落图片上的两个字
+web/src/stores/use-appearance-store.ts：
+  DEFAULT_PUBLIC_APPEARANCE.brandName = "影策"
+  logoUrl/darkLogoUrl = "/logo.svg"
+  seoTitle = "影策"
+  brandSlug = "open-ai-canvas"
+  brandStudioLabel() 对默认品牌返回 "YINGCE STUDIO"
+  applyAppearanceMetadata() 设置 document.title、OG/Twitter metadata 与 favicon
+
+服务端 backend/internal/app/appearance.go 的 defaultAppearanceBrandName 同样为“影策”。系统已有 GET /api/public/appearance 和后台外观设置，已保存配置会覆盖源码默认值。只改前端默认值，在 API 返回原品牌后会改回来；只改后端默认值，有旧配置时也未必生效。
+
+B. 图片标记与文字字标分开
+web/src/components/brand/brand-logo.tsx 的 BrandLogo：
+  logoConfigured 为 false 时，直接返回调用者 fallback
+  已配置自定义 Logo 才加载 appearance.logoUrl/darkLogoUrl
+  自定义图加载失败返回中性占位，不能退回旧品牌
+web/public/logo.svg 只有 64×64 几何 path，没有“影策”文字。
+所以替换 logo.svg 不等于改完所有 logo，也无法替换文字字标。
+未配置自定义 logo 时：
+  登录页用 /logo.svg 的 CSS mask
+  工作区侧栏、管理后台用 lucide InfinityIcon
+  欢迎页和加载器使用各自的中性 fallback
+这些行为在默认方案中全部保持。
+
+C. welcome 是实际遗漏点
+web/src/welcome-application.tsx 只检查 welcomeEnabled，当前未调用 bootstrapAppearance。
+web/src/pages/welcome/index.tsx：
+  第 62 行 document.title 写死影策
+  第 122 行 aria-label 写死影策创作之旅
+  首章 h1 读取 chapters[0].title
+web/src/pages/welcome/story.ts 第 2 行把该标题写死为影策。
+同时欢迎页顶部和底部另从 appearance.brandName 读取品牌。需要统一实际渲染来源，不能只改其中一个。
+
+D. 存在图片内旧品牌
+已逐张查看 web/public/welcome/workbench-{canvas,create,project}.webp。
+workbench-create.webp 中的侧栏、导航和正文明确包含“影策”像素；源码字符串检索不会发现。
+另两张在本次目视检查中未发现同类中文品牌字标。不能据此断言整个仓库所有图片和视频均无旧品牌。
+
+E. 全局改 brandName 的隐含副作用
+backend/internal/app/auth_bridge.go 将 appearanceBrandName 传入认证域。
+backend/internal/auth/registration.go 会在标题未配置时生成“品牌名服务协议”。
+backend/internal/auth/email.go、verification.go、password_reset.go 的邮件身份/内容跟随品牌。
+backend/internal/app/appearance.go 的 effectiveAppearanceCopyright 默认由 BrandName 生成版权页脚。
+前端多个创作提示、文件导出名、素材库文案也跟随 brandName。
+这些不是纯 UI LOGO。本任务不应借改字标重写这些主体信息。
+
+四、修改清单：默认方案
+
+必改或明确检查：
+1. 新增 web/src/lib/brand-display.ts
+   只实现 UI 展示名与默认页面标题映射；不引入新 store、环境变量、后端字段或数据库
+2. web/src/components/layout/workspace-sidebar-nav.tsx
+   WorkspaceSwitcher 使用映射后的字标与首页 aria-label；保留图形、导航行为和折叠逻辑
+3. web/src/pages/auth/auth-scene.tsx
+   登录/注册/找回密码共用的品牌链接文字、品牌影片 aria-label；处理 YINGCE STUDIO 旧品牌字样
+4. web/src/pages/admin/components/admin-shell.tsx
+   AppChangelogButton 的品牌 label 显示新字标；保留版本、公告按钮、折叠状态
+5. web/src/components/layout/workspace-top-bar.tsx
+   若此版本显示品牌面包屑，使用映射后的展示名；不更改业务页面名称
+6. web/src/stores/use-appearance-store.ts
+   仅 applyAppearanceMetadata 的默认 title 与相关品牌 metadata 显示映射；原 appearance 对象不改
+7. web/src/welcome-application.tsx
+   在 welcomeEnabled 成功且为 true 后，bootstrapAppearance 完成再 render；保留关闭入口跳转和错误处理
+8. web/src/pages/welcome/index.tsx
+   导航字标、页脚品牌链接、h1、标题、品牌 aria-label/图片 alt 统一展示名
+9. web/src/pages/welcome/story.ts
+   消除首章“固定品牌就是产品名称”的隐含依赖，按下面实现建议处理
+10. web/src/pages/welcome/welcome.css 与 web/src/styles/globals.css
+    仅在真实四字布局验收需要时局部修改；不能做全站字体或侧栏重设计
+11. web/public/welcome/credits.html
+    “返回影策”可改为中性“返回欢迎页”；许可/作者/免责声明正文保留原文
+12. web/public/welcome/workbench-create.webp
+    欢迎页属于验收范围时，用改后真实本地 UI 重新截图，保持 WebP 和原长宽比；不使用生成图伪造截图。若无运行环境，单列未完成项，不称全站无旧品牌
+13. 新增或更新相关专项测试（见第八节）
+
+无需为改文字直接修改：
+  web/src/components/brand/brand-logo.tsx
+  web/public/logo.svg
+  web/src/components/ui/aceternity/full-screen-loader.tsx
+  web/index.html
+  backend/、数据库与现有 appearance 数据
+以上仍需检查看是否存在本地分支差异。
+
+五、边界内允许保留“影策”的位置
+
+UI LOGO 验收不要求全仓库 rg 零命中。以下保留属于正确结果：
+- LICENSE/NOTICE、原作者署名、第三方素材许可与免责声明
+- 默认服务协议、邮件模板、版权内容及已配置法律文本
+- 更新日志、历史聊天、用户项目、素材、测试字幕样例
+- 插件作者“影策团队”、API "yingce.plugin/v1" / v2、.yingce-plugin 扩展名
+- localStorage key yingce.* / infinite-canvas:*、诊断包名、脚本文件名
+- 创作助手 persona、画布 Agent 名称（独立 canvas.agentName 配置）、prompt
+- docs/、README、贡献指南等原项目介绍
+- 第三方 OpenAI、Gemini、Claude、DeepSeek、支付等图标
+
+如果用户要求“所有产品可见文案均不得出现影策”，必须按第九节重新确认范围；不能偷偷扩大为全项目或法律主体替换。
+
+六、推荐实现：前端显示映射，避免业务身份联动
+
+1. 一个轻量纯函数足够
+建立 web/src/lib/brand-display.ts，建议：
+
+export const SOURCE_UI_BRAND = "影策";
+export const UI_BRAND_NAME = "源铭振跃";
+
+export function displayBrandName(value: string): string {
+    return value.trim() === SOURCE_UI_BRAND ? UI_BRAND_NAME : value;
+}
+
+export function displayBrandTitle(title: string, brandName: string): string {
+    const displayName = displayBrandName(brandName);
+    const resolvedTitle = title || brandName;
+    return resolvedTitle === SOURCE_UI_BRAND && brandName.trim() === SOURCE_UI_BRAND
+        ? displayName
+        : resolvedTitle;
+}
+
+只把明确的旧默认品牌映射为新字标；保留其他自定义品牌，不正则全局替换管理员设置的标题。自定义 SEO 标题若含原品牌，列为需人工确认，不自动改写。
+
+为什么需要这个文件：多个真实 UI 品牌入口共享同一条“只改变展示、不改变配置/版权/协议”的规则，纯函数消除重复；它不是另造一套品牌配置系统。不要在各组件硬编码四字名称，也不要把整个 appearance 对象的 brandName 重写后放回 store，这会扩散到协议标题等消费者。
+
+2. 各字标组件
+原始 appearance 继续保留。在组件内：
+  const brandLabel = displayBrandName(appearance.brandName);
+只将品牌 LOGO 文字和其可访问名称替换为 brandLabel。
+工作区当前已具备 min-w-0、truncate 和图标 shrink-0，先测试四字是否完整，再决定布局改动。
+侧栏折叠时当前显示“展开侧栏菜单”按钮，不强行增加文字或改变交互。
+
+3. 登录页英文副标
+当前 brandStudioLabel() 对默认值返回 YINGCE STUDIO。默认字标替换时不能让这一旧品牌提示继续与新字标并列。
+建议在 auth-scene 局部判断原品牌为 SOURCE_UI_BRAND 时显示中性“AI 创作工作台”，其他自定义品牌继续 brandStudioLabel(appearance)。
+不要擅自创造“源铭振跃”的英文品牌名或改 brandSlug；后者关联对象存储建议前缀和诊断身份。
+
+4. 标题与 favicon
+在 applyAppearanceMetadata 内计算：
+  const name = displayBrandName(appearance.brandName);
+  const title = displayBrandTitle(appearance.seoTitle, appearance.brandName);
+document.title、og:title、twitter:title 使用 title；og:site_name 使用 name。
+seoDescription/keywords 在默认最小范围中保持，作为“可选宣传文案更新”另列；不要碰 footerCopyright。
+favicon 继续 appearanceLogoURL，index.html 继续 <title>正在加载</title> 和 data:, 中性占位。不能在首屏 HTML 写死新品牌，以免覆盖自定义部署与破坏已有 bootstrap 测试。
+本方案默认包含上述默认页面标题映射；不得改自定义SEO文案。
+
+5. welcome 入口和首章
+welcome-application：
+  先 getWelcomeAvailability；
+  welcomeEnabled !== true 时保持跳转；
+  true 时 await bootstrapAppearance() 再渲染 WelcomePage。
+该函数已有超时/默认降级，不复制一套 fetch，不让接口失败直接卡死。
+注意成功路径会多一个外观请求；验证关闭 welcome 时不额外请求外观，保留当前错误页。
+
+WelcomePage 将 displayBrandName(appearance.brandName) 传入 WelcomeExperience。
+将标题单独拆为 useEffect，依赖 [brandName]，设置：
+  document.title = `${brandName} · 让一个故事从文字走向银幕`;
+避免把品牌依赖塞进原滚动/媒体监听 effect 导致监听反复重装。
+section aria-label 改为 `${brandName}创作之旅`。
+唯一推荐实现：story.ts 提供纯函数 getWelcomeChapters(brandName)，由保留的六章结构返回首章 title 为传入品牌名的数组；其余五章原样。将固定首章品牌文字从静态模板中移除。WelcomeExperience 使用该函数的返回值渲染 h1 与章节导航，不再直接依赖写死品牌的 chapters。更新此模块调用与测试，不要引入 store 到静态 story 数据模块。
+同步原 welcome-story.test.ts 对首章“影策”的断言，改成检测已解析品牌，并保留三个素材版本和全部媒体/署名检查。
+
+6. 实际内容截图
+先完成真实 UI，再在本地测试账号/测试数据中截取“创作”页面替换 workbench-create.webp。不要截用户真实邮件、密钥、项目或账号。复用原资源路径可避免无谓改引用，但部署缓存需验证；如采用带版本新文件名，同步 story.ts 的 showcases 对应引用。
+测试环境无法运行时保留原图并报告“欢迎页演示截图仍含旧品牌，未完成”；不能涂抹截图或靠隐藏页签掩盖。
+
+七、字体、四字宽度、响应式与可访问性
+
+1. 源码全局字体已含 Inter Variable、PingFang SC、Hiragino Sans GB、Microsoft YaHei 和系统 sans-serif；中文由系统中文字体承担。无需新增网络字体或字体包。保持现有字重与主题 token
+2. 侧栏实际最终规则 .app-user-workspace .app-workspace-brand-wordmark 为 15px / 700 / letter-spacing:-.03em。四字约 60px 字宽，通常可容纳，但必须加上图标、间距、内边距、折叠按钮实际测量；不能只凭估计判通过
+3. 登录页品牌链接与“播放品牌影片”同排。320/360px 宽时若拥挤，给 logo shrink-0、字标 nowrap，适当缩小局部 gap 或让右侧按钮在窄屏只保留图标并补 aria-label；不要把字标压成单字换行
+4. welcome h1 原字号移动端可达 74px、较窄端 66px；四字比原两字宽一倍。优先局部加：
+   .welcome-opening h1 { white-space: nowrap; font-size: min(var(--welcome-display), 18vw); }
+   这是初始建议，需按实际 --welcome-gutter 和最长自定义名称验证调整，不把此规则套到其他章节。当前只要求四字全显；将该新增nowrap/字号规则用专用class限定于新四字品牌，其他自定义品牌保留原规则，避免影响长名称
+5. welcome 顶栏已有 nowrap、移动端15px和22px图标；检查 CTA、菜单按钮与品牌不重叠
+6. 管理后台检查展开状态文字、版本号和折叠后工具提示；不为了四字永久加宽整个应用布局
+7. 文字是真实 DOM，不改成含字体依赖的 SVG <text> 或四字 PNG。链接以完整“源铭振跃首页”作为 accessible name；装饰图保持 alt=""，避免读屏重复朗读
+8. 测试浅色/深色、200% zoom、macOS/Windows 中文字体回退、reduced-motion。现有 focus-visible、动画降级和 logo 失败占位不得破坏
+9. 未提供新图形时 favicon 保持原图。将来要新图形：用清晰的方形矢量 mark，分别考虑浅深主题，不能以16px显示四字全文。需同步配置上传、fallback、CSS mask和favicon链路，单改logo.svg不够
+
+八、测试、验收与交付
+
+先记录基线状态，再执行最小充分验证；本方案作者没有运行这些检查。
+
+A. 新增纯函数测试 web/test/brand-display.test.ts
+- 影策 → 源铭振跃
+- 自定义 HIMA Studio 保持
+- 自定义中文品牌保持
+- 带空格的旧默认值映射
+- 默认空 title 正确使用品牌
+- 自定义 SEO 标题不被批量替换
+- 不修改输入 appearance 对象
+
+B. 扩展/运行已有测试
+  cd web
+  bun test test/brand-display.test.ts test/appearance-bootstrap.test.ts test/appearance-refresh.test.ts test/app-icon-neutral-bootstrap.test.ts test/welcome-story.test.ts test/auth-theme.test.ts test/site-appearance-and-skins.test.ts
+  bun run typecheck
+  bun run lint
+  bun run build
+
+追加针对 metadata 的测试：title/og/twitter/site_name 使用新展示字标，footer/原始brandName保持；自定义部署不被覆盖。
+追加 welcome 入口回归：关闭时跳转，开启时读取外观；默认名称、定制名称、外观接口失败降级；注册/找回密码共用场景完整。
+如果工具或依赖缺失，报告“未执行”及阻碍，不把静态源码检查说成测试通过。
+测试源码断言如与合理重构冲突，应改为行为断言，不为改名删除 logo 安全回退、中性首屏、单logo浅深兼容等保护。
+
+C. 真实路由手工验收
+- /login、/register、/forgot-password：字标、影片标签、登录副标；不要实际提交注册或发送邮件来“测试改名”
+- 登录后首页/创作工作区侧栏：展开/折叠、导航、面包屑；四字完整，折叠按钮可点
+- /admin/settings/appearance 及后台壳：显示字标不影响原配置读取和保存
+- /welcome（仅已开启）：三种素材版本、首章h1、顶部、底部、浏览器标题、演示截图；返回、关闭影片与菜单无回归
+- 公开只读分享入口（本地存在时）：检查其现有品牌位置，不改用户内容
+- 路由加载/全屏加载：没有新的旧品牌闪烁，图形与动画正常
+- 浅/深主题、320/360/390/768/1024/1440宽度、200% zoom
+- 正常外观API、慢接口、失败降级、配置logo加载失败、无logo、单logo、浅深双logo
+- 自定义品牌不被强制替换；刷新后与软导航结果一致
+- 不清空 IndexedDB/localStorage 验证；用独立测试浏览器上下文检查首次访问
+
+D. 验收标准
+- 当前默认产品的指定 LOGO/字标入口显示完整“源铭振跃”
+- 默认 LOGO 周围不再残留 YINGCE STUDIO
+- 欢迎页首章和标题一致；若演示截图仍含旧品牌，应判该项未完成
+- 无图标拉伸、截断、换字、字体缺字、水平溢出或点击区域遮挡
+- 法律文案、版权、原始配置与业务数据不变
+- 类型、构建、专项测试结果如实列出；已有基线错误单独注明
+
+E. 搜索复核与回滚
+  git diff --check
+  git diff --stat
+  git diff -- web/src web/public/welcome web/test
+  rg -n '影策|YINGCE STUDIO|yingce|open-ai-canvas' web/src web/public web/index.html
+不要以“搜索零命中”为目标；按第五节逐项解释剩余项。
+保存本次 diff、源commit、截图和测试摘要；未经要求不提交或推送。
+若用户需要提交，可用：
+  feat(brand): UI字标 - 替换为源铭振跃
+回滚只撤回本任务的独立提交/补丁；不得覆盖用户其他修改。纯展示方案不写服务器配置，因此无需数据迁移或数据库回滚。
+
+九、可选扩展：用户明确要求全站品牌名也改时
+
+如果用户希望后台配置、创作提示、导出文件名、助手等都采用新品牌，可改用现有 appearance 系统，此时移除展示层映射以免出现两个真相。
+
+1. 已部署站点：通过 /admin/settings/appearance 改 brandName，先读取/备份完整当前设置并只修改目标字段。保留logo资源、皮肤、画布配置、更新公告、ICP备案、视频等。PATCH 在当前实现中保存完整 AppearanceSetting，不应自行只发送一个brandName字段而忽略其余必需配置。优先沿用现有设置页的合法表单提交
+2. 新安装默认值：同步 web/src/stores/use-appearance-store.ts 和 backend/internal/app/appearance.go 的默认品牌。旧站点存在appearance记录时，不会自动变更，不能偷偷更新数据库
+3. 不改 brandSlug，除非用户明确指定英文标识。对象存储前缀与诊断等依赖需要额外评估
+4. welcome独立入口、h1与标题问题仍需修复；BrandLogo默认fallback行为仍需尊重
+5. 若需画布Agent名称同步，单独修改/配置 web/src/lib/canvas/agent-appearance.ts 与 backend/internal/app/appearance_canvas.go；保留用户自定义Agent。它不是LOGO，不能默认改
+6. sidebar-checkin.ts 的空名fallback、创作助手提示词、插件作者等逐项判断，不做全局替换
+7. 管理页“恢复影策默认”相关按钮/确认/成功提示可改为“恢复内置默认”，后台新增审计文案亦用中性称呼；历史审计不改。必须同步相邻测试
+8. 不得点击“恢复默认”作为简单改名捷径：源码ResetAppearance会删除整个appearance设置记录，重置名称、视频、Agent、更新公告、SEO、备案和主题；已上传文件虽不删除，其他设置也会丢失
+9. 版权、协议、邮件是独立确认项。若不能改变，需在实施前明确保留其当前有效值并评估品牌继承机制；不能把自动继承副作用当作用户同意修改法律主体。只改源码默认值也会影响新安装生成的版权和协议标题，应先解决范围
+10. 新增后端专项测试后运行：
+    cd backend
+    go test ./internal/app -run 'Appearance'
+    go test ./internal/auth -run 'RegistrationAgreement|SenderName'
+    再按实际改动范围决定完整 go test ./...；本方案没有执行
+11. 修改配置后的回滚应使用之前保存的合法配置；不要删除整个数据库，不删除上传素材
+
+十、许可边界
+
+仓库 MIT 许可不等于所有依赖和素材均为 MIT。保留项目 LICENSE/NOTICE 与上游版权声明；替换 UI 字标不转移原作品版权，也不自动获得新商标或第三方商用许可。
+当前依赖包含 tldraw 5.2.5 与 @ffmpeg/core 0.12.10，依赖和分发方式需要单独核对其授权；品牌替换不解决这些合规事项。
+欢迎页 Blender 开放电影素材带独立署名与许可，credits.html 的许可链接、素材作者与免责声明不可因换品牌被删除。
+此节是实施边界提醒，不构成完整法律意见。
+
+十一、可核验源码链接
+
+以下均固定到本次 commit，行号在本地版本可能变化：
+- 仓库基线：
+  https://github.com/ddcat-ai/open-ai-canvas/tree/125864f69252d1de8cf76b4036fe4cf60a2d7e1b
+- 品牌状态、默认值、metadata：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/stores/use-appearance-store.ts
+- Logo组件：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/components/brand/brand-logo.tsx
+- 侧栏：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/components/layout/workspace-sidebar-nav.tsx
+- 登录壳：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/pages/auth/auth-scene.tsx
+- 独立欢迎页入口：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/welcome-application.tsx
+- 欢迎页：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/src/pages/welcome/index.tsx
+- 服务端默认/配置/重置：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/backend/internal/app/appearance.go
+- UI安全回归测试：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/test/appearance-bootstrap.test.ts
+- 实际脚本与依赖：
+  https://github.com/ddcat-ai/open-ai-canvas/blob/125864f69252d1de8cf76b4036fe4cf60a2d7e1b/web/package.json
+
+十二、完整交接提示词（可复制给本地 AI agent）
+
+请在我本地的 ddcat-ai/open-ai-canvas 项目中实施本方案的“默认展示层方案”：把原默认品牌的 UI LOGO/字标“影策”显示为“源铭振跃”，保留现有图形标识和配色。先查实际仓库路径、分支、commit、git status 与 AGENTS.md，不覆盖我已有修改，不强制切到方案研究commit。
+
+先定位 use-appearance-store、BrandLogo、auth-scene、workspace-sidebar-nav、admin-shell、workspace-top-bar、welcome独立入口和story，确认与本方案基线差异。使用一个轻量纯函数统一UI品牌展示，只映射原默认“影策”，保留我已有的其他自定义品牌。不要把映射后的品牌写回appearance store或服务端，以免改变版权、注册协议、邮件和其他业务身份。
+
+完成真实品牌入口、默认浏览器标题和欢迎页首章/可访问标签的一致展示；将登录处默认YINGCE STUDIO改为中性“AI 创作工作台”，不要编造英文品牌名。welcome当前独立入口需要在开放状态下解析appearance，再渲染；保留关闭welcome跳转与失败降级。首屏index.html继续品牌中性。保留BrandLogo已有自定义logo失败时的中性回退，不把logoConfigured强行设true。
+
+在真实页面检查四字宽度、浅深色、窄屏、侧栏折叠与200%缩放，仅做必要局部样式调整。当前welcome的workbench-create.webp图片像素内有旧品牌；若能预览，使用干净测试数据重截改后真实界面，不能生成或拼造截图；若无法完成，明确报告此未完成项。credits.html仅将返回链接改为中性文字，保留许可署名与免责声明。
+
+不要全局替换yingce/open-ai-canvas/infinite-canvas，不改API、storage key、插件协议、数据库、历史记录、版权、LICENSE/NOTICE、第三方logo、原作者身份或AI prompt，不点击后台恢复默认，不清数据，不推送或部署。全站品牌改名与新图形logo不是本次默认范围；若需要额外决定，先说明具体影响。
+
+请添加纯函数与受影响界面的专项回归测试，按方案运行适用的Bun测试、typecheck、lint和build。如需启动本地服务，先确认已有服务、端口与预览授权，使用独立测试数据。不能运行时如实列阻碍，不能把静态检查当运行通过。
+
+最终交付：改动文件与理由、实际源码commit、保留旧名清单及原因、验证命令和通过/失败/未执行状态、真实UI截图或无法截图原因、残留项和只撤销本次补丁的回滚方式。不要只给建议或静态HTML，请修改真实应用实现。
+

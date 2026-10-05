@@ -43,6 +43,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { AppChangelogButton } from "@/components/layout/app-changelog-modal";
 import { BrandLogoFrame } from "@/components/brand/brand-logo";
 import { publishWorkspaceSidebarCollapsed, readWorkspaceSidebarCollapsed, subscribeWorkspaceSidebarCollapsed } from "@/components/layout/workspace-sidebar-state";
+import { displayBrandName } from "@/lib/brand-display";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -162,7 +163,7 @@ function AdminShellLayout() {
                                 <AppChangelogButton
                                     className={cn("admin-sidebar-brand-button", collapsed && "is-collapsed")}
                                     icon={<BrandLogoFrame className="admin-sidebar-brand-mark grid shrink-0 place-items-center bg-foreground text-background" logoClassName="size-5 object-contain" alt="" fallback={<InfinityIcon className="size-4" />} />}
-                                    label={appearance.brandName}
+                                    label={displayBrandName(appearance.brandName)}
                                     showLabel={!collapsed}
                                     showVersion={!collapsed}
                                     labelClassName="admin-sidebar-brand-title"

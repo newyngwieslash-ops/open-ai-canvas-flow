@@ -1,11 +1,18 @@
-export const chapters = [
-    { id: "opening", label: "序幕", title: "影策", subtitle: "让一个故事，从文字走向银幕。", description: "面向 AI 影视与短剧创作的开源工作台。" },
+const baseChapters = [
+    { id: "opening", label: "序幕", title: "", subtitle: "让一个故事，从文字走向银幕。", description: "面向 AI 影视与短剧创作的开源工作台。" },
     { id: "story", label: "故事", title: "一念，成故事。" },
     { id: "world", label: "角色", title: "让想象，有了面孔。" },
     { id: "shots", label: "分镜", title: "字里行间，皆是镜头。" },
     { id: "motion", label: "生成", title: "这一刻，动起来。" },
     { id: "canvas", label: "画布", title: "一个世界，一张画布。" },
 ] as const;
+
+export type WelcomeChapter = Omit<(typeof baseChapters)[number], "title" | "subtitle"> & { title: string; subtitle?: string };
+
+/** 首章标题即当前展示品牌名，避免静态模板写死某一品牌。 */
+export function getWelcomeChapters(brandName: string): WelcomeChapter[] {
+    return baseChapters.map((chapter, index) => (index === 0 ? { ...chapter, title: brandName } : chapter));
+}
 
 export type WelcomeLook = {
     id: string;

@@ -1,13 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { chapters, getWelcomeLook, showcases, welcomeLooks } from "../src/pages/welcome/story";
+import { getWelcomeChapters, getWelcomeLook, showcases, welcomeLooks } from "../src/pages/welcome/story";
 
 const publicFile = (url: string) => resolve(import.meta.dir, "../public", url.replace(/^\//, ""));
 
 describe("welcome story", () => {
-    test("uses Yingce and only the three approved looks", () => {
-        expect(chapters[0].title).toBe("影策");
+    test("resolves the opening chapter title from the displayed brand", () => {
+        const chapters = getWelcomeChapters("源铭振跃");
+        expect(chapters).toHaveLength(6);
+        expect(chapters[0].title).toBe("源铭振跃");
+        expect(chapters[0].subtitle).toBe("让一个故事，从文字走向银幕。");
+        expect(chapters[0].label).toBe("序幕");
+        // 其余五章标题与素材版本保持原样，不随品牌变化。
+        expect(chapters.map((chapter) => chapter.id)).toEqual(["opening", "story", "world", "shots", "motion", "canvas"]);
+        expect(chapters[1].title).toBe("一念，成故事。");
+        expect(getWelcomeChapters("HIMA Studio")[0].title).toBe("HIMA Studio");
+    });
+
+    test("uses only the three approved looks", () => {
         expect(welcomeLooks.map((look) => look.id)).toEqual(["spring", "charge", "wing-it"]);
         expect(getWelcomeLook("").id).toBe("spring");
         expect(getWelcomeLook("?look=unknown").id).toBe("spring");

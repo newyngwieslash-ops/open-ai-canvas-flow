@@ -1,0 +1,109 @@
+.next/
+out/
+node_modules/
+open-storyboard-canvas/
+docs/*
+!docs/design/
+!docs/index.md
+!docs/adr/
+!docs/plans/
+# Keep the new plugin design spec versioned without unignoring generated docs.
+!docs/content/
+docs/content/*
+!docs/content/docs/
+docs/content/docs/*
+!docs/content/docs/plugins/
+docs/content/docs/plugins/*
+!docs/content/docs/plugins/ai-art-critique.mdx
+# Keep the task stability runbook versioned without unignoring generated docs.
+!docs/content/docs/backend/
+docs/content/docs/backend/*
+!docs/content/docs/backend/task-runtime-stability.mdx
+!docs/content/docs/backend/agent-prompt-policy.mdx
+!docs/content/docs/backend/canvas-agent-appearance.mdx
+!docs/content/docs/backend/update-announcements.mdx
+!docs/content/docs/backend/http-api.mdx
+!docs/content/docs/backend/code-map.mdx
+!docs/content/docs/backend/newapi-channel-2.mdx
+!docs/content/docs/backend/video-token-billing.mdx
+!docs/content/docs/backend/creative-agent-runtime.mdx
+# Keep the creative Agent design versioned without unignoring generated docs.
+!docs/content/docs/overview/
+docs/content/docs/overview/*
+!docs/content/docs/overview/creative-agent-design.mdx
+.env*
+!.env.example
+data/
+.local/
+/.local/docker-compose.postgres.yml
+coverage/
+dist/
+*.log
+*.tsbuildinfo
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.bak
+*.tmp
+/*.drawio.bkp
+/prompt-preferences-*-before.png
+/prompt*-before.png
+assets/prototypes/.*.drawio.bkp
+.settings-key
+.DS_Store
+.idea/
+.fleet/
+.history/
+.cache/
+.claude/
+.cursor/
+.playwright-mcp/
+.serena/
+.spec-workflow/
+.vscode/
+camera_language_guide.md
+.superdesign
+.playwright-cli/
+# Local Playwright / browser verification artifacts.
+/output/
+/project-memory/
+.workbuddy/
+
+# Local backend executable; never commit build output.
+backend/cmd/server/server
+# One-off local probe scripts and their compiled output.
+backend/tmp_*
+# Keep the runtime in source control; its optional debug map is not deployed.
+/web/public/live2d/live2dcubismcore.min.js.map
+.zocde/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

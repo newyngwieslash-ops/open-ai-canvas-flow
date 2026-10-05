@@ -38,6 +38,29 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\start-local.ps1
 ```
 
+## 二次开发一键重启（Windows）
+
+本仓库本地二次开发不要占用常见的 `3000` / `8080`（这两个端口经常被其他项目占用）。在仓库根目录执行：
+
+```bat
+restart.bat
+```
+
+脚本会：
+
+- 前端固定监听 `5178`，浏览器访问 [http://localhost:5178](http://localhost:5178)；
+- 后端固定监听 `8178`，Vite 把 `/api` 代理到 `http://127.0.0.1:8178`；
+- 数据目录和 Go 缓存与上面的一键启动相同（`.local/project-workbench-debug`、`.local/cache/go-build`、`.local/cache/go-mod`）；
+- 若 `5178` 或 `8178` 上是本仓库实例，则结束进程后重启；
+- 若端口被其他项目占用，则拒绝启动，并把进程信息写入 `.local/restart.log`。
+- 后端会精确放行 `localhost` 和 `127.0.0.1`，因此可以配置本机端口上的大模型（例如 `http://localhost:18317`）。不要打开全量私网开关。
+
+只检查端口、不启动：
+
+```bat
+restart.bat --check
+```
+
 ## 手工启动
 
 后端：

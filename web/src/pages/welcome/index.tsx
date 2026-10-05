@@ -5,10 +5,11 @@ import { ArrowDown, ArrowRight, ArrowUpRight, Code2, Menu, Pause, Play, X } from
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { IconButton } from "@/components/ui/base/buttons";
 import { getAntThemeConfig } from "@/lib/app-theme";
+import { displayBrandName } from "@/lib/brand-display";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
 
 import { WelcomeContributorsCard } from "./contributors-card";
-import { chapters, getWelcomeLook, showcases, welcomeLooks, type WelcomeLook } from "./story";
+import { getWelcomeChapters, getWelcomeLook, showcases, welcomeLooks, type WelcomeLook } from "./story";
 import "./welcome.css";
 import { Select } from "@/components/ui/base/select";
 
@@ -40,7 +41,7 @@ export default function WelcomePage() {
     };
     return (
         <ConfigProvider theme={getAntThemeConfig(true, appearance.activeSkin)}>
-            <WelcomeExperience key={look.id} look={look} brandName={appearance.brandName} onLookChange={changeLook} />
+            <WelcomeExperience key={look.id} look={look} brandName={displayBrandName(appearance.brandName)} onLookChange={changeLook} />
         </ConfigProvider>
     );
 }
@@ -57,9 +58,13 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
     const [showcase, setShowcase] = useState(1);
     const [playing, setPlaying] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const chapters = getWelcomeChapters(brandName);
 
+    // 品牌标题独立成 effect，避免把品牌依赖塞进滚动/媒体监听 effect 导致监听反复重装。
     useEffect(() => {
-        document.title = "影策 · 让一个故事从文字走向银幕";
+        document.title = `${brandName} · 让一个故事从文字走向银幕`;
+    }, [brandName]);
+    useEffect(() => {
         const media = window.matchMedia("(prefers-reduced-motion: reduce)");
         const onMotion = () => setReduced(media.matches);
         media.addEventListener("change", onMotion);
@@ -119,7 +124,7 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
             </aside>
 
             <main>
-                <section ref={storyRef} id="story" className="welcome-story" aria-label="影策创作之旅">
+                <section ref={storyRef} id="story" className="welcome-story" aria-label={`${brandName}创作之旅`}>
                     <div className={`welcome-stage chapter-${chapter}${staticScene ? " is-static" : ""}`}>
                         <div className={`welcome-poster${ready && !staticScene ? " is-ready" : ""}`} aria-hidden="true"><img src={look.frames[staticScene ? chapter * 2 : 0]} alt="" fetchPriority="high" /></div>
                         {!staticScene && <SceneBoundary onError={() => setFailed(true)}><Suspense fallback={null}><StoryReel look={look} progress={progressRef} paused={paused} onReady={() => setReady(true)} onError={() => setFailed(true)} /></Suspense></SceneBoundary>}
@@ -141,8 +146,7 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
                 <section id="workbench" className="welcome-workbench">
                     <div className="welcome-section-heading"><h2>让想象，有处落笔。</h2></div>
                     <div className="welcome-workbench-bar"><Tabs activeKey={String(showcase)} aria-label="工作台预览" items={showcases.map((item, index) => ({ key: String(index), label: item.name }))} onChange={(key) => setShowcase(Number(key))} /><Button type="link" href={active.href} icon={<ArrowUpRight size={16} />} iconPlacement="end">进入{active.name}</Button></div>
-                    <div id="workbench-preview" role="tabpanel" className="welcome-workbench-preview"><img src={active.image} alt={`${brandName}${active.name}界面`} loading="lazy" /></div>
-                    <div className="welcome-workbench-caption"><p>{active.detail}</p></div>
+                    <div id="workbench-preview" role="tabpanel" className="welcome-workbench-preview"><img src={active.image} alt={`${brandName}${active.name}界面`} loading="lazy" /></div>                    <div className="welcome-workbench-caption"><p>{active.detail}</p></div>
                 </section>
 
                 <section className="welcome-ending"><h2>你的故事，<br />现在开始。</h2>

@@ -126,7 +126,7 @@ export function ChannelModelSettings({ channel, onChange }: { channel: ModelChan
                             >
                                 测试模型
                             </Button>
-                            <Button type="primary" disabled={Boolean(testingModel)} onClick={() => setActiveModel(null)}>完成</Button>
+                            <Button type="primary" disabled={Boolean(testingModel)} onClick={() => { if (activeModel && activeProtocol) updateCost(activeModel, { protocol: activeProtocol, capability: activeCapability }); setActiveModel(null); }}>完成</Button>
                         </div>
                     </div>
                 }

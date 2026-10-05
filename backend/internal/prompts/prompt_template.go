@@ -382,7 +382,7 @@ func ValidatePromptTemplateResult(operation string, result map[string]interface{
 	text, _ := result["text"].(string)
 	jsonText, err := promptResultJSONExtractor(operation)(text)
 	if err != nil {
-		return fmt.Errorf("%s 返回内容不符合受保护 JSON 契约：%w", definition.Label, err)
+		return fmt.Errorf("%s 返回内容不符合受保护 JSON 契约：%w%s", definition.Label, err, promptResultPreview(text))
 	}
 	switch operation {
 	case OperationChapterAssetsExtract:
@@ -396,6 +396,18 @@ func ValidatePromptTemplateResult(operation string, result map[string]interface{
 	default:
 		return nil
 	}
+}
+
+func promptResultPreview(text string) string {
+	preview := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if preview == "" {
+		return ""
+	}
+	runes := []rune(preview)
+	if len(runes) > 160 {
+		preview = string(runes[:160]) + "…"
+	}
+	return "。模型原文：" + preview
 }
 
 func promptResultJSONExtractor(operation string) func(string) (string, error) {

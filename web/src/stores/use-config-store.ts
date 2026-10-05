@@ -532,7 +532,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
     const model = modelOptionName(value || config.model);
     const modelProtocol = channel.modelCosts?.find((item) => item.model === model)?.protocol;
-    const interfaceType = modelProtocol || channel.interfaceType;
+    const interfaceType = modelProtocol || channel.interfaceType || (channel.scope === "system" ? undefined : fallbackUserChannelProtocol(model));
     return {
         ...config,
         model,
@@ -605,6 +605,13 @@ function capabilityForChannelInterface(interfaceType?: ChannelInterfaceType): Mo
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
     return apiFormat === "gemini" || apiFormat === "claude" ? apiFormat : "openai";
+}
+
+function fallbackUserChannelProtocol(model: string): ChannelInterfaceType {
+    if (isImageModelName(model)) return "openai-image";
+    if (isVideoModelName(model)) return "newapi-channel-2";
+    if (isAudioModelName(model)) return "openai-audio";
+    return "chat-completion";
 }
 
 function normalizeChannelInterfaceType(value: unknown): ChannelInterfaceType | undefined {

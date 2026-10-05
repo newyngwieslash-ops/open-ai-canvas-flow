@@ -91,4 +91,8 @@ func TestValidatePromptTemplateResultScopesCharacterRelaxation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "受保护 JSON 契约") {
 		t.Fatalf("ValidatePromptTemplateResult() error = %v, want contract error for character extract", err)
 	}
+	err = ValidatePromptTemplateResult(OperationChapterAssetsExtract, map[string]interface{}{"text": "The prompt could not be submitted. The prompt contains sensitive words."})
+	if err == nil || !strings.Contains(err.Error(), "受保护 JSON 契约") || !strings.Contains(err.Error(), "sensitive words") {
+		t.Fatalf("ValidatePromptTemplateResult() error = %v, want contract error with model preview", err)
+	}
 }

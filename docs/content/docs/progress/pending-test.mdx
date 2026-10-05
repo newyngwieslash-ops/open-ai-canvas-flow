@@ -5,6 +5,18 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## UI 品牌字标替换为源铭振跃（2026-10-05）
+
+- 已实现：前端展示层将默认品牌字样「影策」在 UI 上显示为「源铭振跃」，覆盖登录页品牌链接与英文副标（改为中性「AI 创作工作台」）、工作区侧栏字标与面包屑、管理后台品牌按钮、浏览器标题与 OG/Twitter 元数据、欢迎页首章 h1/标题/品牌 aria-label。实现方式为 `web/src/lib/brand-display.ts` 展示映射，不写回 appearance 配置，版权页脚、注册协议、邮件身份与自定义品牌不受影响。欢迎页独立入口现会在开启状态下先解析公开外观再渲染。`credits.html` 返回链接改为「返回欢迎页」，许可署名保留原文。
+- 自动验证：brand-display、welcome-story、appearance-bootstrap、appearance-refresh、app-icon-neutral-bootstrap、auth-theme、site-appearance-and-skins 专项测试通过（22+19 项）；eslint 通过；vite build 通过；全量 bun test 与基线（不含本次改动）对比无新增失败，新增 10 项测试全部通过。
+- 既有基线问题（非本次引入）：`web/src/lib/channel-model-catalog.ts` 存在未提交的重复属性修改导致 tsc/build 阻塞；全量测试中有 20 项与本机 Bun 路径解析（`/E:/...）`等环境相关的既有失败。
+
+仍待真实环境验收：
+
+- [ ] 浏览器手工验收：/login、/register、/forgot-password 字标与副标；侧栏展开/折叠四字完整；/admin 外观设置读取保存正常；浅/深主题、320-1440px 宽度、200% 缩放。
+- [ ] /welcome（开启后）验收：浏览器标题、首章四字 h1 不溢出、三种素材版本、返回与关闭影片无回归。
+- [ ] `web/public/welcome/workbench-create.webp` 演示截图像素内仍含「影策」字样，需用干净测试数据对改后真实 UI 重截（保持 WebP 与原长宽比）后替换，本次未完成。
+
 ## Agent 失败消息合并与展示
 
 - 已修复：同一运行的 `run_failed` / `error` 与失败状态快照共用一条错误消息；以公开失败原因补全内容，重放、乱序和空原因不覆盖已有详细说明。不同运行即使错误文本相同也分别保留，工具失败与连接错误不合并。
