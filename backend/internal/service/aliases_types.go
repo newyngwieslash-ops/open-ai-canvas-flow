@@ -249,6 +249,7 @@ type (
 	RegisterTaskOutputRequest              = app.RegisterTaskOutputRequest
 	RegistrationSettingRequest             = app.RegistrationSettingRequest
 	ReorderProjectUnitsRequest             = app.ReorderProjectUnitsRequest
+	ReplaceAssetRepresentationsRequest     = app.ReplaceAssetRepresentationsRequest
 	ReplaceCharacterRepresentationsRequest = app.ReplaceCharacterRepresentationsRequest
 	ReplaceProjectUnitShotInput            = app.ReplaceProjectUnitShotInput
 	ReplaceProjectUnitShotsRequest         = app.ReplaceProjectUnitShotsRequest

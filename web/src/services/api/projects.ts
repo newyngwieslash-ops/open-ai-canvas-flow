@@ -578,6 +578,11 @@ export function replaceProjectCharacterRepresentations(projectId: string, assetI
     return http.put<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/representations`, { representations });
 }
 
+/** 非角色项目资产（场景/道具等）图片绑定：每次绑定生成新资产版本。角色必须走 replaceProjectCharacterRepresentations。 */
+export function replaceProjectAssetRepresentations(projectId: string, assetId: string, representations: Array<{ resourceId: string; metadata?: Record<string, unknown> }>) {
+    return http.put<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/representations`, { representations });
+}
+
 export function bindProjectCharacterVoice(projectId: string, assetId: string, input: { voiceProfileId?: string; sampleResourceId?: string; voiceName?: string; instructions?: string }) {
     return http.put<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/voice`, input);
 }

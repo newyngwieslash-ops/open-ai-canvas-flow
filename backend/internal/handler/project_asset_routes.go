@@ -361,6 +361,25 @@ func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, character)
 	})
+	r.PUT("/projects/:id/assets/:assetId/representations", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
+		var req service.ReplaceAssetRepresentationsRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.ReplaceProjectAssetRepresentations(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
 	r.POST("/projects/:id/assets", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

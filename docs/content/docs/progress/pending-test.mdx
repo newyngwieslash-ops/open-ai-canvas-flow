@@ -5,6 +5,18 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 场景/道具资产图片绑定（2026-10-05）
+
+- 已实现：项目资产图片绑定从仅角色放宽到 environment/prop/material/other。后端新增 `PUT /projects/:id/assets/:assetId/representations`（复用 `asset_representations` 表与角色链路的事务化版本写入，固定 `primary` 表现，资源强校验整体失败，绑定后推进 payload `data.storageKey` 驱动列表预览）；角色资产仍走 `PUT /projects/:id/characters/:assetId/representations`（通用接口对角色显式拒绝）。前端资产预览弹窗"替换图片"按钮放宽到可绑定分类，复用素材库选择器（非角色不再要求三视图文案），绑定走新接口并刷新项目资产列表。
+- 自动验证：后端专项测试 3 项（场景绑定生成新版本与 payload 封面、角色被拒不产生版本、资源未就绪整体失败无部分绑定）通过；`go build ./...`、`go test ./internal/handler` 通过；前端 `tsc --noEmit`、专项测试 2 项（入口分流白名单）与 `bun run build` 通过。`go test ./internal/app` 全量存在与本机临时 Redis 启动失败相关的预存环境失败（基线对比确认非本次引入）。
+- 文档同步：backend-database.mdx 补记 `asset_representations` 表；features.mdx 章节资产段落写明绑定范围与接口。
+
+仍待真实环境验收：
+
+- [ ] 浏览器验收：项目资产页打开一个场景或道具的"资产预览"，出现"替换图片"按钮；从素材库选择图片绑定后列表卡片显示该图，版本号 +1。
+- [ ] 浏览器验收：角色卡预览"替换图片"流程回归正常（仍走三视图文案与角色接口）。
+- [ ] 对角色资产行为确认：通用接口拒绝（后端已测），UI 不提供该入口。
+
 ## 角色资产云同步误报"素材远端版本已变化"修复（2026-10-05）
 
 - 根因：角色卡操作（编辑角色、绑定声音/三视图、候选归并、三视图生成回调）由后端角色域接口重写素材 payload 与内嵌 `updatedAt`，前端拿到响应后只写了素材库 store、未同步更新云端同步基线 `acknowledgedAssets`；下一次 `saveRemoteUserDataNow` 把这次自源服务端写入误判为第三方远端修改并中断整批同步，报错指引的"重新打开素材库"也无法恢复基线，只有刷新页面有效。
