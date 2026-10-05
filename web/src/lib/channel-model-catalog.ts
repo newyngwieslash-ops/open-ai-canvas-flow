@@ -113,15 +113,12 @@ export function ensureChannelModelCosts(channel: ModelChannel): ChannelModelCost
         const capability = existing?.capability || "text";
         const protocol = existing?.protocol || protocolTemplateForNewCatalogModel(capability, channel.interfaceType) || "chat-completion";
         return {
+            ...existing,
             model,
             capability,
             protocol,
             billingMode: existing?.billingMode || "fixed_request",
             unitPriceMicrocredits: existing?.unitPriceMicrocredits || 0,
-            ...existing,
-            model,
-            capability,
-            protocol,
         };
     });
 }

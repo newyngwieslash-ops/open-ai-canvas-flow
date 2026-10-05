@@ -41,7 +41,7 @@ import {
     type ProjectAsset,
     type ProjectAssetFolder,
 } from "@/services/api/projects";
-import { saveRemoteUserDataNow } from "@/services/user-data-sync";
+import { acknowledgeRemoteAssets, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { useAssetStore, type Asset, type AssetCategory, type AssetStatus, type EntityAsset, type ImageAsset } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasFolderStyle, type CanvasFolderTheme, type CanvasNodeData } from "@/types/canvas";
@@ -762,5 +762,8 @@ function syncPersonalCharacterProjection(asset: ProjectAsset) {
         data: { definition: asset.character.definition },
     };
     useAssetStore.getState().replaceAssets([projected, ...current.filter((item) => item.id !== asset.id)]);
+    // 投影来自角色域接口的服务端权威响应；不认领基线会让下一次增量校验把这次
+    // 服务端写入误判为远端修改并拒绝覆盖（"素材远端版本已变化"）。
+    acknowledgeRemoteAssets([projected]);
 }
 function MediaIcon({ kind }: { kind: string }) { if (kind === "image") return <ImageIcon className="size-10" />; if (kind === "video") return <Video className="size-10" />; if (kind === "audio") return <Music2 className="size-10" />; if (kind === "model") return <Box className="size-10" />; return <FileText className="size-10" />; }

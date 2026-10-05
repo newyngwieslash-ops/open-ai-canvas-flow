@@ -301,6 +301,21 @@ function acceptRemoteAssets(remoteAssets: Asset[]) {
     useAssetStore.setState({ assets: [...current.values()] });
 }
 
+/**
+ * 把调用方提供的、来自服务端权威响应的素材记录无条件采纳为同步基线。
+ *
+ * 角色域接口（编辑角色、绑定声音/三视图、候选归并、生成回调）会重写服务端
+ * payload 与内嵌 updatedAt，返回值回流本地 store 后若不更新基线，下一次增量
+ * 校验会把这次自源写入误判为第三方远端修改而拒绝覆盖。与 acceptRemoteAssets
+ * 相反，这里不带"本地已脏则跳过"逻辑：调用方明确声明数据来源是服务端权威。
+ */
+export function acknowledgeRemoteAssets(assets: Asset[]) {
+    for (const asset of parseAssetRecordList(assets)) {
+        acknowledgedAssets.set(asset.id, asset);
+        verifiedAssets.add(asset.id);
+    }
+}
+
 function collectAssetIds(value: unknown, ids = new Set<string>()): Set<string> {
     if (!value || typeof value !== "object") return ids;
     for (const [key, child] of Object.entries(value)) {
@@ -789,18 +804,35 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     const dirtyProjects = currentProjects.filter((project) => !sameCanvasContent(acknowledgedProjects.get(project.id), project) && useSyncProgressStore.getState().syncingProjects[project.id]?.phase !== "conflict");
     const dirtyAssets = currentAssets.filter((asset) => !sameEntitySnapshot(acknowledgedAssets.get(asset.id), asset));
     if (!dirtyProjects.length && !dirtyAssets.length) return;
+    const conflictedAssetIds = new Set<string>();
+    const conflictedAssetTitles = new Map<string, string>();
 
     if (incrementalSession) {
         for (const source of dirtyAssets) {
             const baseline = acknowledgedAssets.get(source.id);
             if (!baseline || verifiedAssets.has(source.id)) continue;
-            const { asset } = await getRemoteAsset(source.id);
-            if (Date.parse(asset.updatedAt) !== Date.parse(baseline.updatedAt)) {
-                if (!options.force) throw new Error("素材远端版本已变化，已停止覆盖，请重新打开素材库");
+            try {
+                const { asset } = await getRemoteAsset(source.id);
+                if (!remoteAssetConflictsWithBaseline(baseline, asset)) {
+                    verifiedAssets.add(source.id);
+                    continue;
+                }
+                if (!options.force) {
+                    // 单个素材冲突只隔离该素材：继续校验其余素材，不在此中断整批同步。
+                    conflictedAssetIds.add(source.id);
+                    conflictedAssetTitles.set(source.id, source.title || source.id);
+                    continue;
+                }
                 // 强制覆盖是用户显式指令：采纳远端版本为新基线后继续用本地内容覆盖。
                 acknowledgedAssets.set(source.id, asset);
+                verifiedAssets.add(source.id);
+            } catch (error) {
+                if (error instanceof ApiError && error.status === 404) {
+                    // 服务端不存在该素材：本地为新增，交由下方 upsert 创建。
+                    continue;
+                }
+                throw error;
             }
-            verifiedAssets.add(source.id);
         }
     }
 
@@ -809,10 +841,25 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     // 素材先于画布提交。这样画布中的 resource: 引用一旦成为远端事实，
     // 对应 Asset 已经存在，刷新或换设备不会出现只占容量、不见素材的窗口。
     for (const source of dirtyAssets) {
+        if (conflictedAssetIds.has(source.id)) continue;
+        if (source.kind === "entity") {
+            // 角色 payload 由后端角色域接口（版本链）权威维护；前端列表投影缺少
+            // representations 等完整字段，经通用覆盖接口会破坏服务端 payload，
+            // 因此这里只对齐基线并告警，不发起覆盖请求。
+            acknowledgedAssets.set(source.id, source);
+            verifiedAssets.add(source.id);
+            console.warn("角色素材由角色卡操作维护，跳过通用素材覆盖推送", source.id);
+            continue;
+        }
         const remotePayload = await ensureRemoteResourceReferences(assetForRemoteSync(source), uploaded);
         await upsertRemoteAsset(remotePayload);
         acknowledgedAssets.set(source.id, source);
         verifiedAssets.add(source.id);
+    }
+    if (conflictedAssetIds.size) {
+        // 被隔离素材之外的素材与画布都已推送完成；此处收尾报告，避免静默丢失用户数据。
+        const names = [...new Set(conflictedAssetTitles.values())].join("、");
+        throw new Error(`素材远端版本已变化，已停止覆盖：${names}。其余内容已保存，请重新打开素材库后处理这些素材`);
     }
     const errors: unknown[] = [];
     for (const source of dirtyProjects) {
@@ -940,6 +987,23 @@ function requireRemoteUserDataBaseline() {
 
 function sameEntitySnapshot<T>(acknowledged: T | undefined, current: T) {
     return acknowledged !== undefined && (acknowledged === current || JSON.stringify(acknowledged) === JSON.stringify(current));
+}
+
+/**
+ * 判断服务端素材是否相对基线发生了远端修改。
+ *
+ * entity（角色）素材每次服务端版本化操作必换 primaryVersionId，用版本号判定
+ * 比比较纳秒时间戳字符串更可靠；任一方缺失版本号时回退 updatedAt 比较，兼容
+ * 历史数据。非 entity 素材保持 updatedAt 判定：其服务端列更新不改 payload
+ * 内嵌时间戳，行为与修复前一致。
+ */
+function remoteAssetConflictsWithBaseline(baseline: Asset, remote: Asset) {
+    if (baseline.kind === "entity" && remote.kind === "entity") {
+        const baselineVersionId = baseline.primaryVersionId?.trim();
+        const remoteVersionId = remote.primaryVersionId?.trim();
+        if (baselineVersionId && remoteVersionId) return baselineVersionId !== remoteVersionId;
+    }
+    return Date.parse(remote.updatedAt) !== Date.parse(baseline.updatedAt);
 }
 
 function sanitizeCanvasProjectForRemoteSync<T>(project: T): T {
