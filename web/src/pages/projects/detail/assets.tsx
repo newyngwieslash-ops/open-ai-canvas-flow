@@ -52,17 +52,13 @@ import { projectCharacterCover } from "./project-character-cover";
 import { assetSupportsImageBinding } from "./asset-image-binding";
 import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { generateCharacterTurnaround } from "./project-character-media";
+// 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
+import { characterFields } from "./character-script-suggestions";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
 
 const categories = ["all", ...ASSET_CATEGORIES];
 const ALL_FOLDERS = "__all_folders__";
 const pickerCategoryLabels = { all: "全部素材", ...categoryLabels };
-const characterFields = [
-    ["role", "剧情定位与人物关系"], ["aliases", "别名"], ["appearance", "稳定外貌"], ["physique", "身高、体型与体态"],
-    ["clothing", "默认服装造型"], ["personality", "性格与表演基线"], ["props", "固定道具"],
-    ["consistencyPrompt", "跨镜头一致性约束"], ["multiViewPrompt", "三视图补充约束"],
-    ["voiceLanguage", "语言与口音"], ["voiceAge", "声音年龄感"], ["voiceTimbre", "音色气质"],
-] as const;
 
 type CharacterForm = { name: string } & Record<(typeof characterFields)[number][0], string>;
 
