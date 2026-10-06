@@ -54,7 +54,8 @@ import { assetSupportsImageBinding } from "./asset-image-binding";
 import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { generateCharacterTurnaround } from "./project-character-media";
 // 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
-import { characterFields } from "./character-script-suggestions";
+// CharacterForm 也以模块定义为准（M5 合并：消除与本地重复的两份表单类型）。
+import { characterFields, type CharacterForm } from "./character-script-suggestions";
 import { createRunningChannel, shouldApplySupplementFetch } from "./character-suggestion-session";
 import { CharacterSuggestionPanel, asSuggestionForm, type CharacterSuggestionPanelApi } from "./character-suggestion-panel";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
@@ -62,8 +63,6 @@ import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, text
 const categories = ["all", ...ASSET_CATEGORIES];
 const ALL_FOLDERS = "__all_folders__";
 const pickerCategoryLabels = { all: "全部素材", ...categoryLabels };
-
-type CharacterForm = { name: string } & Record<(typeof characterFields)[number][0], string>;
 
 export default function ProjectAssetsView({ detail, refreshProject }: ProjectDetailViewProps) {
     const { message, modal } = App.useApp();

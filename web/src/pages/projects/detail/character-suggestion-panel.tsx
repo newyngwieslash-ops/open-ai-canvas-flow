@@ -20,13 +20,14 @@ import {
     canUseSuggestionResult,
     computeStaleSources,
     createSuggestionSessionGuard,
+    createScanAbortRegistry,
+    createSessionDirtyTracker,
     createStopController,
     decidePreSaveCheck,
-    decideSaveGate,
+    decideReviewGate,
     emptySuggestionSessionUi,
     emptySupplementHandoff,
     fieldReview,
-    isReviewResolved,
     isSourceStale,
     markDirtyFieldsFromValues,
     observeProgrammaticWrites,
@@ -149,6 +150,10 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     const lastWatchedRef = useRef<Record<string, unknown> | null>(null);
     // 本轮程序化写入（安全自动填充/采纳应用）的字段：观察 effect 不把程序写入误标为用户编辑。
     const programmaticWritesRef = useRef<Set<CharacterFieldKey>>(new Set());
+    // 会话级 dirty 存储（Critical 2 修复）：run 会被停止（setRun(null)）或身份漂移清空，
+    // 但"用户编辑过该字段"的事实必须活过 run 的生命周期，供下一轮 beginRunInheritingDirty
+    // 播种——否则停止后重提取会把用户清空的字段静默重填 AI 值。
+    const dirtyTrackerRef = useRef(createSessionDirtyTracker());
     useEffect(() => {
         const last = lastWatchedRef.current;
         lastWatchedRef.current = { ...watchedRecord };
@@ -160,10 +165,15 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             // StrictMode 下更新器会被双调用：ref 消耗必须在更新器外完成（Minor Fix Round 2），
             // 否则第一次调用清空写入集、第二次调用把程序写入误标为用户编辑。
             const written = writtenKeys;
-            if (written.length) {
-                return observeProgrammaticWrites({ run: current, writtenKeys: written, watched: watchedRecord, previous: last || {} });
+            const next = written.length
+                ? observeProgrammaticWrites({ run: current, writtenKeys: written, watched: watchedRecord, previous: last || {} })
+                : markDirtyFieldsFromValues({ run: current, watched: watchedRecord, previous: last || {} });
+            if (next !== current) {
+                // dirty 变化同步到会话级存储（只增不删）：run 之后被清空时标记仍存活。
+                // next 非 current 时必然非 null（current 已在上方排除 null）。
+                dirtyTrackerRef.current.syncFromRun((next as SuggestionRun).dirtyFields);
             }
-            return markDirtyFieldsFromValues({ run: current, watched: watchedRecord, previous: last || {} });
+            return next;
         });
         // watchedRecord 逐键来自稳定的 12 个 useWatch 订阅；按整体值比较，任何字段变化都重算 dirty。
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -206,6 +216,10 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     const snapshotRef = useRef<CharacterSuggestionRun["snapshot"] | null>(null);
     // 查重扫描序号：旧扫描响应晚于新扫描时丢弃（与提取会话守卫同一思路）。
     const duplicateScanSeqRef = useRef(0);
+    // 查重扫描取消注册表（Important 2 修复）：每次扫描登记当前 controller，关窗/身份漂移/
+    // 停止时统一 abort——旧接线两处扫描不传 signal，失效后扫描仍可继续翻页（最多 200 页）。
+    // 正确性仍由 seq 丢弃保证；注册表只负责不再浪费请求。
+    const scanAbortRegistryRef = useRef(createScanAbortRegistry());
 
     // 会话守卫跨渲染存活；AbortController 每轮新建。
     const guardRef = useRef(createSuggestionSessionGuard());
@@ -273,6 +287,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         if (canUseSuggestionResult(run.identity, currentIdentity)) return;
         guardRef.current.invalidate();
         setRun(null);
+        scanAbortRegistryRef.current.abort();
         const empty = emptySuggestionSessionUi();
         setVerified(empty.verified);
         setReviewPerson(empty.reviewPerson);
@@ -297,6 +312,10 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         abortRef.current?.abort();
         abortRef.current = null;
         knownTaskIdRef.current = null;
+        // 弹窗关闭/编辑对象切换 = 表单值将被整体更换：会话级 dirty 标记一并清空，
+        // 不跨表单串字段（提取运行外的场景编辑不属于本会话）。
+        dirtyTrackerRef.current.reset();
+        scanAbortRegistryRef.current.abort();
         runningChannel.setRunning(false);
         setPhase("idle");
         setProgress(null);
@@ -330,9 +349,13 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         }
         setDuplicateScanning(true);
         try {
+            // 扫描用独立 controller：关窗/身份漂移/停止时经注册表统一 abort（Important 2）。
+            const scanController = new AbortController();
+            scanAbortRegistryRef.current.register(scanController);
             const result = await findProjectCharacterDuplicates(
                 { projectId, name, excludeCharacterId: editorAssetId === "new" ? undefined : editorAssetId },
                 listProjectAssetsPage,
+                { signal: scanController.signal },
             );
             if (duplicateScanSeqRef.current !== scanSeq) return; // 旧扫描响应丢弃
             // 确认文案只在姓名/候选集合实际变化时清除（shouldClearDuplicateNotice 已测）：
@@ -389,8 +412,10 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         abortRef.current = controller;
         knownTaskIdRef.current = null;
         const guard = guardRef.current;
-        // 新一轮继承上一轮的字段编辑标记：用户清空/改写过的字段重提取时不回写 AI 值（design §4）。
-        const nextRun = beginRunInheritingDirty({ guard, identity: currentIdentityRef.current, previousRun: runRef.current });
+        // 新一轮继承会话级 dirty 存储 + 上一轮 run 的字段编辑标记：停止（setRun(null) 丢弃
+        // run）后重提取时 previousRun 为 null，种子来源是 dirtyTrackerRef（Critical 2 修复）——
+        // 用户清空/改写过的字段重提取时不回写 AI 值（design §4）。
+        const nextRun = beginRunInheritingDirty({ guard, identity: currentIdentityRef.current, previousRun: runRef.current, inheritedDirty: dirtyTrackerRef.current.snapshot() });
         programmaticWritesRef.current = new Set();
         setRun(nextRun);
         setStopNotice(null);
@@ -439,8 +464,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                 // 模型可能改写正式姓名（回写由 chooseAmbiguousPerson / 手工确认），重扫不回写表单。
                 const scanSeq = duplicateScanSeqRef.current + 1;
                 duplicateScanSeqRef.current = scanSeq;
-                void runDuplicateScan(person.name.trim(), scanSeq);
-            }
+                void runDuplicateScan(person.name.trim(), scanSeq);            }
         } catch (error) {
             // 停止/身份切换导致的终止不上报为当前轮失败。
             if (controller.signal.aborted) return;
@@ -478,6 +502,9 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         void stop({ taskId: knownTaskId, onEvent: (event) => {
             if (event.kind === "cancel-failed") setStopNotice(`任务取消请求失败：${event.message}。本地结果已丢弃，任务可在任务中心查看。`);
         } });
+        // 停止只清运行 UI，不清 dirtyTrackerRef：run 被丢弃后"用户编辑过该字段"的标记
+        // 仍由会话级存储持有，下一轮重提取播种时不得丢失（Critical 2 修复）。
+        scanAbortRegistryRef.current.abort();
         setRun(null);
         setPhase("idle");
         setProgress(null);
@@ -507,6 +534,9 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             // 采纳写入是程序化写表单：登记后观察 effect 不把它误标为用户编辑。
             programmaticWritesRef.current.add(fieldKey);
         }
+        // 采纳/替换/冲突选择/暂不采用是用户主动决定：dirty 标记同样同步到会话级存储
+        // （与观察 effect 同源，run 被清空后标记不丢——Critical 2）。
+        dirtyTrackerRef.current.syncFromRun({ [fieldKey]: true });
         setRun((current) => (current ? {
             ...current,
             dirtyFields: { ...current.dirtyFields, [fieldKey]: true },
@@ -525,7 +555,8 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     const chooseAmbiguousPerson = useCallback((person: VerifiedPerson) => {
         setReviewPerson(person);
         const identity: SuggestionRunIdentity = { ...currentIdentityRef.current, characterName: person.name.trim() };
-        setRun(beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: runRef.current }));
+        // 与 startExtraction 同源：继承会话级存储 + 歧义轮 run 的标记（并集，不丢任何一边）。
+        setRun(beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: runRef.current, inheritedDirty: dirtyTrackerRef.current.snapshot() }));
         if (characterName.trim() !== person.name) form.setFieldsValue({ name: person.name });
     }, [characterName, form]);
 
@@ -553,11 +584,16 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             notice: `已切换到补充「${candidate.title}」：已有设定保留原值，AI 建议可在下方逐条采纳；保存将更新该角色而不是新建。`,
         }, snapshotRef.current));
         // 会话失效（守卫 + abort + UI 状态），但保留移交数据。
+        // dirty 跟踪器在此清空：补充切换经 openCharacterEditor 用目标角色的完整设定
+        // 整体替换表单值，旧表单的编辑标记引用的值已不存在；补充会话的 dirty 从零
+        // 累积（design §5：只有已选身份的已校验建议显式传到新编辑会话）。
+        dirtyTrackerRef.current.reset();
         guardRef.current.invalidate();
         setRun(null);
         abortRef.current?.abort();
         abortRef.current = null;
         knownTaskIdRef.current = null;
+        scanAbortRegistryRef.current.abort();
         runningChannel.setRunning(false);
         setPhase("idle");
         setProgress(null);
@@ -577,13 +613,25 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
 
     // 编辑器完成切换（editorAssetId 已变为补充目标）后恢复会话：开新轮并绑定移交身份，
     // 恢复移交前正在审核的人物继续走常规采纳流程（不自动合并到既有值）。
+    // 身份姓名绑定切换后的表单名（= 目标 asset.title，编辑器 openCharacterEditor 已回填）：
+    // 旧实现绑 handoffPerson.name（模型规范化名）——别名匹配主场景（输入"阿默"→模型
+    // "林默"→目标标题"林默然"）必然与表单名不同，恢复的 run 立即被身份漂移自失效、
+    // 移交建议消失（final review Important 1）。handoffPerson 只作展示状态。
+    // 目标标题经 form.getFieldValue("name") 直接读表单（先于 useWatch 传播），缺失时
+    // 依次回退 handoffPerson.name、发起时表单名（supplementHandoffIdentity 内部兜底）。
     useEffect(() => {
         if (!pendingSupplementRef.current) return;
         const target = pendingSupplementRef.current.targetAssetId;
         if (editorAssetId !== target) return; // 编辑器尚未切换完成
         pendingSupplementRef.current = null;
-        const identity = supplementHandoffIdentity(currentIdentityRef.current, target, { name: supplementHandoff.handoffPerson?.name || characterName.trim() });
-        const nextRun = beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: null });
+        const formName = (form.getFieldValue("name") || "").trim();
+        const identity = supplementHandoffIdentity(
+            currentIdentityRef.current,
+            target,
+            { name: formName },
+            { handoffPersonName: supplementHandoff.handoffPerson?.name || characterName.trim() },
+        );
+        const nextRun = beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: null, inheritedDirty: dirtyTrackerRef.current.snapshot() });
         programmaticWritesRef.current = new Set();
         setRun(nextRun);
         setPhase("idle");
@@ -608,20 +656,20 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     }, [duplicates.matches, duplicateScanName]);
 
     // ---------- 保存门禁与保存前复查 ----------
-    // 保存门禁注册给编辑器：走 session.ts 已测的 decideSaveGate / isReviewResolved
-    // （含提取运行中禁用与身份歧义分支；建议流程未开启时放行原保存）。
-    // 审核对象来自 matched 或用户已确认的 ambiguous 人物（design §6）。
+    // 保存门禁注册给编辑器：走 session.ts 已测的 decideReviewGate（内部按
+    // isReviewResolved 的字段总数合同计算 pending，含提取运行中禁用与身份歧义分支；
+    // 建议流程未开启时放行原保存）。审核对象来自 matched 或用户已确认的 ambiguous 人物。
+    // pending 口径接缝化（Critical 1 修复）：旧接线在此手算"剩余未处理字段数"传入
+    // isReviewResolved，2 个内容字段采纳 1 个即被错误放行；现在模块内按字段总数判定。
     const reviewGate = useCallback((): string => {
         const suggestionActive = Boolean(run) || Boolean(supplementHandoff.handoffPerson);
         const identityChosen = !verified || verified.status !== "ambiguous" || Boolean(reviewPerson);
-        const pending = reviewPerson
-            ? characterFields.filter(([key]) => reviewPerson.fields[key as CharacterFieldKey].status !== "unspecified" && !run?.evidence?.[key as CharacterFieldKey]).length
-            : 0;
-        const gate = decideSaveGate({
+        const gate = decideReviewGate({
             suggestionActive,
             running,
             identityChosen,
-            reviewResolved: isReviewResolved(pending, run?.evidence || {}),
+            reviewPerson,
+            evidence: run?.evidence || {},
         });
         return gate.allowed ? "" : gate.reason || "建议审核未完成，暂不能保存";
     }, [run, reviewPerson, verified, running, supplementHandoff.handoffPerson]);

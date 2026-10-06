@@ -135,8 +135,34 @@ function throwIfAborted(signal?: AbortSignal) {
 
 // ---------- 富文本转纯文本（惰性 DOMParser） ----------
 
+// 顶层块文本装配（M9 接缝）：把顶层块（未嵌套在另一个 p/div 内）的 textContent 列表
+// 逐块归一、丢弃空白块、用空行连接。归一规则：CRLF→LF、按行 trim（<br> 转出的换行
+// 两侧常有源 HTML 空白，逐字引用匹配不应被行尾空白干扰）。旧实现直接遍历
+// querySelectorAll("p, div")——嵌套块级元素（div>p）父与子各取一次 textContent，
+// 同一段文本重复计入 prompt，预算虚高且引用核验文本被重复膨胀。顶层判定
+// （parentElement.closest 过滤）在浏览器完成；本函数承接"顶层块文本列表 → 纯文本"
+// 的可测部分。blocks 为空时回退 bodyText（无任何块级标签的正文不丢）。
+export function assembleTopLevelBlockText(blocks: string[], bodyText = ""): string {
+    const normalized = blocks
+        .map((block) => (block || "")
+            .replace(/\r\n/g, "\n")
+            .split("\n")
+            .map((line) => line.trim())
+            // 块内连续空行折叠为单个空行（连续 <br><br> 不产生成片空行）。
+            .reduce<string[]>((lines, line) => {
+                if (line || !lines.length || lines[lines.length - 1]) lines.push(line);
+                return lines;
+            }, [])
+            .join("\n")
+            .trim())
+        .filter(Boolean);
+    if (normalized.length) return normalized.join("\n\n");
+    return (bodyText || "").replace(/\r\n/g, "\n").trim();
+}
+
 // 生产默认实现：只在调用时访问 document（Bun 测试与模块导入阶段无 DOM 环境也能安全 import）。
 // 转换规则与 Task 1 引用核验契约对齐：段落/br 产生换行、解码常见实体；script/style 内容剔除。
+// 块级选取用 :not 排除嵌套块（div>p 只按顶层 div 取一次文本，不重复计入——M9）。
 export const convertRichTextToPlainText: RichTextConverter = (html) => {
     if (typeof document === "undefined") throw new Error("富文本解析只能在浏览器环境执行");
     const document_ = new DOMParser().parseFromString(html, "text/html");
@@ -144,9 +170,12 @@ export const convertRichTextToPlainText: RichTextConverter = (html) => {
     // 每个块级段落与 <br> 都转成换行，再统一行尾；实体由 DOMParser 解码。
     const body = document_.body;
     for (const br of Array.from(body.querySelectorAll("br"))) br.replaceWith(document_.createTextNode("\n"));
-    const paragraphs = Array.from(body.querySelectorAll("p, div")).map((node) => (node.textContent || "").replace(/\r\n/g, "\n").trim());
-    const text = (paragraphs.length ? paragraphs.join("\n\n") : (body.textContent || "")).replace(/\r\n/g, "\n").trim();
-    return text;
+    // 顶层块：p/div 但不在另一个 p/div 内（querySelectorAll 的展平集合会父子双计——M9）。
+    const topLevelBlocks = Array.from(body.querySelectorAll("p, div"))
+        .filter((node) => !node.parentElement?.closest("p, div"))
+        .map((node) => node.textContent || "");
+    const bodyText = body.textContent || "";
+    return assembleTopLevelBlockText(topLevelBlocks, bodyText);
 };
 
 // ---------- prompt 构造（不可信任务数据用 JSON 序列化边界） ----------

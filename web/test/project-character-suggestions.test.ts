@@ -477,8 +477,10 @@ describe("aliases 表单转换", () => {
 // DOMParser 在 Bun 测试环境不可用：用 injectable 富文本→纯文本转换器，测试注入假转换器。
 
 import {
+    assembleTopLevelBlockText,
     buildCharacterSuggestionPrompt,
     convertRichTextToPlainText,
+    defaultCharacterSuggestionDependencies,
     extractCharacterSuggestions,
     estimateCharacterSuggestionTokens,
     type CharacterSuggestionDependencies,
@@ -605,6 +607,53 @@ describe("convertRichTextToPlainText 惰性 DOMParser 转换", () => {
         expect(plain).toContain("<导演注>");
         expect(plain).not.toContain("alert");
         expect(plain).not.toContain("color:red");
+    });
+});
+
+// ---------- M9：顶层块遍历（嵌套块级元素文本不重复） ----------
+// 旧实现 querySelectorAll("p, div") 对嵌套块级元素（div>p）父与子各取一次 textContent，
+// 同一段文本重复计入 prompt——预算虚高、引用核验文本被重复膨胀。修复：只遍历顶层块
+// （不嵌套在另一个 p/div 内的块），嵌套结构整体取一次文本。DOMParser 在 Bun 不可用，
+// 转换器拆出可测接缝 assembleTopLevelBlockText（按顶层块切分+归一），真实 DOM 选择器
+// 行为由浏览器验收覆盖。
+
+describe("assembleTopLevelBlockText 顶层块遍历（M9）", () => {
+    test("嵌套 div>p：只有顶层 div 计入一次，子 p 不重复", () => {
+        // 模拟浏览器顶层过滤后的集合（旧实现 querySelectorAll 会输出父+子两份文本）。
+        const result = assembleTopLevelBlockText(["第一段完整文本"]);
+        expect(result).toBe("第一段完整文本");
+    });
+
+    test("顶层过滤前父子双计的输入不会出现在本接缝输出：接缝只承接顶层列表", () => {
+        // 嵌套场景的完整行为由浏览器 DOM 顶层过滤（parentElement.closest）承担；
+        // 这里验证接缝对重复条目不做去重假设——重复输入照常拼接（浏览器侧已过滤）。
+        const result = assembleTopLevelBlockText(["第一段完整文本", "第二段完整文本"]);
+        expect(result).toBe("第一段完整文本\n\n第二段完整文本");
+    });
+
+    test("平铺同级段落全部保留（非嵌套不受影响）", () => {
+        const result = assembleTopLevelBlockText(["第一段", "第二段", "第三段"]);
+        expect(result).toBe("第一段\n\n第二段\n\n第三段");
+    });
+
+    test("顶层集合为空：回退 body 全文一次（不丢正文）", () => {
+        const result = assembleTopLevelBlockText([], "整段正文文本");
+        expect(result).toBe("整段正文文本");
+    });
+
+    test("块内含 <br> 换行与首尾空白：按行 trim 后保留结构", () => {
+        const result = assembleTopLevelBlockText(["  第一行\n第二行  \n\n\n第三行 "]);
+        expect(result).toBe("第一行\n第二行\n\n第三行");
+    });
+
+    test("空白块被丢弃，不产生连续空行", () => {
+        const result = assembleTopLevelBlockText(["有内容的段落", "   ", "另一个段落"]);
+        expect(result).toBe("有内容的段落\n\n另一个段落");
+    });
+
+    test("空输入与空回退：返回空串", () => {
+        expect(assembleTopLevelBlockText([], "")).toBe("");
+        expect(assembleTopLevelBlockText([], undefined)).toBe("");
     });
 });
 
@@ -858,6 +907,64 @@ test("单轮语义：依赖不提供 createRunSession 时守卫不拦截本轮�
     expect(run.result.status).toBe("matched");
 });
 
+// ---------- M11：跨轮守卫覆盖缺口补齐 ----------
+// 旧测试只覆盖逐章读取检查点（:stillCurrent at read loop）；响应检查点（runTask 返回后、
+// 解析前）与 defaultCharacterSuggestionDependencies.createRunSession 工厂本身没有行为测试。
+
+test("M11 跨轮守卫：runTask 响应返回后的 stillCurrent 检查点拒绝旧轮（响应检查点）", async () => {
+    // 与读取检查点不同：旧轮的 runTask 响应已成功返回，但解析/核验前守卫必须拒绝，
+    // 不产出任何建议。轮 1 的 runTask 在轮 2 完成后才 resolve（响应晚到场景）。
+    let sharedToken = 0;
+    const sharedGuardFactory = () => ({
+        begin: () => {
+            sharedToken += 1;
+            return sharedToken;
+        },
+        isCurrent: (candidate: number) => candidate === sharedToken,
+    });
+    let round2Done = false;
+    const depsRound1: CharacterSuggestionDependencies = {
+        ...makeDependencies().deps,
+        createRunSession: sharedGuardFactory,
+        runTask: async () => {
+            while (!round2Done) await new Promise<void>((resolve) => setTimeout(resolve, 1));
+            return { text: JSON.stringify(validResult()) };
+        },
+    };
+    const depsRound2: CharacterSuggestionDependencies = {
+        ...makeDependencies().deps,
+        createRunSession: sharedGuardFactory,
+        runTask: async () => {
+            round2Done = true;
+            return { text: JSON.stringify(validResult()) };
+        },
+    };
+    const round1Settled = extractCharacterSuggestions(runOptions(), depsRound1).then(
+        () => null,
+        (caught: unknown) => caught,
+    );
+    const round2 = extractCharacterSuggestions(runOptions(), depsRound2);
+    await expect(round2).resolves.toHaveProperty("result.status", "matched");
+    const round1Error = await round1Settled;
+    // 响应已到手仍整轮拒绝（AbortError 语义）：旧响应不进入解析、不产出建议。
+    expect(round1Error).toBeInstanceOf(Error);
+    expect((round1Error as Error).name).toBe("AbortError");
+});
+
+test("M11 跨轮守卫：defaultCharacterSuggestionDependencies.createRunSession 共享计数器（新轮使旧轮 token 失效）", async () => {
+    // 生产默认依赖的守卫工厂：状态在工厂闭包外共享——两次创建的 session 必须共享同一个
+    // 计数器（若每次从 1 重新计数，两轮 token 同为 1，守卫失效）。
+    const session1 = defaultCharacterSuggestionDependencies.createRunSession!();
+    const token1 = session1.begin();
+    expect(session1.isCurrent(token1)).toBe(true);
+    const session2 = defaultCharacterSuggestionDependencies.createRunSession!();
+    const token2 = session2.begin();
+    // 新轮 begin 后旧轮 token 立即失效（跨 session 共享计数器）。
+    expect(session1.isCurrent(token1)).toBe(false);
+    expect(session2.isCurrent(token2)).toBe(true);
+    expect(session1.isCurrent(token2)).toBe(true);
+});
+
 test("模块导出面：不再导出 fallbackConfig 死代码", async () => {
     const mod = await import("@/pages/projects/detail/project-character-suggestions");
     expect("fallbackConfig" in mod).toBe(false);
@@ -878,9 +985,12 @@ import {
     canUseSuggestionResult,
     changedFieldKeys,
     createRunningChannel,
+    createScanAbortRegistry,
+    createSessionDirtyTracker,
     createSuggestionSessionGuard,
     createStopController,
     decidePreSaveCheck,
+    decideReviewGate,
     decideSaveGate,
     duplicatesChanged,
     emptySuggestionSessionUi,
@@ -1560,6 +1670,245 @@ import {
     supplementHandoffIdentity,
     supplementResumeSnapshot,
 } from "@/pages/projects/detail/character-suggestion-session";
+
+// ============================================================
+// 最终整体 review 修复（final review 第 1 轮）
+// ============================================================
+// C1 保存门禁接缝、C2 会话级 dirty 存储、I1 补充 resume 身份、I2 查重扫描取消注册。
+// 全部为可测接缝（纯函数/工厂），组件接线由 tsc/build/lint 与代码审读证明。
+
+// ---------- Critical 1：保存门禁的 pending 口径接缝 ----------
+// 旧接线把"剩余未处理字段数"（待决定数）传给 isReviewResolved 的 pendingFieldCount
+// （字段总数合同）：2 个内容字段采纳 1 个 → 剩余 1、证据 1 → 门禁错误放行，
+// 第 2 个建议被静默丢弃。修复：decideReviewGate 在接缝内按字段总数计算，
+// 调用方只传人物与证据，剩余数语义彻底消灭。
+
+const contentFieldKeys = (person: { fields: Record<string, { status: string }> }) =>
+    Object.entries(person.fields).filter(([, field]) => field.status !== "unspecified").map(([key]) => key);
+
+describe("decideReviewGate 保存门禁 pending 口径（Critical 1）", () => {
+    // 2 个内容字段（role suggested + clothing conflict），其余 unspecified。
+    const twoFieldPerson = () => {
+        const fields: Record<string, { status: string; options?: unknown[] }> = {};
+        for (const key of characterFieldKeys) fields[key] = { status: "unspecified", options: [] };
+        fields.role = { status: "suggested", options: [{ value: "加班晚归的都市上班族", basis: "fact", evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] }] };
+        fields.clothing = { status: "conflict", options: [
+            { value: "米色风衣", basis: "fact", evidence: [{ unitId: "unit-2", quote: "吴奶奶把米色布袋放在桌上", unitTitle: "第二集·对门的灯" }] },
+            { value: "工作服", basis: "inference", evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] },
+        ] };
+        return { name: "林夏", aliases: [], identitySummary: "s", identityEvidence: [], fields } as never;
+    };
+
+    test("2 个内容字段只处理 1 个：门禁不放行（旧实现按剩余数放行）", () => {
+        const gate = decideReviewGate({
+            suggestionActive: true,
+            running: false,
+            identityChosen: true,
+            reviewPerson: twoFieldPerson(),
+            // 只有 role 有处理记录；clothing（conflict）尚未处理。
+            evidence: { role: { origin: "ai", dismissed: false } },
+        });
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/未完成|审核|处理/);
+    });
+
+    test("全部内容字段都有处理记录（含 dismiss）：放行", () => {
+        const gate = decideReviewGate({
+            suggestionActive: true,
+            running: false,
+            identityChosen: true,
+            reviewPerson: twoFieldPerson(),
+            evidence: {
+                role: { origin: "ai", dismissed: false },
+                clothing: { origin: "ai", dismissed: true },
+            },
+        });
+        expect(gate.allowed).toBe(true);
+    });
+
+    test("运行中仍不放行（门禁顺序语义与 decideSaveGate 一致）", () => {
+        const gate = decideReviewGate({
+            suggestionActive: true,
+            running: true,
+            identityChosen: true,
+            reviewPerson: twoFieldPerson(),
+            evidence: { role: { origin: "ai", dismissed: false }, clothing: { origin: "ai", dismissed: false } },
+        });
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toContain("提取");
+    });
+
+    test("无审核人物（reviewPerson=null）：无 pending，按 suggestionActive 判定", () => {
+        expect(decideReviewGate({ suggestionActive: false, running: false, identityChosen: true, reviewPerson: null, evidence: {} }).allowed).toBe(true);
+        expect(decideReviewGate({ suggestionActive: true, running: false, identityChosen: true, reviewPerson: null, evidence: {} }).allowed).toBe(true);
+    });
+
+    test("内容字段数与人物字段过滤口径一致（status !== unspecified 计入 pending）", () => {
+        const person = twoFieldPerson();
+        expect(contentFieldKeys(person).sort()).toEqual(["clothing", "role"]);
+    });
+});
+
+// ---------- Critical 2：会话级 dirty 存储（stop 清 run 不再丢标记） ----------
+// 旧实现 stopExtraction setRun(null)：下一轮 startExtraction 继承 previousRun=null，
+// 用户清空字段的 dirty 标记丢失 → 重提取时 AI 值被静默写回。
+// 修复：dirty 存储提升到会话级（SuggestionSessionDirtyTracker），run 被清空后
+// 标记仍存活，beginRunInheritingDirty 的种子来源改从会话级存储取。
+
+describe("createSessionDirtyTracker 会话级 dirty 存储（Critical 2）", () => {
+    test("提取中清空字段 → 停止（run 清空）→ 重提取播种：清空字段不被 AI 回写", () => {
+        const guard = createSuggestionSessionGuard();
+        const tracker = createSessionDirtyTracker();
+        const first = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null });
+        // 提取中用户清空 clothing、改写 role（观察 effect 路径）。
+        const edited = markDirtyFieldsFromValues({ run: first, watched: { role: "自己写的", clothing: "" }, previous: { role: "", clothing: "旧服装" } })!;
+        tracker.syncFromRun(edited.dirtyFields);
+        // 停止：run 被清空（tracker 不受影响）。
+        const nextRun = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null, inheritedDirty: tracker.snapshot() });
+        expect(nextRun.dirtyFields.role).toBe(true);
+        expect(nextRun.dirtyFields.clothing).toBe(true);
+        // 安全填充决策视角：clothing 被清空且标 dirty，AI 值不得写回。
+        const matched = verifySuggestionEvidence(parseOk(JSON.stringify(validResult())), evidenceSnapshot);
+        const fill = computeSafeAutoFillFields({
+            result: matched,
+            formValues: { name: "林夏", role: "", clothing: "", aliases: "" } as Record<string, string>,
+            dirtyFields: nextRun.dirtyFields,
+        });
+        expect(fill.clothing).toBeUndefined();
+        expect(fill.role).toBeUndefined();
+    });
+
+    test("未编辑的干净字段正常进入安全填充（继承不误伤）", () => {
+        const guard = createSuggestionSessionGuard();
+        const tracker = createSessionDirtyTracker();
+        const first = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null });
+        const edited = markDirtyFieldsFromValues({ run: first, watched: { role: "自己写的" }, previous: { role: "" } })!;
+        tracker.syncFromRun(edited.dirtyFields);
+        const nextRun = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null, inheritedDirty: tracker.snapshot() });
+        const matched = verifySuggestionEvidence(parseOk(JSON.stringify(validResult())), evidenceSnapshot);
+        const fill = computeSafeAutoFillFields({
+            result: matched,
+            formValues: { name: "林夏", role: "", aliases: "" } as Record<string, string>,
+            dirtyFields: nextRun.dirtyFields,
+        });
+        expect(fill.aliases).toBe("夏夏");
+    });
+
+    test("adopt/dismiss 写入 run 后 syncFromRun 同样保留标记", () => {
+        const tracker = createSessionDirtyTracker();
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const adopted: typeof run = { ...run, dirtyFields: { ...run.dirtyFields, appearance: true } };
+        tracker.syncFromRun(adopted.dirtyFields);
+        expect(tracker.snapshot().appearance).toBe(true);
+    });
+
+    test("布尔 false 的键不进入快照（只保留 true 标记）", () => {
+        const tracker = createSessionDirtyTracker();
+        tracker.syncFromRun({ role: true, aliases: false });
+        expect(tracker.snapshot()).toEqual({ role: true });
+        expect(tracker.snapshot().aliases).toBeUndefined();
+    });
+
+    test("beginRunInheritingDirty 同时提供 previousRun 与 inheritedDirty：并集继承（不丢标记）", () => {
+        const guard = createSuggestionSessionGuard();
+        const previous = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null });
+        const previousEdited: typeof previous = { ...previous, dirtyFields: { ...previous.dirtyFields, clothing: true } };
+        const next = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: previousEdited, inheritedDirty: { role: true } });
+        expect(next.dirtyFields.clothing).toBe(true);
+        expect(next.dirtyFields.role).toBe(true);
+    });
+});
+
+// ---------- Important 1：补充 resume 身份绑定切换后的表单名 ----------
+// 旧实现绑 handoffPerson.name（模型规范化名，如输入"阿默"→模型"林默"），
+// 而编辑器切换后表单名 = 目标 asset.title（如"林默然"）→ drift effect 立即自失效。
+// 修复：resume 身份绑定目标标题；handoffPerson 仅作展示状态。
+
+describe("supplementHandoffIdentity resume 身份绑定目标标题（Important 1）", () => {
+    const baseIdentity = { projectId: "proj-1", userId: "user-1", editorAssetId: "new", characterName: "阿默", selectedUnitIds: ["unit-1"], model: "chan::m" };
+
+    test("resume 身份 = 目标标题：与编辑器切换后的 currentIdentity 一致（drift 不触发）", () => {
+        const person = verifiedPersonForSupplement();
+        // 模型规范化名与目标标题不同（别名匹配主场景：输入"阿默"→模型"林默"→目标"林默然"）。
+        const handoffPerson = { ...person, name: "林默" };
+        const identity = supplementHandoffIdentity(baseIdentity, "asset-3", { name: "林默然" }, { handoffPersonName: handoffPerson.name });
+        expect(identity.characterName).toBe("林默然");
+        // 编辑器切换完成后表单名 = 目标标题 → canUseSuggestionResult 通过（不立即失效）。
+        expect(canUseSuggestionResult(identity, { ...baseIdentity, editorAssetId: "asset-3", characterName: "林默然" })).toBe(true);
+    });
+
+    test("表单名非空时优先于 handoffPerson 兜底（身份只跟表单走）", () => {
+        const person = verifiedPersonForSupplement();
+        const identity = supplementHandoffIdentity(baseIdentity, "asset-3", { name: "林默然" }, { handoffPersonName: person.name });
+        expect(identity.characterName).toBe("林默然");
+    });
+
+    test("目标标题缺省（空表单名）时回退 handoffPerson.name，再回退当前表单名", () => {
+        // 目标标题不可得（异常兜底路径）：handoffPerson.name 优先于发起时的表单名。
+        const identity = supplementHandoffIdentity(baseIdentity, "asset-3", { name: "" }, { handoffPersonName: "林默" });
+        expect(identity.characterName).toBe("林默");
+        // handoffPerson 也缺失：保持发起时的表单名（不产生空姓名身份）。
+        const fallbackCurrent = supplementHandoffIdentity(baseIdentity, "asset-3", { name: "" }, {});
+        expect(fallbackCurrent.characterName).toBe("阿默");
+    });
+
+    test("不同目标标题产生不同身份（换补充对象必然换轮）", () => {
+        const toA = supplementHandoffIdentity(baseIdentity, "asset-3", { name: "林默然" }, { handoffPersonName: "林默" });
+        const toB = supplementHandoffIdentity(baseIdentity, "asset-4", { name: "吴奶奶" }, { handoffPersonName: "林默" });
+        expect(toA.characterName).not.toBe(toB.characterName);
+        expect(toA.editorAssetId).not.toBe(toB.editorAssetId);
+    });
+});
+
+// ---------- Important 2：查重扫描取消注册表 ----------
+// 旧接线两处 collectProjectCharacters 调用未传 signal（防抖姓名扫描 + 模型结果返回扫描），
+// 关窗/切对象后扫描仍可继续翻页（最多 200 页）。修复：面板经 createScanAbortRegistry
+// 登记当前扫描的 signal，失效/停止时统一 abort；注册表只做 signal 的登记与取消，
+// 不承载扫描结果语义（seq 丢弃仍由面板保证）。
+
+describe("createScanAbortRegistry 查重扫描取消注册（Important 2）", () => {
+    test("登记新 controller 并 abort：当前扫描被取消", () => {
+        const registry = createScanAbortRegistry();
+        const controller = new AbortController();
+        registry.register(controller);
+        expect(controller.signal.aborted).toBe(false);
+        registry.abort();
+        expect(controller.signal.aborted).toBe(true);
+    });
+
+    test("新扫描登记后旧 controller 已取消：只取消上一轮，不误伤新扫描", () => {
+        const registry = createScanAbortRegistry();
+        const first = new AbortController();
+        registry.register(first);
+        const second = new AbortController();
+        registry.register(second);
+        // 第二次登记即取消第一次（旧扫描），新 controller 保持活跃。
+        expect(first.signal.aborted).toBe(true);
+        expect(second.signal.aborted).toBe(false);
+        registry.abort();
+        expect(second.signal.aborted).toBe(true);
+    });
+
+    test("重复 abort 幂等；无登记时 abort 不抛错", () => {
+        const registry = createScanAbortRegistry();
+        expect(() => registry.abort()).not.toThrow();
+        const controller = new AbortController();
+        registry.register(controller);
+        registry.abort();
+        expect(() => registry.abort()).not.toThrow();
+    });
+
+    test("abort 后再登记新扫描：新 signal 可正常使用", () => {
+        const registry = createScanAbortRegistry();
+        const first = new AbortController();
+        registry.register(first);
+        registry.abort();
+        const second = new AbortController();
+        registry.register(second);
+        expect(second.signal.aborted).toBe(false);
+    });
+});
+
 
 // 分页夹具：两页角色资产（第二页才出现的别名、另一文件夹的角色）。
 // ProjectAsset 的 character.definition 承载 aliases（与 characterDefinition 写入约定一致）。

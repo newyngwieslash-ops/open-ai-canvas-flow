@@ -150,15 +150,56 @@ export function seedDirtyFields(input: { run: SuggestionRun; dirtyFields: Partia
 // 发起新一轮并继承上一轮的编辑标记（seedDirtyFields 的发起点组合）：重新提取与
 // 歧义选人（chooseAmbiguousPerson）开新轮共用同一入口，保证 dirty 跨轮语义单轨。
 // 首次发起（无上一轮）等价于 beginSuggestionRun。
+// inheritedDirty：会话级 dirty 存储（createSessionDirtyTracker）的快照种子。停止提取会
+// setRun(null) 丢弃 run，previousRun 由此变 null；没有会话级存储时，用户在提取中清空/
+// 改写的字段标记随之丢失，重提取时 AI 值被静默写回（final review Critical 2）。
+// 两个来源取并集：previousRun 存在时（歧义选人路径）两边标记都不得丢。
 export function beginRunInheritingDirty(input: {
     guard: SuggestionSessionGuard;
     identity: SuggestionRunIdentity;
     previousRun: SuggestionRun | null;
+    inheritedDirty?: Partial<Record<CharacterFieldKey, boolean>>;
 }): SuggestionRun {
+    const fromTracker: Partial<Record<CharacterFieldKey, boolean>> = {};
+    for (const [key, value] of Object.entries(input.inheritedDirty || {})) {
+        if (value) fromTracker[key as CharacterFieldKey] = true;
+    }
+    const fromPrevious: Partial<Record<CharacterFieldKey, boolean>> = {};
+    for (const [key, value] of Object.entries(input.previousRun?.dirtyFields || {})) {
+        if (value) fromPrevious[key as CharacterFieldKey] = true;
+    }
     return seedDirtyFields({
         run: beginSuggestionRun(input.guard, input.identity),
-        dirtyFields: input.previousRun?.dirtyFields || {},
+        dirtyFields: { ...fromTracker, ...fromPrevious },
     });
+}
+
+// ---------- 会话级 dirty 存储（final review Critical 2） ----------
+
+// 会话级字段编辑标记存储：run 对象会被停止（setRun(null)）或身份漂移清空，
+// 但"用户编辑过该字段"是事实，标记必须活过 run 的生命周期，供下一轮
+// beginRunInheritingDirty 播种。面板在 run 变化时 syncFromRun（接线见 panel），
+// 弹窗关闭/补充切换（表单值整体更换）时 reset，防止标记跨表单串字段。
+// 只累积 true 标记（与 markDirtyFieldsFromValues 的只增语义一致：编辑不会撤销）。
+export type SessionDirtyTracker = {
+    syncFromRun: (dirtyFields: Partial<Record<CharacterFieldKey, boolean>>) => void;
+    snapshot: () => Partial<Record<CharacterFieldKey, boolean>>;
+    reset: () => void;
+};
+
+export function createSessionDirtyTracker(): SessionDirtyTracker {
+    let dirty: Partial<Record<CharacterFieldKey, boolean>> = {};
+    return {
+        syncFromRun: (dirtyFields) => {
+            for (const [key, value] of Object.entries(dirtyFields)) {
+                if (value) dirty[key as CharacterFieldKey] = true;
+            }
+        },
+        snapshot: () => ({ ...dirty }),
+        reset: () => {
+            dirty = {};
+        },
+    };
 }
 
 // ---------- 运行状态通知通道（编辑器持有，跨 api 对象替换存活） ----------
@@ -270,6 +311,31 @@ export function decideSaveGate(input: { suggestionActive: boolean; reviewResolve
     if (!input.identityChosen) return { allowed: false, reason: "存在同名候选，请先选择要处理的人物再保存" };
     if (!input.reviewResolved) return { allowed: false, reason: "AI 建议尚未处理完，请先完成审核（采纳、替换或暂不采用）再保存" };
     return { allowed: true };
+}
+
+// 保存门禁的 pending 口径接缝（final review Critical 1）：面板曾把"剩余未处理字段数"
+// 传给 isReviewResolved 的 pendingFieldCount（字段总数合同）——2 个内容字段采纳 1 个时
+// handled(1) >= remaining(1) 门禁放行，第 2 个建议被静默丢弃。本接缝在模块内按
+// isReviewResolved 的合同（pendingFieldCount = 有建议内容的字段总数）计算总数，
+// 调用方只传人物与证据，"剩余数"语义在类型层面不可再表达。
+// pendingFieldCount 计数与人物字段 status !== "unspecified" 的集合一致：每轮证据键
+// ⊆ 内容字段（采纳/替换/选择/暂不采用/安全填充都只对内容字段登记）。
+export function decideReviewGate(input: {
+    suggestionActive: boolean;
+    running: boolean;
+    identityChosen: boolean;
+    reviewPerson: VerifiedPerson | null;
+    evidence: Partial<Record<CharacterFieldKey, FieldEvidenceMeta>>;
+}): SaveGate {
+    const pendingFieldCount = input.reviewPerson
+        ? characterFieldKeys.filter((key) => input.reviewPerson!.fields[key]?.status !== "unspecified").length
+        : 0;
+    return decideSaveGate({
+        suggestionActive: input.suggestionActive,
+        running: input.running,
+        identityChosen: input.identityChosen,
+        reviewResolved: isReviewResolved(pendingFieldCount, input.evidence),
+    });
 }
 
 // ---------- 保存前复查（Task 4 / design §7：重名复查 + 来源版本过期） ----------
@@ -412,10 +478,52 @@ export function computeStaleSources(input: {
     return { freshness, staleSources };
 }
 
-// 补充模式的会话身份：绑定补充目标 assetId（editorAssetId=目标角色），姓名用
-// 当前审核人物的正式名。移交后 run 身份与新编辑对象一致，旧轮不会污染新表单。
-export function supplementHandoffIdentity(currentIdentity: SuggestionRunIdentity, targetAssetId: string, person: { name: string }): SuggestionRunIdentity {
-    return { ...currentIdentity, editorAssetId: targetAssetId, characterName: person.name.trim() };
+// 补充模式的会话身份：绑定补充目标 assetId（editorAssetId=目标角色）与切换后的表单名。
+// 表单名必须用目标 asset.title（编辑器 openCharacterEditor 把 name 写为目标标题）：
+// 旧实现绑 handoffPerson.name（模型规范化名）——别名匹配主场景（输入"阿默"→模型
+// "林默"→目标标题"林默然"）必然不同，恢复的 run 被身份漂移立即自失效、移交建议消失
+// （final review Important 1）。目标标题不可得时依次回退 handoffPersonName、发起时
+// 表单名（不产生空姓名身份）；handoffPerson 不再承担正常路径的身份绑定。
+export function supplementHandoffIdentity(
+    currentIdentity: SuggestionRunIdentity,
+    targetAssetId: string,
+    formName: { name: string },
+    fallback?: { handoffPersonName?: string },
+): SuggestionRunIdentity {
+    const characterName = formName.name.trim()
+        || (fallback?.handoffPersonName || "").trim()
+        || currentIdentity.characterName.trim();
+    return { ...currentIdentity, editorAssetId: targetAssetId, characterName };
+}
+
+// ---------- 查重扫描取消注册表（final review Important 2） ----------
+
+// 扫描 AbortController 的登记与统一取消：面板在每次发起查重扫描（防抖姓名 / 模型结果
+// 返回）前登记当前 controller 并把 controller.signal 传给 collectProjectCharacters；
+// 失效（身份漂移、弹窗关闭、停止）时统一 abort。旧接线两处调用未传 signal，关窗/切
+// 对象后扫描仍可继续翻页（最多 200 页）。注册表只管理 controller 生命周期：扫描结果
+// 正确性仍由面板的 seq 丢弃保证（同 design §4）；登记新 controller 即取消上一个
+// （旧扫描不应再继续翻页），与 AbortSignal 只读约束一致——取消必须经 controller 完成。
+export type ScanAbortRegistry = {
+    // 登记当前扫描的 controller（取消其 signal 需经 controller，signal 本身只读），
+    // 并 abort 上一个已登记的 controller。
+    register: (controller: AbortController) => void;
+    // 取消当前登记的 controller 并清空登记（幂等；无登记时不抛错）。
+    abort: () => void;
+};
+
+export function createScanAbortRegistry(): ScanAbortRegistry {
+    let current: AbortController | null = null;
+    return {
+        register: (controller) => {
+            if (current && !current.signal.aborted) current.abort();
+            current = controller;
+        },
+        abort: () => {
+            if (current && !current.signal.aborted) current.abort();
+            current = null;
+        },
+    };
 }
 
 // ---------- 提取阶段与状态文案 ----------
