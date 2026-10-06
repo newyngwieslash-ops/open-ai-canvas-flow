@@ -18,6 +18,7 @@ import {
     applyAdoptionToDraft,
     beginRunInheritingDirty,
     canUseSuggestionResult,
+    computeStaleSources,
     createSuggestionSessionGuard,
     createStopController,
     decidePreSaveCheck,
@@ -31,10 +32,11 @@ import {
     observeProgrammaticWrites,
     phaseAfterTaskUpdate,
     recordAutoFillEvidence,
+    shouldClearDuplicateNotice,
+    supplementResumeSnapshot,
     suggestionStatusText,
     supplementHandoffIdentity,
     type RunningChannel,
-    type SourceFreshnessCheck,
     type SuggestionAdoptionAction,
     type SuggestionRun,
     type SuggestionRunIdentity,
@@ -191,6 +193,10 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     // 用户对当前候选明确表态后（仍要新建），后续保存前复查不再重复拦截同一批命中。
     const acknowledgedDuplicateIdsRef = useRef<string[]>([]);
     const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+    // 确认文案的清除上下文（Fix Round 1 · Important 3）：confirmCreateNew 登记确认时的
+    // 姓名/命中 ID。经 ref 读取，不进入 runDuplicateScan 依赖链——否则设置确认文案会让
+    // 扫描回调换引用、effect 重跑、新扫描返回后把刚设置的确认清掉并多跑两轮全量分页 GET。
+    const confirmedNoticeContextRef = useRef<{ name: string; matchIds: string[] } | null>(null);
     // 候选只读预览（GET 最新版本渲染摘要）；不改动当前表单与审核状态。
     const [viewingCandidate, setViewingCandidate] = useState<{ id: string; title: string; detail: Awaited<ReturnType<typeof getProjectCharacter>> | null; loading: boolean } | null>(null);
     // 补充模式移交态：用户点了"补充此角色"到编辑器切换完编辑对象之间的过渡数据。
@@ -304,6 +310,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         setDuplicates({ matches: [], complete: true });
         setDuplicateNotice(null);
         acknowledgedDuplicateIdsRef.current = [];
+        confirmedNoticeContextRef.current = null;
         setViewingCandidate(null);
         setSupplementHandoff(emptySupplementHandoff());
         pendingSupplementRef.current = null;
@@ -318,6 +325,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             setDuplicates({ matches: [], complete: true });
             setDuplicateScanning(false);
             setDuplicateNotice(null);
+            confirmedNoticeContextRef.current = null;
             return;
         }
         setDuplicateScanning(true);
@@ -327,8 +335,22 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                 listProjectAssetsPage,
             );
             if (duplicateScanSeqRef.current !== scanSeq) return; // 旧扫描响应丢弃
-            // 姓名变化后旧确认文案失效：候选集合随姓名改变，用户需重新表态。
-            if (duplicateNotice) setDuplicateNotice(null);
+            // 确认文案只在姓名/候选集合实际变化时清除（shouldClearDuplicateNotice 已测）：
+            // notice 与确认上下文经 ref 读取，不进入本回调依赖——同输入重扫不得把用户
+            // 刚做出的「仍要新建」确认清掉（旧实现因此多跑两轮全量分页扫描）。
+            const context = confirmedNoticeContextRef.current;
+            setDuplicateNotice((current) => {
+                if (!current) return current;
+                const clear = shouldClearDuplicateNotice({
+                    notice: current,
+                    scanName: name,
+                    scanMatches: result.matches,
+                    confirmedName: context?.name || "",
+                    confirmedMatchIds: context?.matchIds || [],
+                });
+                if (clear) confirmedNoticeContextRef.current = null;
+                return clear ? null : current;
+            });
             setDuplicates(result);
         } catch {
             if (duplicateScanSeqRef.current !== scanSeq) return;
@@ -336,7 +358,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         } finally {
             if (duplicateScanSeqRef.current === scanSeq) setDuplicateScanning(false);
         }
-    }, [projectId, editorAssetId, duplicateNotice]);
+    }, [projectId, editorAssetId]);
 
     useEffect(() => {
         const seq = duplicateScanSeqRef.current + 1;
@@ -522,11 +544,14 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     // supplementResume effect 开新轮（身份绑定目标 assetId），当前建议经常规采纳流程审核。
     const supplementCandidate = useCallback((candidate: ExistingCharacterRef) => {
         pendingSupplementRef.current = { targetAssetId: candidate.id };
-        setSupplementHandoff({
+        // 来源快照随移交保留（supplementResumeSnapshot）：移交轮提取所依据的章节证据
+        // 继续作为补充会话保存前复查的 freshness 基准——补充模式同样受"来源版本变化拦截"约束
+        // （Fix Round 1 · Important 1；此前 snapshotRef 被清空且不恢复，staleness 分支成死代码）。
+        setSupplementHandoff(supplementResumeSnapshot({
             duplicateMatches: duplicates.matches,
             handoffPerson: reviewPerson,
             notice: `已切换到补充「${candidate.title}」：已有设定保留原值，AI 建议可在下方逐条采纳；保存将更新该角色而不是新建。`,
-        });
+        }, snapshotRef.current));
         // 会话失效（守卫 + abort + UI 状态），但保留移交数据。
         guardRef.current.invalidate();
         setRun(null);
@@ -562,18 +587,25 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         programmaticWritesRef.current = new Set();
         setRun(nextRun);
         setPhase("idle");
+        // 移交保留的来源快照恢复为复查基准：补充模式下保存前 isSourceStale 照常可触发
+        // （Fix Round 1 · Important 1）。
+        snapshotRef.current = supplementHandoff.snapshotUnits.length ? { projectId, createdAt: "", units: supplementHandoff.snapshotUnits } : null;
         // 移交回来的审核人物恢复展示（verified 设为 matched 单人，字段建议照常采纳）。
         if (supplementHandoff.handoffPerson) {
             setVerified({ status: "matched", people: [supplementHandoff.handoffPerson] });
             setReviewPerson(supplementHandoff.handoffPerson);
         }
-    }, [editorAssetId, supplementHandoff.handoffPerson, characterName]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editorAssetId, supplementHandoff.handoffPerson, supplementHandoff.snapshotUnits, characterName]);
 
-    // 用户明确表示另一个身份继续新建：登记已知悉的命中，保存前复查不再重复拦截同一批。
+    // 用户明确表示另一个身份继续新建：登记已知悉的命中，保存前复查不再重复拦截同一批；
+    // 同时登记确认时的姓名/命中上下文——后续重扫仅在姓名或候选集合实际变化时清除该确认
+    // （shouldClearDuplicateNotice，Fix Round 1 · Important 3）。
     const confirmCreateNew = useCallback(() => {
         acknowledgedDuplicateIdsRef.current = duplicates.matches.map((item) => item.id);
+        confirmedNoticeContextRef.current = { name: duplicateScanName, matchIds: duplicates.matches.map((item) => item.id) };
         setDuplicateNotice(`已确认与现有角色（${duplicates.matches.map((item) => item.title).join("、")}）不同身份，可继续新建。`);
-    }, [duplicates.matches]);
+    }, [duplicates.matches, duplicateScanName]);
 
     // ---------- 保存门禁与保存前复查 ----------
     // 保存门禁注册给编辑器：走 session.ts 已测的 decideSaveGate / isReviewResolved
@@ -604,22 +636,18 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             { projectId, name: characterName.trim(), excludeCharacterId: editorAssetId === "new" ? undefined : editorAssetId },
             listProjectAssetsPage,
         ).catch(() => ({ matches: [] as ExistingCharacterRef[], complete: false }));
-        // 来源新鲜度：用快照章节 updatedAt 对比当前摘要（本 effect 前已拉取 unitsQuery）。
-        const summaryById = new Map((unitsQuery.data?.units || []).map((unit) => [unit.id, unit]));
-        const snapshot = snapshotRef.current;
-        const freshness: SourceFreshnessCheck[] = (snapshot?.units || []).map((unit) => ({
-            unitId: unit.unitId,
-            snapshotUpdatedAt: unit.updatedAt,
-            currentUpdatedAt: summaryById.get(unit.unitId)?.updatedAt ?? null,
-        }));
-        const staleSources = freshness.filter((item) => !item.currentUpdatedAt || item.currentUpdatedAt !== item.snapshotUpdatedAt)
-            .map((item) => ({ unitId: item.unitId, title: summaryById.get(item.unitId)?.title || item.unitId }));
+        // 来源新鲜度：用快照章节 updatedAt 对比当前摘要（computeStaleSources 已测纯判定；
+        // 补充模式下快照来自移交保留的章节，supplementResume 已恢复——Fix Round 1 · Important 1）。
+        const stale = computeStaleSources({
+            snapshotUnits: snapshotRef.current?.units || [],
+            currentSummaries: (unitsQuery.data?.units || []).map((unit) => ({ id: unit.id, title: unit.title, updatedAt: unit.updatedAt })),
+        });
         const gate = decidePreSaveCheck({
             suggestionActive: true,
             duplicatesComplete: scan.complete,
             duplicates: scan.matches,
             previouslySeenIds: [...acknowledgedDuplicateIdsRef.current, ...(supplementHandoff.handoffPerson ? supplementHandoff.duplicateMatches.map((item) => item.id) : [])],
-            staleSources: isSourceStale(freshness) ? staleSources : [],
+            staleSources: isSourceStale(stale.freshness) ? stale.staleSources : [],
             // 补充模式：目标角色本身就是用户明确选定的已有角色，重名提示不拦截（用户已表态）。
             supplementConfirmed: Boolean(supplementHandoff.handoffPerson),
         });

@@ -374,6 +374,10 @@ export async function collectProjectCharacters(projectId: string, fetcher: Proje
         }
         const collected = (page - 1) * DUPLICATE_SCAN_PAGE_SIZE + response.assets.length;
         // 按 total 与 hasMore 双条件停止：空页但未达 total 视为不完整，不认作查无。
+        // 注意：collected<total 时 !hasMore → complete:true 对当前后端不可达——后端
+        // ProjectAssetsPage 的 hasMore 由 total 派生（page*pageSize < total，
+        // project_workbench_read.go），collected<total 时 hasMore 恒为 true。保留双条件
+        // 是防御潜在契约变化（hasMore 不再从 total 派生时仍能正确提前停止）。
         if (!response.assets.length) return { characters, complete: collected >= response.total };
         if (collected >= response.total || !response.hasMore) return { characters, complete: true };
         page += 1;

@@ -1552,7 +1552,14 @@ import {
     findProjectCharacterDuplicates,
     type ProjectCharacterPageFetcher,
 } from "@/pages/projects/detail/project-character-suggestions";
-import { emptySupplementHandoff, supplementHandoffIdentity } from "@/pages/projects/detail/character-suggestion-session";
+import {
+    computeStaleSources,
+    emptySupplementHandoff,
+    shouldApplySupplementFetch,
+    shouldClearDuplicateNotice,
+    supplementHandoffIdentity,
+    supplementResumeSnapshot,
+} from "@/pages/projects/detail/character-suggestion-session";
 
 // 分页夹具：两页角色资产（第二页才出现的别名、另一文件夹的角色）。
 // ProjectAsset 的 character.definition 承载 aliases（与 characterDefinition 写入约定一致）。
@@ -1740,6 +1747,99 @@ describe("emptySupplementHandoff 会话复位清单", () => {
     });
 });
 
+// ---------- 补充模式下来源新鲜度复查可用（Fix Round 1 · Important 1）----------
+// 旧实现 supplementCandidate 清空 snapshotRef 且 supplementResume 不恢复：补充模式保存前
+// freshness=[] → isSourceStale([])===false → staleness 拦截分支成死代码，与 design §7
+// 「保存前重新读取角色分页和章节摘要；重名或来源版本有新变化则回到审核（对补充模式同样生效）」相悖。
+
+const handoffSnapshotUnits = [
+    { unitId: "unit-1", title: "第一集·深夜加班", updatedAt: "2026-10-01T08:00:00.000Z", text: "深夜的办公室只剩林夏一人。" },
+    { unitId: "unit-2", title: "第二集·对门的灯", updatedAt: "2026-10-02T08:00:00.000Z", text: "吴奶奶把米色布袋放在桌上。" },
+];
+
+describe("supplementResumeSnapshot 补充移交保留来源快照", () => {
+    test("快照随移交保留：isSourceStale 在补充模式下可触发（freshness 非空）", () => {
+        // 移交时的快照被保留进 handoff（而非清空）：复查输入不再为空。
+        const handoff = supplementResumeSnapshot(
+            { duplicateMatches: [], handoffPerson: { name: "林夏", aliases: [], identitySummary: "s", identityEvidence: [], fields: {} } as never, notice: null },
+            { projectId: "proj-1", createdAt: "2026-10-06T00:00:00.000Z", units: handoffSnapshotUnits },
+        );
+        expect(handoff.snapshotUnits).toEqual(handoffSnapshotUnits);
+        // 用保留的快照计算 freshness：章节被改动后 isSourceStale 为真（补充模式拦截生效）。
+        const stale = computeStaleSources({
+            snapshotUnits: handoff.snapshotUnits,
+            currentSummaries: [
+                { id: "unit-1", title: "第一集·深夜加班", updatedAt: "2026-10-05T08:00:00.000Z" },
+                { id: "unit-2", title: "第二集·对门的灯", updatedAt: "2026-10-02T08:00:00.000Z" },
+            ],
+        });
+        expect(isSourceStale(stale.freshness)).toBe(true);
+        expect(stale.staleSources.map((item) => item.title)).toEqual(["第一集·深夜加班"]);
+    });
+
+    test("来源未变化时补充模式放行：freshness 全部匹配 → isSourceStale=false", () => {
+        const handoff = supplementResumeSnapshot(
+            emptySupplementHandoff(),
+            { projectId: "proj-1", createdAt: "2026-10-06T00:00:00.000Z", units: handoffSnapshotUnits },
+        );
+        const stale = computeStaleSources({
+            snapshotUnits: handoff.snapshotUnits,
+            currentSummaries: [
+                { id: "unit-1", title: "第一集·深夜加班", updatedAt: "2026-10-01T08:00:00.000Z" },
+                { id: "unit-2", title: "第二集·对门的灯", updatedAt: "2026-10-02T08:00:00.000Z" },
+            ],
+        });
+        expect(isSourceStale(stale.freshness)).toBe(false);
+        expect(stale.staleSources).toEqual([]);
+    });
+
+    test("快照章节被删除（当前摘要缺失）→ currentUpdatedAt 为 null，判定过期", () => {
+        const stale = computeStaleSources({
+            snapshotUnits: handoffSnapshotUnits,
+            currentSummaries: [{ id: "unit-1", title: "第一集·深夜加班", updatedAt: "2026-10-01T08:00:00.000Z" }],
+        });
+        expect(stale.freshness.find((item) => item.unitId === "unit-2")?.currentUpdatedAt).toBeNull();
+        expect(isSourceStale(stale.freshness)).toBe(true);
+        // 已删除章节回退用快照标题展示，不显示裸 unitId。
+        expect(stale.staleSources.map((item) => item.title)).toContain("第二集·对门的灯");
+    });
+
+    test("移交未携带快照（emptySupplementHandoff）→ 复查输入为空、不误报过期", () => {
+        const stale = computeStaleSources({ snapshotUnits: emptySupplementHandoff().snapshotUnits, currentSummaries: [] });
+        expect(stale.freshness).toEqual([]);
+        expect(isSourceStale(stale.freshness)).toBe(false);
+    });
+});
+
+// ---------- 补充 GET 关窗守卫（Fix Round 1 · Important 2）----------
+// 旧实现 supplementCharacter await getProjectCharacter 无守卫：用户在 GET 返回前关窗
+// （invalidateSession 清 pendingSupplementRef、editorAsset=null），resolve 后仍执行
+// openCharacterEditor → 弹窗重开。修复：resolve 后先检查弹窗仍打开再打开编辑器。
+
+describe("shouldApplySupplementFetch 补充 GET 返回后的应用判定", () => {
+    test("弹窗已关闭（modalOpen=false）→ 丢弃结果，不自动重开弹窗", () => {
+        expect(shouldApplySupplementFetch({ modalOpen: false, editorAssetId: "", requestedAssetId: "asset-3" })).toBe(false);
+    });
+
+    test("弹窗打开但编辑对象已被切换（换到其他角色）→ 丢弃过时的补充结果", () => {
+        expect(shouldApplySupplementFetch({ modalOpen: true, editorAssetId: "asset-9", requestedAssetId: "asset-3" })).toBe(false);
+        // 切回新建视图同样丢弃（补充上下文已被取代）。
+        expect(shouldApplySupplementFetch({ modalOpen: true, editorAssetId: "new", requestedAssetId: "asset-3" })).toBe(false);
+    });
+
+    test("弹窗打开且仍处于补充目标上下文（editorAssetId===目标）→ 应用结果", () => {
+        expect(shouldApplySupplementFetch({ modalOpen: true, editorAssetId: "asset-3", requestedAssetId: "asset-3" })).toBe(true);
+    });
+
+    test("「新建角色」视图发起的补充：弹窗打开、editorAssetId==='new'（尚未切换）→ 应用结果", () => {
+        // 用户点「补充此角色」时编辑器可能停留在 "new"（正在新建弹窗内点候选）：
+        // 只要弹窗仍打开且未被切换到其他对象，GET 返回后照常切换。
+        expect(shouldApplySupplementFetch({ modalOpen: true, editorAssetId: "new", requestedAssetId: "asset-3", openedFromNew: true })).toBe(true);
+        // 但若 GET 期间用户已切到别的角色，仍然丢弃。
+        expect(shouldApplySupplementFetch({ modalOpen: true, editorAssetId: "asset-9", requestedAssetId: "asset-3", openedFromNew: true })).toBe(false);
+    });
+});
+
 // ---------- 保存前复查门禁（design §7：重名复查 + 来源版本过期） ----------
 
 describe("decidePreSaveCheck 保存前复查门禁", () => {
@@ -1825,5 +1925,39 @@ describe("duplicatesChanged 新重名判定", () => {
     test("空先前命中时任何命中都是新重名", () => {
         expect(duplicatesChanged([], [{ id: "asset-9", title: "林夏" }])).toBe(true);
         expect(duplicatesChanged([], [])).toBe(false);
+    });
+});
+
+// ---------- 「仍要新建」确认文案的生命周期（Fix Round 1 · Important 3）----------
+// 旧实现把 duplicateNotice 放进 runDuplicateScan 依赖：confirmCreateNew 设置确认文案
+// → 回调换引用 → 扫描 effect 重跑 → 新扫描返回后无条件清文案 + 多跑两轮全量分页 GET。
+// 修复：确认文案只在姓名或候选集合实际变化时清除（纯判定，面板接线只读判定结果）。
+
+describe("shouldClearDuplicateNotice 「仍要新建」确认文案清除判定", () => {
+    const seenMatches = [{ id: "asset-3", title: "陈默", aliases: ["默哥"] }];
+
+    test("无确认文案时不需要清除", () => {
+        expect(shouldClearDuplicateNotice({ notice: null, scanName: "林夏", scanMatches: seenMatches, confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(false);
+    });
+
+    test("同姓名、同候选集合的重复扫描不清除确认文案（用户表态保持显示）", () => {
+        // 模型结果返回后的重扫、防抖后的同值重扫：候选集合与确认时一致 → 文案保留。
+        expect(shouldClearDuplicateNotice({ notice: "已确认与现有角色（陈默）不同身份", scanName: "林夏", scanMatches: seenMatches, confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(false);
+    });
+
+    test("姓名变化 → 确认文案失效，需清除", () => {
+        expect(shouldClearDuplicateNotice({ notice: "已确认与现有角色（陈默）不同身份", scanName: "夏夏", scanMatches: [], confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(true);
+    });
+
+    test("候选集合变化（出现新的重名角色）→ 确认文案失效，需清除", () => {
+        expect(shouldClearDuplicateNotice({ notice: "已确认与现有角色（陈默）不同身份", scanName: "林夏", scanMatches: [...seenMatches, { id: "asset-9", title: "林夏" }], confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(true);
+    });
+
+    test("候选集合缩小到空（重名角色被删除）→ 确认文案失效，需清除", () => {
+        expect(shouldClearDuplicateNotice({ notice: "已确认与现有角色（陈默）不同身份", scanName: "林夏", scanMatches: [], confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(true);
+    });
+
+    test("空姓名扫描（清空输入）→ 确认文案失效，需清除", () => {
+        expect(shouldClearDuplicateNotice({ notice: "已确认与现有角色（陈默）不同身份", scanName: "", scanMatches: [], confirmedName: "林夏", confirmedMatchIds: ["asset-3"] })).toBe(true);
     });
 });

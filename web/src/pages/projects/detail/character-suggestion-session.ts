@@ -293,6 +293,28 @@ export function duplicatesChanged(previousSeenIds: string[], currentMatches: Arr
     return currentMatches.some((item) => !known.has(item.id));
 }
 
+// 「仍要新建」确认文案的清除判定（Fix Round 1 · Important 3）：
+// 确认表态只在姓名或候选集合实际变化时失效——同姓名/同候选集合的重扫（模型结果返回、
+// 防抖同值重扫、保存前复查）不得清除用户刚做出的确认，也不得因此多跑全量分页扫描。
+// notice 经由调用方 ref 读取后传入，不进入扫描回调的依赖链（组件接线由 panel.tsx 保证）。
+export function shouldClearDuplicateNotice(input: {
+    notice: string | null;
+    // 本次扫描输入与结果（notice 为 null 时永不清理）。
+    scanName: string;
+    scanMatches: Array<{ id: string }>;
+    // 用户确认时的扫描上下文（confirmCreateNew 时登记）。
+    confirmedName: string;
+    confirmedMatchIds: string[];
+}): boolean {
+    if (!input.notice) return false;
+    // 姓名清空：候选区整体消失，确认文案失去语境。
+    if (!input.scanName.trim()) return true;
+    if (input.scanName.trim() !== input.confirmedName.trim()) return true;
+    if (input.confirmedMatchIds.length !== input.scanMatches.length) return true;
+    const confirmed = new Set(input.confirmedMatchIds);
+    return input.scanMatches.some((item) => !confirmed.has(item.id));
+}
+
 // 保存前复查门禁（design §7）：
 // - 查重不完整（complete=false/null，请求失败）→ 不放行，不得当"查无此人"放行；
 // - 出现新的重名 → 不放行，回审核；先前已见过的命中不再重复拦截；
@@ -326,15 +348,68 @@ export function decidePreSaveCheck(input: {
 
 // 用户从查重候选中选择"补充已有角色"后，面板的移交交接数据：
 // duplicateMatches 是当轮向用户展示过的全部候选（用户已知情）；handoffPerson 是
-// 当前审核中的人物（移交到补充会话继续审核，不自动合并）；notice 是给用户的移交提示。
+// 当前审核中的人物（移交到补充会话继续审核，不自动合并）；notice 是给用户的移交提示；
+// snapshotUnits 是移交轮冻结的章节快照——补充模式保存前复查的来源新鲜度基准
+// （移交前提取所依据的章节证据继续作为本次保存的核验依据，design §7 对补充模式同样生效）。
+export type SupplementHandoffSnapshotUnit = { unitId: string; title: string; updatedAt: string; text: string };
+
 export type SupplementHandoff = {
     duplicateMatches: Array<{ id: string; title: string; aliases?: string[] }>;
     handoffPerson: VerifiedPerson | null;
     notice: string | null;
+    snapshotUnits: SupplementHandoffSnapshotUnit[];
 };
 
 export function emptySupplementHandoff(): SupplementHandoff {
-    return { duplicateMatches: [], handoffPerson: null, notice: null };
+    return { duplicateMatches: [], handoffPerson: null, notice: null, snapshotUnits: [] };
+}
+
+// 补充移交保留来源快照（Fix Round 1 · Important 1）：把移交轮的快照章节并入移交数据，
+// 使 supplementResume 后的保存前复查拥有非空 freshness 输入（isSourceStale 可触发），
+// 不再是"补充模式下 staleness 分支永不生效"的死代码。交接数据必须整体替换：
+// 旧 handoff 与新快照不能拼出半新半旧的移交态。第一个参数不带 snapshotUnits——
+// 它由本函数从移交轮快照填入，调用方不负责（也不应）手写。
+export function supplementResumeSnapshot(handoff: Omit<SupplementHandoff, "snapshotUnits">, snapshot: { units: SupplementHandoffSnapshotUnit[] } | null): SupplementHandoff {
+    return { ...handoff, snapshotUnits: snapshot?.units ? [...snapshot.units] : [] };
+}
+
+// 补充 GET 返回后的应用判定（Fix Round 1 · Important 2）：用户点「补充此角色」后
+// getProjectCharacter 是异步的——返回前弹窗可能已关闭或编辑对象已被切换。
+// 只有弹窗仍打开、且编辑器没有切到其他角色时才允许切换编辑对象；其余一律丢弃，
+// 不在弹窗已关闭后自动重开弹窗（与保存前复查的 openRef 防护同一层语义）。
+// openedFromNew：从「新建角色」视图发起补充时 editorAssetId 仍是 "new"，
+// 该上下文合法（编辑器尚未切换）；请求期间被切到其他角色则仍丢弃。
+export function shouldApplySupplementFetch(input: {
+    modalOpen: boolean;
+    editorAssetId: string;
+    requestedAssetId: string;
+    openedFromNew?: boolean;
+}): boolean {
+    if (!input.modalOpen) return false;
+    if (input.editorAssetId === input.requestedAssetId) return true;
+    return Boolean(input.openedFromNew) && input.editorAssetId === "new";
+}
+
+// 保存前复查的来源新鲜度计算：快照章节 updatedAt 对比当前章节摘要。
+// currentUpdatedAt 为 null 表示快照章节已不存在（被删除）——同样判定过期。
+// 过期章节标题优先用当前摘要（可能已改名），摘要缺失回退快照标题，不显示裸 unitId。
+export function computeStaleSources(input: {
+    snapshotUnits: SupplementHandoffSnapshotUnit[];
+    currentSummaries: Array<{ id: string; title: string; updatedAt: string }>;
+}): {
+    freshness: SourceFreshnessCheck[];
+    staleSources: Array<{ unitId: string; title: string }>;
+} {
+    const summaryById = new Map(input.currentSummaries.map((unit) => [unit.id, unit]));
+    const freshness: SourceFreshnessCheck[] = input.snapshotUnits.map((unit) => ({
+        unitId: unit.unitId,
+        snapshotUpdatedAt: unit.updatedAt,
+        currentUpdatedAt: summaryById.get(unit.unitId)?.updatedAt ?? null,
+    }));
+    const staleSources = freshness
+        .filter((item) => !item.currentUpdatedAt || item.currentUpdatedAt !== item.snapshotUpdatedAt)
+        .map((item) => ({ unitId: item.unitId, title: summaryById.get(item.unitId)?.title || input.snapshotUnits.find((unit) => unit.unitId === item.unitId)?.title || item.unitId }));
+    return { freshness, staleSources };
 }
 
 // 补充模式的会话身份：绑定补充目标 assetId（editorAssetId=目标角色），姓名用

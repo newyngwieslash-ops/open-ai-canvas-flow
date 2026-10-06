@@ -55,7 +55,7 @@ import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { generateCharacterTurnaround } from "./project-character-media";
 // 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
 import { characterFields } from "./character-script-suggestions";
-import { createRunningChannel } from "./character-suggestion-session";
+import { createRunningChannel, shouldApplySupplementFetch } from "./character-suggestion-session";
 import { CharacterSuggestionPanel, asSuggestionForm, type CharacterSuggestionPanelApi } from "./character-suggestion-panel";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
 
@@ -368,15 +368,29 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         const definition = asset === "new" ? {} : asset.character?.definition || {};
         form.setFieldsValue({ name: asset === "new" ? "" : asset.title, ...Object.fromEntries(characterFields.map(([key]) => [key, fieldValue(definition[key])])) } as CharacterForm);
     };
+    // 编辑器弹窗打开状态与编辑对象的 ref 镜像：补充 GET 是异步流程，await 期间用户可能
+    // 关窗或切换编辑对象（Fix Round 1 · Important 2）。resolve 后经 shouldApplySupplementFetch
+    // （已测纯判定）核对，弹窗已关闭或编辑对象被切换则丢弃结果，不自动重开弹窗——
+    // 与编辑器 requestSave 的 openRef 防护同一层语义（design §7）。
+    const editorOpenRef = useRef(false);
+    const editorAssetIdRef = useRef("");
+    useEffect(() => {
+        editorOpenRef.current = Boolean(editorAsset);
+        editorAssetIdRef.current = editorAsset === "new" ? "new" : (editorAsset?.id || "");
+    }, [editorAsset]);
     // 补充已有角色（Task 4 / design §7）：读取目标角色最新版本后进入原编辑模式。
     // 表单回填走 openCharacterEditor（既有值原样保留）；保存经 saveCharacter 自动走
     // updateProjectCharacter（editorAsset 非 "new"）。不合并候选、不自动覆盖既有值。
     const supplementCharacter = async (assetId: string) => {
+        // 发起时弹窗必然打开（候选来自弹窗内建议面板）；记录发起上下文供 resolve 后核对。
+        const openedFromNew = editorAssetIdRef.current === "new";
         try {
             const latest = await getProjectCharacter(detail.project.id, assetId);
+            if (!shouldApplySupplementFetch({ modalOpen: editorOpenRef.current, editorAssetId: editorAssetIdRef.current, requestedAssetId: assetId, openedFromNew })) return;
             setPreviewAsset(null);
             openCharacterEditor(latest.asset);
         } catch (error) {
+            if (!editorOpenRef.current) return; // 关窗后到达的失败同样不弹任何提示
             message.error(error instanceof Error ? error.message : "角色读取失败，无法补充该角色");
         }
     };
