@@ -3,7 +3,8 @@
 // 弹窗组件（character-suggestion-panel.tsx / assets.tsx）只做渲染编排。
 // 依据：docs/openspec/changes/character-script-suggestions/design.md §4-§6。
 import { aliasesArrayToFormValue } from "./character-script-suggestions";
-import type { CharacterFieldKey, VerifiedSuggestedField } from "./character-script-suggestions";
+import { characterFieldKeys } from "./character-script-suggestions";
+import type { CharacterFieldKey, VerifiedPerson, VerifiedSuggestedField, VerifiedSuggestionResult } from "./character-script-suggestions";
 
 // ---------- 会话守卫状态机 ----------
 
@@ -81,6 +82,72 @@ export function invalidateSuggestionSession(guard: SuggestionSessionGuard, runTo
 
 // ---------- 单字段审核决策 ----------
 
+// 表单键相对上一帧变化的字段列表：undefined/null 归一为空串后按字符串比较。
+export function changedFieldKeys(input: { watched: Record<string, unknown>; previous: Record<string, unknown> }): CharacterFieldKey[] {
+    const changed: CharacterFieldKey[] = [];
+    for (const key of characterFieldKeys) {
+        const next = input.watched[key] === undefined || input.watched[key] === null ? "" : String(input.watched[key]);
+        const last = input.previous[key] === undefined || input.previous[key] === null ? "" : String(input.previous[key]);
+        if (next !== last) changed.push(key);
+    }
+    return changed;
+}
+
+// 表单值变化 → dirty 标记（面板逐字段 useWatch 的可测接缝，design §4）。
+// 只比较 characterFieldKeys 中出现的键：值相对上一帧变化（含主动清空为空串、
+// 上一帧有值本帧缺失）即置 dirty；无变化返回原 run 引用，run 为 null 返回 null。
+export function markDirtyFieldsFromValues(input: {
+    run: SuggestionRun | null;
+    watched: Record<string, unknown>;
+    previous: Record<string, unknown>;
+}): SuggestionRun | null {
+    const { run, watched, previous } = input;
+    if (!run) return null;
+    const changed = changedFieldKeys({ watched, previous });
+    if (!changed.length) return run;
+    const dirtyUpdates: Partial<Record<CharacterFieldKey, boolean>> = {};
+    for (const key of changed) dirtyUpdates[key] = true;
+    return { ...run, dirtyFields: { ...run.dirtyFields, ...dirtyUpdates } };
+}
+
+// 程序化写入观察：本轮由代码（安全自动填充/采纳应用）写入的字段不误标为用户编辑。
+// 传入本轮程序写入的键（writtenKeys）；这些键若同时被用户编辑过（已有 dirty）则保留 dirty。
+export function observeProgrammaticWrites(input: {
+    run: SuggestionRun;
+    writtenKeys: CharacterFieldKey[];
+    watched: Record<string, unknown>;
+    previous: Record<string, unknown>;
+}): SuggestionRun {
+    const changed = new Set(changedFieldKeys({ watched: input.watched, previous: input.previous }));
+    const dirtyUpdates: Partial<Record<CharacterFieldKey, boolean>> = {};
+    for (const key of changed) {
+        if (input.writtenKeys.includes(key)) continue;
+        dirtyUpdates[key] = true;
+    }
+    if (!Object.keys(dirtyUpdates).length) return input.run;
+    return { ...input.run, dirtyFields: { ...input.run.dirtyFields, ...dirtyUpdates } };
+}
+
+// 自动填充记录：把程序安全填充的字段登记为 AI 证据（非 dismissed），供
+// 「已自动填充」标注与保存门禁判定（已处理字段）。不改动 dirty 状态。
+export function recordAutoFillEvidence(input: { run: SuggestionRun; keys: CharacterFieldKey[] }): SuggestionRun {
+    if (!input.keys.length) return input.run;
+    const evidence = { ...input.run.evidence };
+    for (const key of input.keys) evidence[key] = { origin: "ai", dismissed: false };
+    return { ...input.run, evidence };
+}
+
+// 新一轮提取继承上一轮的字段编辑标记：用户清空/改写过字段的标记跨轮保留，
+// 重提取不再把 AI 值静默写回（design §4「旧 AI 自动填入的值不在重试时静默覆盖」）。
+export function seedDirtyFields(input: { run: SuggestionRun; dirtyFields: Partial<Record<CharacterFieldKey, boolean>> }): SuggestionRun {
+    const inherited: Partial<Record<CharacterFieldKey, boolean>> = {};
+    for (const [key, value] of Object.entries(input.dirtyFields)) {
+        if (value) inherited[key as CharacterFieldKey] = true;
+    }
+    return { ...input.run, dirtyFields: { ...inherited, ...input.run.dirtyFields } };
+}
+
+
 export type FieldReviewAction = "auto" | "replace" | "adopt" | "choose" | "none";
 
 export type FieldReview = {
@@ -149,12 +216,49 @@ export type SaveGate = { allowed: boolean; reason?: string };
 
 // 保存门禁（design §4/§5）：建议流程未完成审核（有未解决冲突/身份）时不放行，
 // 不允许静默丢弃建议直接保存。未开启建议流程的表单按原方式保存。
-export function decideSaveGate(input: { suggestionActive: boolean; reviewResolved: boolean; identityChosen: boolean }): SaveGate {
+export function decideSaveGate(input: { suggestionActive: boolean; reviewResolved: boolean; identityChosen: boolean; running?: boolean }): SaveGate {
     if (!input.suggestionActive) return { allowed: true };
+    if (input.running) return { allowed: false, reason: "建议提取进行中，请等待完成或先停止再保存" };
     if (!input.identityChosen) return { allowed: false, reason: "存在同名候选，请先选择要处理的人物再保存" };
     if (!input.reviewResolved) return { allowed: false, reason: "AI 建议尚未处理完，请先完成审核（采纳、替换或暂不采用）再保存" };
     return { allowed: true };
 }
+
+// ---------- 提取阶段与状态文案 ----------
+
+// 提取阶段推进（design §4：idle → loading-sources → extracting → review/error）。
+// 读取阶段收到首个带 id 的任务事件即进入 extracting（模型分析开始）；
+// 其余阶段不被任务事件改写（review/error/idle 由提取完成/失败路径设置）。
+export function phaseAfterTaskUpdate(input: { phase: SuggestionPhase; task?: { id?: string } }): SuggestionPhase {
+    if (input.phase !== "loading-sources") return input.phase;
+    return input.task?.id ? "extracting" : input.phase;
+}
+
+export type SuggestionPhase = "idle" | "loading-sources" | "extracting" | "review" | "error";
+
+// 阶段状态文案（aria-live 区域）：读取显示 n/N，提取显示模型分析中 + 任务状态。
+export function suggestionStatusText(input: { phase: SuggestionPhase; progress: { read: number; total: number } | null; taskStatusText: string }): string {
+    if (input.phase === "loading-sources" && input.progress) return `正在读取章节 ${input.progress.read}/${input.progress.total}…`;
+    if (input.phase === "extracting") return input.taskStatusText ? `模型分析中：${input.taskStatusText}` : "模型分析中…";
+    return "";
+}
+
+// ---------- 会话 UI 状态复位 ----------
+
+// 一轮建议会话的可展示 UI 状态：身份漂移/弹窗关闭时整体复位（与关闭一致的清理，
+// 不残留旧建议区或半失效的门禁）。verified/reviewPerson/stopNotice 清空，
+// excludedUnits 归空数组。
+export type SuggestionSessionUi = {
+    verified: VerifiedSuggestionResult | null;
+    reviewPerson: VerifiedPerson | null;
+    stopNotice: string | null;
+    excludedUnits: Array<{ unitId: string; title: string }>;
+};
+
+export function emptySuggestionSessionUi(): SuggestionSessionUi {
+    return { verified: null, reviewPerson: null, stopNotice: null, excludedUnits: [] };
+}
+
 
 // ---------- 停止序列 ----------
 

@@ -875,17 +875,26 @@ import {
     applyAdoptionToDraft,
     beginSuggestionRun,
     canUseSuggestionResult,
+    changedFieldKeys,
     createSuggestionSessionGuard,
     createStopController,
     decideSaveGate,
+    emptySuggestionSessionUi,
     fieldReview,
     invalidateSuggestionSession,
     isReviewResolved,
+    markDirtyFieldsFromValues,
     needsExplicitConfirm,
+    observeProgrammaticWrites,
+    phaseAfterTaskUpdate,
+    recordAutoFillEvidence,
+    seedDirtyFields,
+    suggestionStatusText,
     type SuggestionAdoptionAction,
     type SuggestionRunIdentity,
     type StopSequenceEvent,
 } from "@/pages/projects/detail/character-suggestion-session";
+import { computeSafeAutoFillFields } from "@/pages/projects/detail/character-script-suggestions";
 
 // ---------- 会话守卫状态机（不用 isMounted 布尔量，跨轮共享 token） ----------
 
@@ -989,6 +998,78 @@ describe("dirty 字段标记", () => {
     });
 });
 
+// ---------- 表单值变化 → dirty 标记（面板 useWatch 接缝；design §4：主动清空也算编辑） ----------
+
+describe("markDirtyFieldsFromValues 表单值变化到 dirty 标记", () => {
+    test("值相对上一帧变化（含清空为空串）置 dirty；相同值不置 dirty", () => {
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const afterEdit = markDirtyFieldsFromValues({ run, watched: { role: "新值", appearance: "" }, previous: { role: "", appearance: "旧外貌" } });
+        expect(afterEdit?.dirtyFields.role).toBe(true);
+        // 主动清空（"旧外貌" → ""）同样算编辑（design §4）。
+        expect(afterEdit?.dirtyFields.appearance).toBe(true);
+        const sameFrame = markDirtyFieldsFromValues({ run: afterEdit!, watched: { role: "新值", appearance: "" }, previous: { role: "新值", appearance: "" } });
+        expect(sameFrame?.dirtyFields.role).toBe(true);
+        expect(sameFrame).toBe(afterEdit);
+    });
+
+    test("undefined/缺失字段按空串口径比较，不改写其他字段标记", () => {
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const edited = markDirtyFieldsFromValues({ run, watched: { role: "" }, previous: { role: undefined } });
+        // undefined → "" 不算编辑（无信息变化）。
+        expect(edited?.dirtyFields.role).toBeUndefined();
+        const missing = markDirtyFieldsFromValues({ run, watched: {}, previous: { aliases: "夏夏" } });
+        // 上一帧有值、本帧缺失（表单卸载等）按清空处理：dirty。
+        expect(missing?.dirtyFields.aliases).toBe(true);
+    });
+
+    test("无运行记录（run 为 null）返回 null：监听不得在会话外积累状态", () => {
+        expect(markDirtyFieldsFromValues({ run: null, watched: { role: "x" }, previous: { role: "" } })).toBeNull();
+    });
+
+    test("值无任何变化时返回原 run 引用（渲染期防抖）", () => {
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        expect(markDirtyFieldsFromValues({ run, watched: { role: "" }, previous: { role: "" } })).toBe(run);
+    });
+
+    test("changedFieldKeys 只报告值真正变化的字段（含 undefined↔空串归一）", () => {
+        expect(changedFieldKeys({ watched: { role: "x", aliases: "" }, previous: { role: "", aliases: "" } })).toEqual(["role"]);
+        expect(changedFieldKeys({ watched: { appearance: "" }, previous: { appearance: undefined } })).toEqual([]);
+        expect(changedFieldKeys({ watched: {}, previous: { aliases: "夏夏" } })).toEqual(["aliases"]);
+    });
+
+    test("observeProgrammaticWrites：程序化写入（自动填充/采纳）不进 dirty，也不覆盖已有用户 dirty", () => {
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const withUserDirty: typeof run = { ...run, dirtyFields: { ...run.dirtyFields, appearance: true } };
+        const observed = observeProgrammaticWrites({
+            run: withUserDirty,
+            writtenKeys: ["role", "aliases", "appearance"],
+            watched: { role: "自动填充", aliases: "夏夏", appearance: "" },
+            previous: { role: "", aliases: "", appearance: "" },
+        });
+        // role/aliases 由程序写入：不误标 dirty；appearance 已被用户编辑：dirty 保留。
+        expect(observed.dirtyFields.role).toBeUndefined();
+        expect(observed.dirtyFields.aliases).toBeUndefined();
+        expect(observed.dirtyFields.appearance).toBe(true);
+    });
+
+    test("recordAutoFillEvidence：自动填充字段记录 AI 证据（不标 dismissed），dirty 侧不变", () => {
+        const run = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const recorded = recordAutoFillEvidence({ run, keys: ["role", "aliases"] });
+        expect(recorded.evidence.role).toEqual({ origin: "ai", dismissed: false });
+        expect(recorded.evidence.aliases).toEqual({ origin: "ai", dismissed: false });
+        expect(recorded.dirtyFields).toEqual({});
+    });
+
+    test("seedDirtyFields：新一轮继承上一轮编辑标记（清空后重提取不回写 AI 值）", () => {
+        const first = beginSuggestionRun(createSuggestionSessionGuard(), runIdentity());
+        const cleared: typeof first = { ...first, dirtyFields: { ...first.dirtyFields, role: true } };
+        const nextIdentity = runIdentity({ selectedUnitIds: ["unit-1"] });
+        const second = beginSuggestionRun(createSuggestionSessionGuard(), nextIdentity);
+        const seeded = seedDirtyFields({ run: second, dirtyFields: cleared.dirtyFields });
+        expect(seeded.dirtyFields.role).toBe(true);
+    });
+});
+
 // ---------- 采纳/替换/冲突决策（design §4、§5） ----------
 
 describe("fieldReview 单字段审核决策", () => {
@@ -1086,26 +1167,35 @@ describe("applyAdoptionToDraft 采纳应用", () => {
 });
 
 describe("无关字段编辑与改写后的证据归属", () => {
-    test("markFieldDirty 只影响目标字段，不清掉其他字段的已采纳依据", () => {
+    test("markDirtyFieldsFromValues 只影响目标字段，不清掉其他字段的已采纳依据", () => {
         const guard = createSuggestionSessionGuard();
         const run = beginSuggestionRun(guard, runIdentity());
-        const withEvidence = { ...run, evidence: { role: { origin: "ai" as const, dismissed: false } } };
-        const afterEdit = { ...withEvidence, dirtyFields: { ...withEvidence.dirtyFields, appearance: true } };
+        const withEvidence: typeof run = { ...run, evidence: { role: { origin: "ai", dismissed: false } } };
+        // 用户编辑 appearance（role 值保持不变）。
+        const afterEdit = markDirtyFieldsFromValues({
+            run: withEvidence,
+            watched: { role: "", appearance: "新外貌" },
+            previous: { role: "", appearance: "" },
+        });
         // appearance 编辑后 role 依据原样保留。
-        expect(afterEdit.evidence.role?.origin).toBe("ai");
-        expect(afterEdit.dirtyFields.appearance).toBe(true);
-        expect(afterEdit.dirtyFields.role).toBeUndefined();
+        expect(afterEdit?.evidence.role?.origin).toBe("ai");
+        expect(afterEdit?.dirtyFields.appearance).toBe(true);
+        expect(afterEdit?.dirtyFields.role).toBeUndefined();
     });
 
-    test("用户改写已采纳值：原证据仍是 AI 原建议的依据，不冒充手写值的证明", () => {
+    test("用户改写已采纳值：markDirtyFieldsFromValues 置 dirty，原证据仍标注为 AI 原建议依据", () => {
         const guard = createSuggestionSessionGuard();
-        let run = beginSuggestionRun(guard, runIdentity());
-        const withEvidence = { ...run, evidence: { role: { origin: "ai" as const, dismissed: false } } };
+        const run = beginSuggestionRun(guard, runIdentity());
+        const withEvidence: typeof run = { ...run, evidence: { role: { origin: "ai", dismissed: false } } };
         // 用户随后改写了 role 字段值。
-        run = { ...withEvidence, dirtyFields: { ...withEvidence.dirtyFields, role: true } };
+        const rewritten = markDirtyFieldsFromValues({
+            run: withEvidence,
+            watched: { role: "用户改写的定位" },
+            previous: { role: "加班晚归的都市上班族" },
+        });
         // 证据 origin 仍是 "ai"：显示为“AI 原建议的依据”，且表单值不再被声明为 AI 当前值。
-        expect(run.evidence.role?.origin).toBe("ai");
-        expect(run.dirtyFields.role).toBe(true);
+        expect(rewritten?.evidence.role?.origin).toBe("ai");
+        expect(rewritten?.dirtyFields.role).toBe(true);
     });
 });
 
@@ -1140,6 +1230,16 @@ describe("decideSaveGate 保存门禁", () => {
     test("审核完成（全部字段已处理）：放行保存", () => {
         const gate = decideSaveGate(gateInput({ suggestionActive: true }));
         expect(gate.allowed).toBe(true);
+    });
+
+    test("提取运行中：不放行并说明原因（design §4 运行中禁用保存）", () => {
+        const gate = decideSaveGate(gateInput({ suggestionActive: true, running: true }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toContain("提取");
+    });
+
+    test("未开启建议流程时运行中仍放行（无建议会话不受影响）", () => {
+        expect(decideSaveGate(gateInput({ running: true })).allowed).toBe(true);
     });
 });
 
@@ -1250,6 +1350,66 @@ describe("createStopController 停止序列", () => {
         const second = stop.reportLateTaskId("task-late-1");
         expect(second.cancelled).toBe(false);
         expect(cancelCalls).toEqual(["task-late-1"]);
+    });
+
+    test("reportLateTaskId 与停止时已知 taskId 共享同一防重集合（单轨去重）", async () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const cancelCalls: string[] = [];
+        const stop = createStopController({
+            guard, runToken: run.token, signal: controller.signal, abort: () => controller.abort(),
+            cancelTask: (taskId: string) => { cancelCalls.push(taskId); },
+        });
+        // 停止时已对 task-dup 发起取消（onTaskUpdate 在停止前送达）。
+        await stop({ taskId: "task-dup", onEvent: () => undefined });
+        expect(cancelCalls).toEqual(["task-dup"]);
+        // 同一 taskId 之后再经迟到通道上报：不得重复发起取消请求。
+        expect(stop.reportLateTaskId("task-dup").cancelled).toBe(false);
+        expect(cancelCalls).toEqual(["task-dup"]);
+        // 其他 taskId 照常补取消。
+        expect(stop.reportLateTaskId("task-late-2").cancelled).toBe(true);
+        expect(cancelCalls).toEqual(["task-dup", "task-late-2"]);
+    });
+});
+
+// ---------- 提取阶段推进与状态文案（design §4：idle → loading-sources → extracting → review/error） ----------
+
+describe("phaseAfterTaskUpdate 任务事件到阶段推进", () => {
+    test("读取阶段收到首个任务事件进入 extracting；阶段只在推进时变化", () => {
+        expect(phaseAfterTaskUpdate({ phase: "loading-sources", task: { id: "task-1" } })).toBe("extracting");
+        // 已在 extracting：保持（不回退）。
+        expect(phaseAfterTaskUpdate({ phase: "extracting", task: { id: "task-1", status: "running" } })).toBe("extracting");
+        // 任务尚未创建（无 id）：不推进。
+        expect(phaseAfterTaskUpdate({ phase: "loading-sources", task: {} })).toBe("loading-sources");
+        // 无任务事件（undefined）：保持原阶段。
+        expect(phaseAfterTaskUpdate({ phase: "loading-sources", task: undefined })).toBe("loading-sources");
+        // review/error/idle 不被任务事件改写。
+        expect(phaseAfterTaskUpdate({ phase: "review", task: { id: "task-1" } })).toBe("review");
+        expect(phaseAfterTaskUpdate({ phase: "idle", task: { id: "task-1" } })).toBe("idle");
+    });
+});
+
+describe("suggestionStatusText 阶段状态文案", () => {
+    test("读取阶段显示 n/N；提取阶段显示模型分析中+任务状态", () => {
+        expect(suggestionStatusText({ phase: "loading-sources", progress: { read: 2, total: 5 }, taskStatusText: "生成中" })).toBe("正在读取章节 2/5…");
+        expect(suggestionStatusText({ phase: "extracting", progress: null, taskStatusText: "生成中" })).toBe("模型分析中：生成中");
+        // extracting 但任务状态尚未到达：仍有可读文案（不再冻结在读取文案）。
+        expect(suggestionStatusText({ phase: "extracting", progress: null, taskStatusText: "" })).toBe("模型分析中…");
+        expect(suggestionStatusText({ phase: "idle", progress: null, taskStatusText: "" })).toBe("");
+        expect(suggestionStatusText({ phase: "loading-sources", progress: null, taskStatusText: "" })).toBe("");
+    });
+});
+
+// ---------- 会话 UI 状态复位清单（design §5：身份漂移/关闭与弹窗关闭一致的完整清理） ----------
+
+describe("emptySuggestionSessionUi 会话 UI 复位清单", () => {
+    test("返回空指针清单：verified/reviewPerson/stopNotice/excludedUnits 全部清空", () => {
+        const empty = emptySuggestionSessionUi();
+        expect(empty.verified).toBeNull();
+        expect(empty.reviewPerson).toBeNull();
+        expect(empty.stopNotice).toBeNull();
+        expect(empty.excludedUnits).toEqual([]);
     });
 });
 

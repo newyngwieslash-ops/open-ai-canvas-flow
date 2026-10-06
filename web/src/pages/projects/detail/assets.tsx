@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Dropdown, Form, Input, Modal, Popconfirm, Tabs, type FormInstance } from "antd";
 import { Box, Check, ChevronDown, Download, FileText, FolderOpen, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, MoveRight, Music2, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound, Video, VolumeX } from "lucide-react";
@@ -710,6 +710,13 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
 }) {
     // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）与关闭时会话失效。
     const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", invalidateSession: () => undefined });
+    // 建议面板运行中提取/分析时禁用保存（design §4「运行中禁用创建/保存」）。
+    // 门禁经 useSyncExternalStore 快照订阅面板的运行状态；面板更新运行快照时通知订阅者。
+    const runningSubscribe = useCallback((onStoreChange: () => void) => {
+        panelApiRef.current.onRunningChange = onStoreChange;
+        return () => { panelApiRef.current.onRunningChange = undefined; };
+    }, []);
+    const runningSnapshot = useSyncExternalStore(runningSubscribe, () => panelApiRef.current.runningSnapshot ?? false);
     useEffect(() => {
         if (open) return;
         // 弹窗关闭：失效当前建议会话（守卫 + abort），旧响应不再应用（design §5）。
@@ -723,31 +730,30 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
         }
         onSave();
     };
+    const savingDisabled = runningSnapshot;
     const field = (key: CharacterFormKey) => characterFields.find(([name]) => name === key)!;
     const textArea = (key: CharacterFormKey, rows = 3) => <Form.Item name={key} label={field(key)[1]}><Input.TextArea rows={rows} placeholder={key === "appearance" ? "先描述用户能看到的稳定特征…" : undefined} /></Form.Item>;
     const input = (key: CharacterFormKey) => <Form.Item name={key} label={field(key)[1]}><Input /></Form.Item>;
     return (
         <AppModal
             flush
-            className="workspace-modal workspace-modal-wide library-modal character-editor-modal"
+            className="workspace-modal workspace-modal-wide library-modal"
             title={null}
             open={open}
             forceRender
-            okButtonProps={{ loading }}
             onCancel={onClose}
-            onOk={requestSave}
             styles={{ body: { minHeight: 0, flex: 1 }, header: { margin: 0 }, footer: { margin: 0 } }}
             footer={(
                 <div className="flex items-center justify-end gap-2 px-6 py-4" style={{ borderTop: "1px solid var(--workspace-border)" }}>
                     <Button onClick={onClose}>取消</Button>
-                    <Button type="primary" loading={loading} onClick={requestSave}>{editing ? "保存角色设定" : "创建角色卡"}</Button>
+                    <Button type="primary" loading={loading} disabled={savingDisabled} onClick={requestSave}>{editing ? "保存角色设定" : "创建角色卡"}</Button>
                 </div>
             )}
         >
             <div className="flex min-h-0 flex-col" style={{ height: "min(860px, calc(100dvh - 120px))" }}>
                 <div className="shrink-0 px-6 pt-5 pb-1"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6" style={{ scrollbarGutter: "stable" }}>
-                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} onApiReady={(api) => { panelApiRef.current = api; }} />
+                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} onApiReady={(api) => { panelApiRef.current = api; }} />
                     <Form form={form} layout="vertical" requiredMark={false} className="pt-2">
                         <Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item>
                         <Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} />
