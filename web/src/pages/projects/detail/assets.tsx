@@ -55,6 +55,7 @@ import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { generateCharacterTurnaround } from "./project-character-media";
 // 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
 import { characterFields } from "./character-script-suggestions";
+import { createRunningChannel } from "./character-suggestion-session";
 import { CharacterSuggestionPanel, asSuggestionForm, type CharacterSuggestionPanelApi } from "./character-suggestion-panel";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
 
@@ -710,13 +711,15 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
 }) {
     // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）与关闭时会话失效。
     const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", invalidateSession: () => undefined });
+    // 运行通知通道由编辑器创建并持有：面板经 api 对象拿到同一引用后只写快照。
+    // 订阅绑在通道上，面板 api 对象替换（useMemo 依赖翻转）不会孤儿化订阅——
+    // 旧实现把回调挂在面板对象上，第一次 api 替换后保存禁用通知即丢失（Fix Round 2）。
+    const runningChannelRef = useRef(createRunningChannel());
     // 建议面板运行中提取/分析时禁用保存（design §4「运行中禁用创建/保存」）。
-    // 门禁经 useSyncExternalStore 快照订阅面板的运行状态；面板更新运行快照时通知订阅者。
     const runningSubscribe = useCallback((onStoreChange: () => void) => {
-        panelApiRef.current.onRunningChange = onStoreChange;
-        return () => { panelApiRef.current.onRunningChange = undefined; };
+        return runningChannelRef.current.subscribe(onStoreChange);
     }, []);
-    const runningSnapshot = useSyncExternalStore(runningSubscribe, () => panelApiRef.current.runningSnapshot ?? false);
+    const runningSnapshot = useSyncExternalStore(runningSubscribe, () => runningChannelRef.current.getRunning());
     useEffect(() => {
         if (open) return;
         // 弹窗关闭：失效当前建议会话（守卫 + abort），旧响应不再应用（design §5）。
@@ -753,7 +756,7 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
             <div className="flex min-h-0 flex-col" style={{ height: "min(860px, calc(100dvh - 120px))" }}>
                 <div className="shrink-0 px-6 pt-5 pb-1"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6" style={{ scrollbarGutter: "stable" }}>
-                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} onApiReady={(api) => { panelApiRef.current = api; }} />
+                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} runningChannel={runningChannelRef.current} onApiReady={(api) => { panelApiRef.current = api; }} />
                     <Form form={form} layout="vertical" requiredMark={false} className="pt-2">
                         <Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item>
                         <Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} />

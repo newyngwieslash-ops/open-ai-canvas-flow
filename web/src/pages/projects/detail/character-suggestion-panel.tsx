@@ -16,7 +16,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import {
     appendUnitIds,
     applyAdoptionToDraft,
-    beginSuggestionRun,
+    beginRunInheritingDirty,
     canUseSuggestionResult,
     createSuggestionSessionGuard,
     createStopController,
@@ -28,8 +28,8 @@ import {
     observeProgrammaticWrites,
     phaseAfterTaskUpdate,
     recordAutoFillEvidence,
-    seedDirtyFields,
     suggestionStatusText,
+    type RunningChannel,
     type SuggestionAdoptionAction,
     type SuggestionRun,
     type SuggestionRunIdentity,
@@ -73,13 +73,13 @@ export function asSuggestionForm(form: FormInstance): CharacterSuggestionForm {
     };
 }
 
-// 面板暴露给编辑器的最小 API：保存门禁 + 运行状态快照（运行中禁用保存）
-// + 弹窗关闭时的会话失效。runningSnapshot 变化时触发 onRunningChange 通知订阅者。
+// 面板暴露给编辑器的最小 API：保存门禁 + 运行通知通道（运行中禁用保存）
+// + 弹窗关闭时的会话失效。通道由编辑器创建、经 props 注入并随 api 对象携带：
+// 订阅绑在编辑器持有的通道上，api 对象替换不会孤儿化订阅（Fix Round 2）。
 export type CharacterSuggestionPanelApi = {
     reviewGate: () => string;
     invalidateSession: () => void;
-    runningSnapshot?: boolean;
-    onRunningChange?: () => void;
+    runningChannel?: RunningChannel;
 };
 
 export type CharacterSuggestionPanelProps = {
@@ -89,13 +89,15 @@ export type CharacterSuggestionPanelProps = {
     form: CharacterSuggestionForm;
     watchForm: FormInstance;
     editorAssetId: string;
+    // 运行通知通道：编辑器创建并订阅，注入后经 api 对象携带（单一事实来源在编辑器侧）。
+    runningChannel: RunningChannel;
     // API 注册：面板挂载后把保存门禁与会话失效句柄交给编辑器。
     onApiReady: (api: CharacterSuggestionPanelApi) => void;
 };
 
 // ---------- 主组件 ----------
 
-export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAssetId, onApiReady }: CharacterSuggestionPanelProps) {
+export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAssetId, runningChannel, onApiReady }: CharacterSuggestionPanelProps) {
     // 姓名来自编辑器表单（useWatch 订阅）：改名即构成新会话身份（design §5）。
     const watchedName = Form.useWatch("name", watchForm) || "";
     const characterName = typeof watchedName === "string" ? watchedName : "";
@@ -134,12 +136,16 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     useEffect(() => {
         const last = lastWatchedRef.current;
         lastWatchedRef.current = { ...watchedRecord };
+        // 消耗本批程序化写入（更新器外）：StrictMode 双调用时两次拿到同一份快照，结果一致。
+        const writtenKeys = programmaticWritesRef.current.size ? [...programmaticWritesRef.current] : [];
+        programmaticWritesRef.current = new Set();
         setRun((current) => {
             if (!current) return current;
-            const written = programmaticWritesRef.current;
-            if (written.size) {
-                programmaticWritesRef.current = new Set();
-                return observeProgrammaticWrites({ run: current, writtenKeys: [...written], watched: watchedRecord, previous: last || {} });
+            // StrictMode 下更新器会被双调用：ref 消耗必须在更新器外完成（Minor Fix Round 2），
+            // 否则第一次调用清空写入集、第二次调用把程序写入误标为用户编辑。
+            const written = writtenKeys;
+            if (written.length) {
+                return observeProgrammaticWrites({ run: current, writtenKeys: written, watched: watchedRecord, previous: last || {} });
             }
             return markDirtyFieldsFromValues({ run: current, watched: watchedRecord, previous: last || {} });
         });
@@ -245,12 +251,14 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     }, [currentIdentity]);
 
     // 弹窗关闭/编辑对象切换时彻底复位（父组件在 onClose 时调用）。
+    // 同步把运行快照归零：会话失效后不再有运行中的提取，编辑器保存禁用必须解除。
     const invalidateSession = useCallback(() => {
         guardRef.current.invalidate();
         setRun(null);
         abortRef.current?.abort();
         abortRef.current = null;
         knownTaskIdRef.current = null;
+        runningChannel.setRunning(false);
         setPhase("idle");
         setProgress(null);
         setTaskStatusText("");
@@ -259,7 +267,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         setVerified(null);
         setReviewPerson(null);
         setExcludedUnits([]);
-    }, []);
+    }, [runningChannel]);
 
     // matched 安全事实自动填充（design §4）：走 Task 1 已测的 computeSafeAutoFillFields
     // （matched + fact 唯一选项 + 字段空 + 未编辑）。填充的字段登记程序化写入（不误标用户编辑）
@@ -285,7 +293,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         knownTaskIdRef.current = null;
         const guard = guardRef.current;
         // 新一轮继承上一轮的字段编辑标记：用户清空/改写过的字段重提取时不回写 AI 值（design §4）。
-        const nextRun = seedDirtyFields({ run: beginSuggestionRun(guard, currentIdentityRef.current), dirtyFields: runRef.current?.dirtyFields || {} });
+        const nextRun = beginRunInheritingDirty({ guard, identity: currentIdentityRef.current, previousRun: runRef.current });
         programmaticWritesRef.current = new Set();
         setRun(nextRun);
         setStopNotice(null);
@@ -409,10 +417,12 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     // 不静默替换）。新轮运行身份绑定「回写后的姓名」：回写触发的身份重算与该身份一致，
     // 漂移 effect 不会把它当漂移清理；新 run 让本人物的字段建议可正常采纳、门禁可解除
     // （此前选完人物后 verified 停留 ambiguous、run 被清空，形成交互死路——Fix Round 1）。
+    // 开新轮必须继承歧义轮已积累的 dirty 标记（Fix Round 2 · Important 2）：
+    // 提取中编辑/清空的字段在重提取时同样不得被 applySafeAutoFill 静默重写。
     const chooseAmbiguousPerson = useCallback((person: VerifiedPerson) => {
         setReviewPerson(person);
         const identity: SuggestionRunIdentity = { ...currentIdentityRef.current, characterName: person.name.trim() };
-        setRun(beginSuggestionRun(guardRef.current, identity));
+        setRun(beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: runRef.current }));
         if (characterName.trim() !== person.name) form.setFieldsValue({ name: person.name });
     }, [characterName, form]);
 
@@ -433,19 +443,20 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         });
         return gate.allowed ? "" : gate.reason || "建议审核未完成，暂不能保存";
     }, [run, reviewPerson, verified, running]);
-    // API 注册：门禁与运行快照随审核状态更新，失效句柄保持稳定引用。
-    // api 对象常驻可变字段（runningSnapshot/onRunningChange）：编辑器经 useSyncExternalStore 订阅。
-    const api = useMemo<CharacterSuggestionPanelApi>(() => ({ reviewGate, invalidateSession }), [reviewGate, invalidateSession]);
+    // API 注册：门禁与运行通道随审核状态更新，失效句柄保持稳定引用。
+    // 通道由编辑器创建并订阅（props 注入），随 api 对象携带：api 对象替换
+    // （useMemo 依赖翻转生成新对象）不会孤儿化订阅（Fix Round 2 · Important 1）。
+    const api = useMemo<CharacterSuggestionPanelApi>(
+        () => ({ reviewGate, invalidateSession, runningChannel }),
+        [reviewGate, invalidateSession, runningChannel],
+    );
     useEffect(() => {
         onApiReady(api);
     }, [onApiReady, api]);
-    // 运行状态快照：经 api 对象同步给编辑器（useSyncExternalStore 订阅方触发保存按钮禁用）。
-    const apiRef = useRef(api);
-    apiRef.current = api;
+    // 运行状态快照：经稳定通道同步给编辑器（useSyncExternalStore 订阅方触发保存按钮禁用）。
     useEffect(() => {
-        apiRef.current.runningSnapshot = running;
-        apiRef.current.onRunningChange?.();
-    }, [running]);
+        runningChannel.setRunning(running);
+    }, [running, runningChannel]);
 
     const reviewFields = useMemo(() => {
         if (!reviewPerson) return [];

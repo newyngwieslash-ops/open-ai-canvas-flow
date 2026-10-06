@@ -147,6 +147,54 @@ export function seedDirtyFields(input: { run: SuggestionRun; dirtyFields: Partia
     return { ...input.run, dirtyFields: { ...inherited, ...input.run.dirtyFields } };
 }
 
+// 发起新一轮并继承上一轮的编辑标记（seedDirtyFields 的发起点组合）：重新提取与
+// 歧义选人（chooseAmbiguousPerson）开新轮共用同一入口，保证 dirty 跨轮语义单轨。
+// 首次发起（无上一轮）等价于 beginSuggestionRun。
+export function beginRunInheritingDirty(input: {
+    guard: SuggestionSessionGuard;
+    identity: SuggestionRunIdentity;
+    previousRun: SuggestionRun | null;
+}): SuggestionRun {
+    return seedDirtyFields({
+        run: beginSuggestionRun(input.guard, input.identity),
+        dirtyFields: input.previousRun?.dirtyFields || {},
+    });
+}
+
+// ---------- 运行状态通知通道（编辑器持有，跨 api 对象替换存活） ----------
+
+// 运行快照订阅句柄：与 useSyncExternalStore 的 subscribe 契约一致。
+export type UnsubscribeRunning = () => void;
+
+// 提取运行中禁用保存的通知通道：由编辑器（assets.tsx）创建并订阅，面板经 api 对象
+// 拿到同一引用后只写快照。旧实现把回调挂在面板 useMemo 的 api 对象上——running 翻转
+// 或门禁依赖变化都会生成新 api 对象，onApiReady 只换 ref 不重挂回调，订阅成孤儿，
+// 保存禁用通知从此丢失（不禁用或卡在禁用）。通道与 api 对象解耦后，对象替换不影响
+// 订阅链路。同值写入去重：不影响快照的 setRunning 不触发订阅者。
+export type RunningChannel = {
+    subscribe: (onChange: () => void) => UnsubscribeRunning;
+    getRunning: () => boolean;
+    setRunning: (running: boolean) => void;
+};
+
+export function createRunningChannel(): RunningChannel {
+    let running = false;
+    let subscribers = new Set<() => void>();
+    return {
+        subscribe: (onChange: () => void) => {
+            subscribers.add(onChange);
+            return () => { subscribers.delete(onChange); };
+        },
+        getRunning: () => running,
+        setRunning: (next: boolean) => {
+            if (next === running) return;
+            running = next;
+            for (const notify of subscribers) notify();
+        },
+    };
+}
+
+// ---------- 单字段审核决策 ----------
 
 export type FieldReviewAction = "auto" | "replace" | "adopt" | "choose" | "none";
 

@@ -873,9 +873,11 @@ test("模块导出面：不再导出 fallbackConfig 死代码", async () => {
 import {
     appendUnitIds,
     applyAdoptionToDraft,
+    beginRunInheritingDirty,
     beginSuggestionRun,
     canUseSuggestionResult,
     changedFieldKeys,
+    createRunningChannel,
     createSuggestionSessionGuard,
     createStopController,
     decideSaveGate,
@@ -1070,6 +1072,58 @@ describe("markDirtyFieldsFromValues 表单值变化到 dirty 标记", () => {
     });
 });
 
+// ---------- 新轮 dirty 继承（Fix Round 2 · Important 2）----------
+// chooseAmbiguousPerson 开新轮此前未播种 dirty：ambiguous 轮编辑/清空的字段标记丢失，
+// 重提取 matched 后 applySafeAutoFill 会静默重写用户清空字段（违反 design §4）。
+
+describe("beginRunInheritingDirty 新轮 dirty 继承", () => {
+    test("歧义轮编辑/清空的字段标记随选人开新轮保留", () => {
+        const guard = createSuggestionSessionGuard();
+        const ambiguousRun = beginSuggestionRun(guard, runIdentity({ characterName: "林夏" }));
+        // 用户在提取中清空 clothing、改写 role（标记 dirty）。
+        const editedRun = markDirtyFieldsFromValues({
+            run: ambiguousRun,
+            watched: { role: "自己写的定位", clothing: "" },
+            previous: { role: "", clothing: "旧服装" },
+        })!;
+        const nextRun = beginRunInheritingDirty({
+            guard,
+            identity: runIdentity({ characterName: "夏夏" }),
+            previousRun: editedRun,
+        });
+        // 新轮 token 有效且身份绑定回写后的姓名。
+        expect(guard.isCurrent(ambiguousRun.token)).toBe(false);
+        expect(guard.isCurrent(nextRun.token)).toBe(true);
+        expect(nextRun.identity.characterName).toBe("夏夏");
+        expect(nextRun.dirtyFields.role).toBe(true);
+        expect(nextRun.dirtyFields.clothing).toBe(true);
+    });
+
+    test("无上一轮（首次发起）不继承任何 dirty", () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: null });
+        expect(run.dirtyFields).toEqual({});
+        expect(guard.isCurrent(run.token)).toBe(true);
+    });
+
+    test("选人重提取后 applySafeAutoFill 不重写被清空字段（安全填充决策视角）", () => {
+        // 端到端语义：ambiguous → 选人（开新轮继承 dirty）→ 重提取 matched → 安全填充。
+        const guard = createSuggestionSessionGuard();
+        const ambiguousRun = beginSuggestionRun(guard, runIdentity());
+        const clearedRun = markDirtyFieldsFromValues({ run: ambiguousRun, watched: { aliases: "" }, previous: { aliases: "旧别名" } })!;
+        const inherited = beginRunInheritingDirty({ guard, identity: runIdentity(), previousRun: clearedRun });
+        const matched = verifySuggestionEvidence(parseOk(JSON.stringify(validResult())), evidenceSnapshot);
+        const fill = computeSafeAutoFillFields({
+            result: matched,
+            formValues: { name: "林夏", role: "", aliases: "" } as Record<string, string>,
+            dirtyFields: inherited.dirtyFields,
+        });
+        expect(fill.aliases).toBeUndefined();
+        // 未被清空的 role 仍按正常安全填充决策（可填充）。
+        expect(fill.role).toBe("加班晚归的都市上班族");
+    });
+});
+
 // ---------- 采纳/替换/冲突决策（design §4、§5） ----------
 
 describe("fieldReview 单字段审核决策", () => {
@@ -1250,6 +1304,64 @@ describe("isReviewResolved / needsExplicitConfirm 审核完成判定", () => {
         expect(isReviewResolved(3, allHandled)).toBe(false);
         expect(needsExplicitConfirm({ action: "choose" as const })).toBe(true);
         expect(needsExplicitConfirm({ action: "auto" as const })).toBe(false);
+    });
+});
+
+// ---------- 运行状态通知通道（Fix Round 2 · Important 1）----------
+// 旧实现把 onRunningChange 挂在面板 useMemo 出的 api 对象上：running 翻转 / 门禁依赖
+// 变化都会生成新 api 对象，onApiReady 只换 ref 不重挂 → 第一次替换后订阅成孤儿，
+// 保存禁用通知从此丢失（不禁用或卡在禁用）。修复：通知通道由编辑器创建并持有
+// （createRunningChannel），api 对象只携带通道引用；对象替换不再影响订阅链路。
+
+describe("createRunningChannel 运行状态通知通道", () => {
+    test("setRunning(true) 触发订阅者通知；setRunning(false) 再次触发（生效与解除各一次）", () => {
+        const channel = createRunningChannel();
+        let notifications = 0;
+        const unsubscribe = channel.subscribe(() => { notifications += 1; });
+        channel.setRunning(true);
+        expect(notifications).toBe(1);
+        expect(channel.getRunning()).toBe(true);
+        channel.setRunning(false);
+        expect(notifications).toBe(2);
+        expect(channel.getRunning()).toBe(false);
+        unsubscribe();
+    });
+
+    test("api 对象替换（onApiReady 换 ref）后订阅仍然存活：通知不丢", () => {
+        // 模拟面板侧真实序列：编辑器先订阅 → 收到第一个 api（占位）→ 收到替换后的 api → running 翻转。
+        const channel = createRunningChannel();
+        let notifications = 0;
+        channel.subscribe(() => { notifications += 1; });
+        const firstApi: { runningChannel?: typeof channel } = { runningChannel: channel };
+        const replacedApi: { runningChannel?: typeof channel } = { runningChannel: channel };
+        // 面板把通道带到新 api 对象上（接线语义：通道引用随对象走，订阅绑在通道上）。
+        expect(firstApi.runningChannel).toBe(replacedApi.runningChannel);
+        replacedApi.runningChannel!.setRunning(true);
+        expect(notifications).toBe(1);
+        replacedApi.runningChannel!.setRunning(false);
+        expect(notifications).toBe(2);
+    });
+
+    test("同值重复 setRunning 不触发通知（快照去重）", () => {
+        const channel = createRunningChannel();
+        let notifications = 0;
+        channel.subscribe(() => { notifications += 1; });
+        channel.setRunning(true);
+        channel.setRunning(true);
+        expect(notifications).toBe(1);
+        channel.setRunning(false);
+        channel.setRunning(false);
+        expect(notifications).toBe(2);
+    });
+
+    test("unsubscribe 后不再收到通知", () => {
+        const channel = createRunningChannel();
+        let notifications = 0;
+        const unsubscribe = channel.subscribe(() => { notifications += 1; });
+        channel.setRunning(true);
+        unsubscribe();
+        channel.setRunning(false);
+        expect(notifications).toBe(1);
     });
 });
 

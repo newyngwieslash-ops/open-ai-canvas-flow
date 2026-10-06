@@ -9,6 +9,7 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 - 已实现：角色卡编辑弹窗改用 AppModal flush 就地内嵌「从剧本提取」建议区（不再开一层全屏模态）；模型/章节范围选择、建议逐字段审核（剧本依据/AI 推断/制作建议/正文未明确、冲突选择、身份歧义先选人，选定人物后进入该人物的字段审核）、n/N 读取进度与「模型分析中」任务状态、逐字段 dirty 标记（自动填充/采纳的写入不误标为用户编辑，编辑标记跨重提取保留）、提取运行中禁用保存、会话守卫失效（关闭/重开/改名/改范围/换项目/换用户/换编辑对象/重新提取，旧建议区与门禁一并完整清理）、停止序列（失效守卫 → abort → 已知 taskId 取消 → 迟到 taskId 补取消且与停止时共享防重记录，取消失败只提示不重提取）、保存门禁（有未处理建议字段时不放行保存）。自动填充字段显示「已自动填充」标注。自动验证：`web/test/project-character-suggestions.test.ts` 113 项通过；`bun run build`、`bun run lint` 通过。
 - 修复轮（评审 Fix Round 1）：12 字段逐字段 useWatch 订阅（原数组 NamePath 用法使 dirty 追踪整体失效）、歧义人物选定后的可审核闭环与门禁解除、提取中禁用保存按钮、迟到取消单轨防重、已测纯函数（decideSaveGate/applyAdoptionToDraft/isReviewResolved/computeSafeAutoFillFields 等）接线到组件、extracting 阶段真实进入、身份漂移完整清理（verified/reviewPerson/stopNotice/excludedUnits）。组件接线本身由 tsc/build/lint 与代码审读证明（Bun 无 DOM/React harness，不伪造组件渲染测试）。
+- 修复轮（评审 Fix Round 2）：运行禁用保存的通知改走编辑器创建并持有的稳定通道（`createRunningChannel`，api 对象替换不再孤儿化订阅，禁用可靠生效与解除）；歧义选人开新轮继承歧义轮的 dirty 标记（`beginRunInheritingDirty`，重提取不重写用户清空字段）；程序化写入集改在 effect 主体消耗（StrictMode 双调用不再错标 dirty）。自动验证：`web/test/project-character-suggestions.test.ts` 120 项通过；`bun run build`、`bun run lint` 通过。
 
 仍待真实环境验收（Bun 测试环境无 DOM/React harness，以下只能真实浏览器确认）：
 
