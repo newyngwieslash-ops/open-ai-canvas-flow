@@ -464,7 +464,8 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                 // 模型可能改写正式姓名（回写由 chooseAmbiguousPerson / 手工确认），重扫不回写表单。
                 const scanSeq = duplicateScanSeqRef.current + 1;
                 duplicateScanSeqRef.current = scanSeq;
-                void runDuplicateScan(person.name.trim(), scanSeq);            }
+                void runDuplicateScan(person.name.trim(), scanSeq);
+        }
         } catch (error) {
             // 停止/身份切换导致的终止不上报为当前轮失败。
             if (controller.signal.aborted) return;
