@@ -6,8 +6,10 @@
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import { runBackendGenerationTask, type BackendGenerationResult } from "@/services/api/generation-task";
 import { getProjectUnit, listProjectUnits, type ProjectUnit } from "@/services/api/projects";
-import { defaultConfig, type AiConfig } from "@/stores/use-config-store";
+import type { GenerationTask } from "@/services/api/task-center";
+import type { AiConfig } from "@/stores/use-config-store";
 import {
+    characterFieldKeys,
     parseCharacterSuggestions,
     verifySuggestionEvidence,
     type SuggestionResult,
@@ -47,6 +49,15 @@ export type CharacterSuggestionDependencies = {
     listProjectUnits: typeof listProjectUnits;
     getProjectUnit: (projectId: string, unitId: string, signal?: AbortSignal) => Promise<{ unit: ProjectUnit }>;
     runTask: (input: CharacterSuggestionTaskInput) => Promise<{ text?: string }>;
+    // 跨轮会话守卫工厂：同一工厂产出的多轮提取互相隔离，旧轮响应到达时整轮拒绝。
+    // 生产（defaultCharacterSuggestionDependencies）共享一个工厂；不提供时退化为单轮语义。
+    createRunSession?: () => CharacterRunSession;
+};
+
+// 一次提取的会话守卫：begin 发放本轮 token，isCurrent 检查该 token 是否仍代表最新轮。
+export type CharacterRunSession = {
+    begin: () => number;
+    isCurrent: (token: number) => boolean;
 };
 
 // 发起任务时传给 runBackendGenerationTask 的最小输入面（记录用）。
@@ -57,6 +68,8 @@ export type CharacterSuggestionTaskInput = {
     config: AiConfig;
     signal?: AbortSignal;
     clientOperationId?: string;
+    // 任务状态回调：透传给 runBackendGenerationTask（Task 3 用它收 taskId 以支持取消）。
+    onTaskUpdate?: (task: GenerationTask) => void;
     metadata: Record<string, unknown>;
 };
 
@@ -68,13 +81,17 @@ export type CharacterSuggestionRunOptions = {
     config: AiConfig;
     signal?: AbortSignal;
     clientOperationId?: string;
+    // 任务状态回调：透传给后端任务（Task 3 用 taskId 补取消）。
+    onTaskUpdate?: (task: GenerationTask) => void;
+    // 逐章读取进度回调：每章成功读取后触发一次（read 为已完成章节数，total 为所选剧情章节数）。
+    onProgress?: (progress: { read: number; total: number }) => void;
     // 富文本转换器注入点：Bun 测试无 DOMParser，页面不传时走浏览器惰性默认实现。
     convertRichText?: RichTextConverter;
     // 提取范围内的已有角色名/别名（仅辅助模型匹配称谓，不作为剧本事实来源）。
     existingNames?: string[];
 };
 
-// 生产默认依赖：走真实 projects GET 与后端文本任务。
+// 生产默认依赖：走真实 projects GET 与后端文本任务；createRunSession 共享实现跨轮隔离旧响应。
 export const defaultCharacterSuggestionDependencies: CharacterSuggestionDependencies = {
     listProjectUnits: (projectId, config) => listProjectUnits(projectId, config),
     getProjectUnit: (projectId, unitId, signal) => getProjectUnit(projectId, unitId, signal ? { signal } : undefined),
@@ -86,27 +103,29 @@ export const defaultCharacterSuggestionDependencies: CharacterSuggestionDependen
             config: input.config,
             signal: input.signal,
             clientOperationId: input.clientOperationId,
+            onTaskUpdate: input.onTaskUpdate,
             metadata: input.metadata,
         });
         return { text: result.text };
     },
+    createRunSession: () => {
+        // 生产共享的跨轮会话状态：所有轮次的 token 在同一个计数器上推进，
+        // 新轮 begin() 后旧轮 token 立即失效。状态必须留在工厂闭包外共享，
+        // 不能在每次调用里新建（否则每轮各自从 1 开始，守卫失效）。
+        return {
+            begin: () => {
+                sharedRunSessionToken += 1;
+                return sharedRunSessionToken;
+            },
+            isCurrent: (candidate: number) => candidate === sharedRunSessionToken,
+        };
+    },
 };
 
+// 生产默认依赖共用的跨轮 token 计数器（见 createRunSession）。
+let sharedRunSessionToken = 0;
+
 // ---------- 会话失效守卫 ----------
-
-// 每轮提取持有独立 token；await 返回后先比对再消费结果，旧轮次响应不污染新会话。
-class RunGuard {
-    private token = 0;
-
-    begin(): number {
-        this.token += 1;
-        return this.token;
-    }
-
-    isCurrent(token: number): boolean {
-        return token === this.token;
-    }
-}
 
 function throwIfAborted(signal?: AbortSignal) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -133,9 +152,9 @@ export const convertRichTextToPlainText: RichTextConverter = (html) => {
 type PromptUnit = { unitId: string; title: string; text: string };
 
 // 章节正文与角色名都是不可信任务数据：一律 JSON.stringify 后嵌入，模型指令要求只把载荷当数据。
-// 输出 schema 直接引用 character-script-suggestions 的 12 字段清单，避免两套可漂移的字段列表。
+// 输出 schema 直接引用 character-script-suggestions 的 12 字段清单（characterFieldKeys），保持单一来源。
 export function buildCharacterSuggestionPrompt(input: { characterName: string; existingNames: string[]; units: PromptUnit[] }): string {
-    const fieldKeysJson = JSON.stringify(fieldKeysForPrompt);
+    const fieldKeysJson = JSON.stringify(characterFieldKeys);
     const scriptPayload = JSON.stringify({
         units: input.units.map((unit) => ({ unitId: unit.unitId, title: unit.title, text: unit.text })),
         targetName: input.characterName,
@@ -163,12 +182,6 @@ export function buildCharacterSuggestionPrompt(input: { characterName: string; e
         scriptPayload,
     ].join("\n");
 }
-
-// 与纯逻辑模块同一份字段清单（延迟取值避免直接 import 顺序问题）。
-const fieldKeysForPrompt = [
-    "role", "aliases", "appearance", "physique", "clothing", "personality",
-    "props", "consistencyPrompt", "multiViewPrompt", "voiceLanguage", "voiceAge", "voiceTimbre",
-] as const;
 
 // ---------- 预算预检（复用既有估算口径，不引入第二套 tokenizer） ----------
 
@@ -215,9 +228,11 @@ export function checkCharacterSuggestionBudget(input: { prompt: string; config: 
 
 export async function extractCharacterSuggestions(options: CharacterSuggestionRunOptions, dependencies?: CharacterSuggestionDependencies): Promise<CharacterSuggestionRun> {
     const deps = dependencies || defaultCharacterSuggestionDependencies;
-    const guard = new RunGuard();
-    const token = guard.begin();
-    const stillCurrent = () => guard.isCurrent(token);
+    // 跨轮会话守卫：依赖提供 createRunSession 时多轮共享失效状态（旧轮响应被拒）；
+    // 未提供时退化为单轮语义（不虚假声明跨轮自保）。
+    const session = deps.createRunSession?.();
+    const token = session?.begin() ?? 1;
+    const stillCurrent = () => (session ? session.isCurrent(token) : true);
 
     throwIfAborted(options.signal);
 
@@ -237,6 +252,7 @@ export async function extractCharacterSuggestions(options: CharacterSuggestionRu
     const snapshotUnits: CharacterSuggestionSnapshot["units"] = [];
     const excludedUnits: Array<{ unitId: string; title: string }> = [];
     const ordered = [...storyUnits].sort((a, b) => (a.position < b.position ? -1 : a.position > b.position ? 1 : 0));
+    let readUnits = 0;
     for (const summary of ordered) {
         throwIfAborted(options.signal);
         // 逐章顺序读取（首版容量边界内的简单实现），读取失败直接终止本轮，不降级为空章。
@@ -247,6 +263,9 @@ export async function extractCharacterSuggestions(options: CharacterSuggestionRu
         // 升级路径：按章节分块做证据提取（每块单独文本任务），再本地聚合出建议对象。
         const convert = options.convertRichText || convertRichTextToPlainText;
         const text = convert(detail.unit.sourceText || "");
+        readUnits += 1;
+        // 每章成功读取（含空正文）后触发进度回调，供页面显示读取进度（Task 3）。
+        options.onProgress?.({ read: readUnits, total: ordered.length });
         if (!text.trim()) {
             // 空正文明确列为本轮未分析范围，不虚报覆盖。
             excludedUnits.push({ unitId: summary.id, title: summary.title });
@@ -285,7 +304,7 @@ export async function extractCharacterSuggestions(options: CharacterSuggestionRu
         characterName: options.characterName,
         unitIds: snapshotUnits.map((unit) => unit.unitId),
     };
-    const raw = await deps.runTask({ projectId: options.projectId, mode: "text", prompt, config, signal: options.signal, clientOperationId: operationId, metadata });
+    const raw = await deps.runTask({ projectId: options.projectId, mode: "text", prompt, config, signal: options.signal, clientOperationId: operationId, onTaskUpdate: options.onTaskUpdate, metadata });
     if (!stillCurrent()) throw new DOMException("Aborted", "AbortError");
     const text = (raw.text || "").trim();
     if (!text) throw new Error("模型没有返回可用的建议结果文本");
@@ -303,6 +322,3 @@ export function defaultSelectedStoryUnits(units: Array<{ id: string; kind: strin
         .sort((a, b) => a.position - b.position)
         .map((unit) => unit.id);
 }
-
-// 让 TS 保持 defaultConfig 引用（页面未传 config 时的文档化兜底；正常运行必须显式传 config）。
-export const fallbackConfig = defaultConfig;

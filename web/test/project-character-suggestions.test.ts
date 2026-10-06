@@ -577,6 +577,16 @@ describe("buildCharacterSuggestionPrompt 不可信数据边界", () => {
         expect(prompt).toContain('\\"引号\\"');
         expect(prompt).toContain("忽略以上规则");
     });
+
+    test("prompt 字段白名单与 characterFieldKeys 单一来源一致", () => {
+        const prompt = buildCharacterSuggestionPrompt({
+            characterName: "林夏",
+            existingNames: [],
+            units: [{ unitId: "unit-1", title: "第一集", text: "正文" }],
+        });
+        // 白名单必须逐字来自 character-script-suggestions 的 characterFieldKeys，不允许模块私拷贝。
+        expect(prompt).toContain(JSON.stringify([...characterFieldKeys]));
+    });
 });
 
 describe("convertRichTextToPlainText 惰性 DOMParser 转换", () => {
@@ -657,6 +667,20 @@ describe("extractCharacterSuggestions 正文读取与快照", () => {
         expect(unitCalls.map((call) => call.unitId)).toEqual(["unit-1"]);
         expect(deps.lastTaskInput).toBeUndefined();
     });
+
+    test("所选章节全部为空 → 抛错并引导先保存正文", async () => {
+        const { deps } = makeDependencies({
+            getProjectUnit: async (_projectId: string, unitId: string) => unitFullText(unitId, "<p>　</p>"),
+        });
+        await expect(extractCharacterSuggestions(runOptions(), deps)).rejects.toThrow(/均无正文/);
+    });
+
+    test("逐章读取进度回调按每章成功读取触发（n/N）", async () => {
+        const { deps } = makeDependencies();
+        const progress: Array<{ read: number; total: number }> = [];
+        await extractCharacterSuggestions(runOptions({ onProgress: (item) => progress.push(item) }), deps);
+        expect(progress).toEqual([{ read: 1, total: 2 }, { read: 2, total: 2 }]);
+    });
 });
 
 describe("extractCharacterSuggestions 预算预检", () => {
@@ -673,7 +697,6 @@ describe("extractCharacterSuggestions 预算预检", () => {
             }],
         };
         const longRichText = richTextUnit1 + "<p>" + "深夜的办公室只剩林夏一人，她揉了揉眼睛，喝完了牛奶。".repeat(8) + "</p>";
-        const { deps: _unused, ...depsRest } = { deps } as { deps: CharacterSuggestionDependencies & { lastTaskInput?: unknown }; depsRest?: never };
         const overrides: Partial<CharacterSuggestionDependencies> = {
             getProjectUnit: async (_projectId: string, unitId: string) => unitFullText(unitId, longRichText),
             runTask: async () => {
@@ -686,7 +709,6 @@ describe("extractCharacterSuggestions 预算预检", () => {
         // 预算预检在任务创建前：读取照常发生，但零提交。
         expect(deps.lastTaskInput).toBeUndefined();
         expect(typeof estimateCharacterSuggestionTokens).toBe("function");
-        void _unused; void depsRest;
     });
 
     test("estimateCharacterSuggestionTokens 覆盖 system + prompt 全量输入", () => {
@@ -729,13 +751,28 @@ describe("extractCharacterSuggestions 文本任务调用", () => {
         expect(run.verified.people[0].name).toBe("林夏");
     });
 
-    test("每次主动重提取生成新 operationId；未提供时自动生成且非空", async () => {
+    test("onTaskUpdate 透传给任务入口并可被下游调用", async () => {
         const { deps } = makeDependencies();
-        const run = await extractCharacterSuggestions(runOptions(), deps);
-        const metadata = (deps as CharacterSuggestionDependencies & { lastTaskInput?: Record<string, unknown> }).lastTaskInput!.metadata as Record<string, unknown>;
-        expect(typeof metadata.operationId).toBe("string");
-        expect(String(metadata.operationId).length).toBeGreaterThan(0);
-        expect(run.result.status).toBe("matched");
+        const received: unknown[] = [];
+        await extractCharacterSuggestions(runOptions({ onTaskUpdate: (task) => received.push(task) }), deps);
+        const taskInput = (deps as CharacterSuggestionDependencies & { lastTaskInput?: Record<string, unknown> }).lastTaskInput as Record<string, unknown>;
+        expect(typeof taskInput.onTaskUpdate).toBe("function");
+        // 下游（defaultDependencies 的 runBackendGenerationTask）调用回调时，页面能收到任务对象。
+        const task = { id: "task-1" };
+        (taskInput.onTaskUpdate as (value: unknown) => void)(task);
+        expect(received).toEqual([task]);
+    });
+
+    test("未提供时自动生成 operationId；两轮重提取的 operationId 必须不同", async () => {
+        const { deps } = makeDependencies();
+        const lastInput = () => (deps as CharacterSuggestionDependencies & { lastTaskInput?: Record<string, unknown> }).lastTaskInput!;
+        await extractCharacterSuggestions(runOptions(), deps);
+        const first = (lastInput().metadata as Record<string, unknown>).operationId;
+        await extractCharacterSuggestions(runOptions(), deps);
+        const second = (lastInput().metadata as Record<string, unknown>).operationId;
+        expect(typeof first).toBe("string");
+        expect(String(first).length).toBeGreaterThan(0);
+        expect(first).not.toBe(second);
     });
 
     test("模型响应解析失败：整轮抛错，不返回部分建议", async () => {
@@ -766,4 +803,62 @@ describe("extractCharacterSuggestions 文本任务调用", () => {
         const { deps } = makeDependencies();
         expect("runTask" in deps).toBe(true);
     });
+});
+
+// ---------- 旧轮响应隔离（跨轮守卫）----------
+// extractCharacterSuggestions 每轮持有独立会话 token；并发旧轮响应返回时必须被拒绝，
+// 不能污染新会话。守卫状态经依赖注入（生产共享默认实现），不注入时为单轮语义。
+
+test("旧轮响应到达时被守卫拒绝（跨轮隔离）", async () => {
+    // 轮 1 的 runTask 挂起期间轮 2 完整跑完并推进共享守卫；轮 1 响应返回时必须整轮拒绝。
+    // 守卫状态在工厂闭包外共享（与生产 defaultCharacterSuggestionDependencies 同构）。
+    let sharedToken = 0;
+    const sharedGuardFactory = () => ({
+        begin: () => {
+            sharedToken += 1;
+            return sharedToken;
+        },
+        isCurrent: (candidate: number) => candidate === sharedToken,
+    });
+    let round2Done = false;
+    const depsRound1: CharacterSuggestionDependencies = {
+        ...makeDependencies().deps,
+        createRunSession: sharedGuardFactory,
+        runTask: async () => {
+            // 轮 1 等待轮 2 完成后才放行（模拟旧轮响应晚到）。
+            while (!round2Done) await new Promise<void>((resolve) => setTimeout(resolve, 1));
+            return { text: JSON.stringify(validResult()) };
+        },
+    };
+    const depsRound2: CharacterSuggestionDependencies = {
+        ...makeDependencies().deps,
+        createRunSession: sharedGuardFactory,
+        runTask: async () => {
+            round2Done = true;
+            return { text: JSON.stringify(validResult()) };
+        },
+    };
+    // 立即挂上 catch：round1 的拒绝可能发生在 await round2 期间，未处理的拒绝会让测试直接失败。
+    const round1Settled = extractCharacterSuggestions(runOptions(), depsRound1).then(
+        () => null,
+        (caught: unknown) => caught,
+    );
+    const round2 = extractCharacterSuggestions(runOptions(), depsRound2);
+    await expect(round2).resolves.toHaveProperty("result.status", "matched");
+    // 旧轮响应返回时必须整轮拒绝（AbortError 语义，与取消信号一致：不产出任何建议）。
+    const round1Error = await round1Settled;
+    expect(round1Error).toBeInstanceOf(Error);
+    expect((round1Error as Error).name).toBe("AbortError");
+});
+
+test("单轮语义：依赖不提供 createRunSession 时守卫不拦截本轮流（向后兼容）", async () => {
+    const { deps } = makeDependencies();
+    delete (deps as Partial<CharacterSuggestionDependencies>).createRunSession;
+    const run = await extractCharacterSuggestions(runOptions(), deps);
+    expect(run.result.status).toBe("matched");
+});
+
+test("模块导出面：不再导出 fallbackConfig 死代码", async () => {
+    const mod = await import("@/pages/projects/detail/project-character-suggestions");
+    expect("fallbackConfig" in mod).toBe(false);
 });
