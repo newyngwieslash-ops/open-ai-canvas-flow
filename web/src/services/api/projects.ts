@@ -343,8 +343,8 @@ export function getProjectCore(id: string) {
     return http.get<ProjectCore>(`/projects/${encodeURIComponent(id)}/core`);
 }
 
-export function listProjectUnits(projectId: string) {
-    return http.get<{ units: ProjectUnit[]; canvasCounts: Record<string, number> }>(`/projects/${encodeURIComponent(projectId)}/units`);
+export function listProjectUnits(projectId: string, config?: { signal?: AbortSignal }) {
+    return http.get<{ units: ProjectUnit[]; canvasCounts: Record<string, number> }>(`/projects/${encodeURIComponent(projectId)}/units`, config);
 }
 
 export function getProjectOverview(projectId: string) {
@@ -359,7 +359,7 @@ export function listProjectCanvases(projectId: string, page = 1, pageSize = 40) 
     return http.get<ProjectCanvasPage>(`/projects/${encodeURIComponent(projectId)}/canvases`, { params: { page, pageSize } });
 }
 
-export function listProjectAssetsPage(projectId: string, options: { page?: number; pageSize?: number; category?: string; mediaType?: string; status?: string; folderId?: string; query?: string } = {}) {
+export function listProjectAssetsPage(projectId: string, options: { page?: number; pageSize?: number; category?: string; mediaType?: string; status?: string; folderId?: string; query?: string; signal?: AbortSignal } = {}) {
     return http.get<ProjectAssetPage>(`/projects/${encodeURIComponent(projectId)}/assets`, { params: {
         page: options.page || 1,
         pageSize: options.pageSize || 40,
@@ -368,7 +368,7 @@ export function listProjectAssetsPage(projectId: string, options: { page?: numbe
         status: options.status || undefined,
         folderId: options.folderId,
         q: options.query || undefined,
-    } }).then((page) => ({ ...page, assets: page.assets.map(normalizeProjectAsset) }));
+    }, signal: options.signal }).then((page) => ({ ...page, assets: page.assets.map(normalizeProjectAsset) }));
 }
 
 export function listProjectAssets(projectId: string) {
@@ -447,8 +447,8 @@ export function createProjectUnit(projectId: string, input: { kind: string; titl
     return http.post<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units`, input);
 }
 
-export function getProjectUnit(projectId: string, unitId: string) {
-    return http.get<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}`);
+export function getProjectUnit(projectId: string, unitId: string, config?: { signal?: AbortSignal }) {
+    return http.get<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}`, config);
 }
 
 export function importProjectUnits(projectId: string, units: Array<{ kind: string; title: string; sourceText?: string }>) {
@@ -566,8 +566,8 @@ export function createProjectCharacter(projectId: string, input: { name: string;
     return http.post<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters`, input);
 }
 
-export function getProjectCharacter(projectId: string, assetId: string) {
-    return http.get<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}`);
+export function getProjectCharacter(projectId: string, assetId: string, config?: { signal?: AbortSignal }) {
+    return http.get<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}`, config);
 }
 
 export function updateProjectCharacter(projectId: string, assetId: string, input: { name: string; definition: Record<string, unknown> }) {
