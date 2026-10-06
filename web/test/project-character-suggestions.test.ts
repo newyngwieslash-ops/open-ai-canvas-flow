@@ -880,11 +880,14 @@ import {
     createRunningChannel,
     createSuggestionSessionGuard,
     createStopController,
+    decidePreSaveCheck,
     decideSaveGate,
+    duplicatesChanged,
     emptySuggestionSessionUi,
     fieldReview,
     invalidateSuggestionSession,
     isReviewResolved,
+    isSourceStale,
     markDirtyFieldsFromValues,
     needsExplicitConfirm,
     observeProgrammaticWrites,
@@ -1535,5 +1538,292 @@ describe("appendUnitIds 章节多选辅助", () => {
 
     test("移除后保留原有顺序", () => {
         expect(appendUnitIds(["unit-3", "unit-1", "unit-2"], "unit-1")).toEqual(["unit-3", "unit-2"]);
+    });
+});
+
+// ============================================================
+// Task 4：重名、别名和补充已有角色（OpenSpec tasks 4.1–4.3）
+// ============================================================
+// 分页遍历与查重编排是页面私有编排模块的可注入纯逻辑；保存前复查门禁
+// 与补充模式移交在会话模块以纯函数实现。全部数据为人工编写的虚构角色。
+
+import {
+    collectProjectCharacters,
+    findProjectCharacterDuplicates,
+    type ProjectCharacterPageFetcher,
+} from "@/pages/projects/detail/project-character-suggestions";
+import { emptySupplementHandoff, supplementHandoffIdentity } from "@/pages/projects/detail/character-suggestion-session";
+
+// 分页夹具：两页角色资产（第二页才出现的别名、另一文件夹的角色）。
+// ProjectAsset 的 character.definition 承载 aliases（与 characterDefinition 写入约定一致）。
+const fakeCharacterAsset = (id: string, title: string, aliases: string[], folderId?: string) => ({
+    id, title, mediaType: "character", category: "character", status: "confirmed", versionCount: 1, usages: [],
+    position: 0, updatedAt: "2026-10-01T00:00:00.000Z", folderId,
+    character: { versionId: `${id}-v1`, version: 1, definition: { aliases }, representations: [], visualStatus: "missing", voiceStatus: "missing" },
+});
+
+const pageOneAssets = [
+    fakeCharacterAsset("asset-1", "林夏", ["夏夏"], "folder-a"),
+    fakeCharacterAsset("asset-2", "吴奶奶", [], ""),
+];
+const pageTwoAssets = [
+    fakeCharacterAsset("asset-3", "陈默", ["默哥"], "folder-b"), // 别名命中且在第二页
+    fakeCharacterAsset("asset-4", "陈艾玛", ["emma.wang"], "folder-b"),
+];
+
+const makePagedFetcher = (pages: Array<{ assets: ReturnType<typeof fakeCharacterAsset>[]; total: number; hasMore?: boolean }>): ProjectCharacterPageFetcher => {
+    let call = 0;
+    return async (_projectId: string, pageOptions: { page?: number; pageSize?: number; category?: string }) => {
+        call += 1;
+        const page = pageOptions?.page || call;
+        const data = pages[page - 1];
+        if (!data) throw new Error(`测试夹具没有第 ${page} 页`);
+        return { assets: data.assets, total: data.total, hasMore: data.hasMore ?? page < pages.length };
+    };
+};
+
+describe("collectProjectCharacters 角色分页遍历", () => {
+    test("遍历全部分页（category=character），第二页的别名角色也在结果内", async () => {
+        const calls: Array<{ projectId: string; options?: Record<string, unknown> }> = [];
+        const fetcher: ProjectCharacterPageFetcher = async (projectId, options) => {
+            calls.push({ projectId, options: options as Record<string, unknown> });
+            return makePagedFetcher([
+                { assets: pageOneAssets, total: 4 },
+                { assets: pageTwoAssets, total: 4 },
+            ])(projectId, options);
+        };
+        const result = await collectProjectCharacters("proj-1", fetcher);
+        // 两页都被拉取（total=4 > 第一页 2 条）。
+        expect(result.characters.map((item) => item.id)).toEqual(["asset-1", "asset-2", "asset-3", "asset-4"]);
+        expect(result.complete).toBe(true);
+        expect(calls.map((call) => call.projectId)).toEqual(["proj-1", "proj-1"]);
+        // 不传 folderId/query：查重不受当前列表过滤影响。
+        expect(calls[0].options).toEqual(expect.objectContaining({ category: "character" }));
+        expect(calls[0].options?.folderId).toBeUndefined();
+        expect(calls[0].options?.query).toBeUndefined();
+    });
+
+    test("按 total 停止：不超量翻页", async () => {
+        const calls: number[] = [];
+        const fetcher: ProjectCharacterPageFetcher = async (_projectId, options) => {
+            calls.push(options?.page || 0);
+            return { assets: pageOneAssets, total: 2, hasMore: true }; // 恶意 hasMore 也必须按 total 停止
+        };
+        const result = await collectProjectCharacters("proj-1", fetcher);
+        expect(result.complete).toBe(true);
+        expect(calls).toEqual([1]);
+    });
+
+    test("空页但 total 未达到：标记不完整，不能当查无此人", async () => {
+        const fetcher: ProjectCharacterPageFetcher = async () => ({ assets: [], total: 3, hasMore: false });
+        const result = await collectProjectCharacters("proj-1", fetcher);
+        expect(result.characters).toEqual([]);
+        expect(result.complete).toBe(false);
+    });
+
+    test("请求失败：报不完整而非空结果（失败不能解释为无重复）", async () => {
+        const fetcher: ProjectCharacterPageFetcher = async () => {
+            throw new Error("网络错误");
+        };
+        const result = await collectProjectCharacters("proj-1", fetcher);
+        expect(result.characters).toEqual([]);
+        expect(result.complete).toBe(false);
+    });
+
+    test("第二页中途失败：已读角色保留，整体标记不完整", async () => {
+        let call = 0;
+        const fetcher: ProjectCharacterPageFetcher = async () => {
+            call += 1;
+            if (call === 1) return { assets: pageOneAssets, total: 4, hasMore: true };
+            throw new Error("第二页读取失败");
+        };
+        const result = await collectProjectCharacters("proj-1", fetcher);
+        expect(result.characters.map((item) => item.id)).toEqual(["asset-1", "asset-2"]);
+        expect(result.complete).toBe(false);
+    });
+
+    test("signal 透传给分页请求", async () => {
+        const controller = new AbortController();
+        const seen: Array<AbortSignal | undefined> = [];
+        const fetcher: ProjectCharacterPageFetcher = async (_projectId, options) => {
+            seen.push(options?.signal);
+            return { assets: pageOneAssets, total: 2, hasMore: false };
+        };
+        await collectProjectCharacters("proj-1", fetcher, { signal: controller.signal });
+        expect(seen[0]).toBe(controller.signal);
+    });
+});
+
+describe("findProjectCharacterDuplicates 重名/别名查重编排", () => {
+    test("命中第二页角色的别名（category 遍历 + findMatchingExistingCharacters 复用）", async () => {
+        const fetcher = makePagedFetcher([
+            { assets: pageOneAssets, total: 4 },
+            { assets: pageTwoAssets, total: 4 },
+        ]);
+        const result = await findProjectCharacterDuplicates({ projectId: "proj-1", name: "默哥" }, fetcher);
+        expect(result.complete).toBe(true);
+        expect(result.matches.map((item) => item.id)).toEqual(["asset-3"]);
+    });
+
+    test("命中大小写/间隔符差异的别名（另一文件夹角色）", async () => {
+        const fetcher = makePagedFetcher([
+            { assets: pageOneAssets, total: 4 },
+            { assets: pageTwoAssets, total: 4 },
+        ]);
+        const result = await findProjectCharacterDuplicates({ projectId: "proj-1", name: "EMMA·WANG" }, fetcher);
+        expect(result.matches.map((item) => item.id)).toEqual(["asset-4"]);
+    });
+
+    test("排除编辑对象自身：编辑 asset-1 时不自报重名", async () => {
+        const fetcher = makePagedFetcher([
+            { assets: pageOneAssets, total: 4 },
+            { assets: pageTwoAssets, total: 4 },
+        ]);
+        const result = await findProjectCharacterDuplicates({ projectId: "proj-1", name: "林夏", excludeCharacterId: "asset-1" }, fetcher);
+        expect(result.complete).toBe(true);
+        expect(result.matches).toEqual([]);
+    });
+
+    test("多命中全部返回，不自动挑选", async () => {
+        const fetcher = makePagedFetcher([
+            { assets: [...pageOneAssets, fakeCharacterAsset("asset-1b", "林夏", [])], total: 2 },
+        ]);
+        const result = await findProjectCharacterDuplicates({ projectId: "proj-1", name: "林夏" }, fetcher);
+        expect(result.matches.map((item) => item.id).sort()).toEqual(["asset-1", "asset-1b"]);
+    });
+
+    test("查询失败：返回不完整且零匹配，不得当查无此人", async () => {
+        const fetcher: ProjectCharacterPageFetcher = async () => {
+            throw new Error("网络错误");
+        };
+        const result = await findProjectCharacterDuplicates({ projectId: "proj-1", name: "林夏" }, fetcher);
+        expect(result.complete).toBe(false);
+        expect(result.matches).toEqual([]);
+    });
+});
+
+// ---------- 补充已有角色：会话模块的移交与门禁纯逻辑 ----------
+
+const verifiedPersonForSupplement = () => {
+    const raw = JSON.parse(JSON.stringify(validResult()));
+    return raw.people[0] as { name: string; aliases: string[]; identitySummary: string };
+};
+
+describe("supplementHandoffIdentity 补充模式会话身份", () => {
+    test("绑定补充目标 assetId 并复用编辑对象身份（editorAssetId=目标角色）", () => {
+        const person = verifiedPersonForSupplement();
+        const identity = supplementHandoffIdentity(
+            { projectId: "proj-1", userId: "user-1", editorAssetId: "asset-3", characterName: "林夏", selectedUnitIds: ["unit-1"], model: "chan::m" },
+            "asset-3",
+            person,
+        );
+        expect(identity.editorAssetId).toBe("asset-3");
+        expect(identity.characterName).toBe(person.name);
+        expect(identity.projectId).toBe("proj-1");
+    });
+
+    test("不同补充目标产生不同身份（换补充对象必然换轮）", () => {
+        const base = { projectId: "proj-1", userId: "user-1", editorAssetId: "asset-3", characterName: "林夏", selectedUnitIds: ["unit-1"], model: "chan::m" };
+        const person = verifiedPersonForSupplement();
+        const toA = supplementHandoffIdentity(base, "asset-3", person);
+        const toB = supplementHandoffIdentity(base, "asset-4", person);
+        expect(toA.editorAssetId).not.toBe(toB.editorAssetId);
+    });
+});
+
+describe("emptySupplementHandoff 会话复位清单", () => {
+    test("清空移交态：候选与提示归零", () => {
+        const empty = emptySupplementHandoff();
+        expect(empty.duplicateMatches).toEqual([]);
+        expect(empty.handoffPerson).toBeNull();
+        expect(empty.notice).toBeNull();
+    });
+});
+
+// ---------- 保存前复查门禁（design §7：重名复查 + 来源版本过期） ----------
+
+describe("decidePreSaveCheck 保存前复查门禁", () => {
+    const checkInput = (overrides: Partial<Parameters<typeof decidePreSaveCheck>[0]> = {}) => ({
+        suggestionActive: true,
+        duplicatesComplete: true as boolean | null,
+        duplicates: [] as Array<{ id: string; title: string; aliases?: string[] }>,
+        previouslySeenIds: [] as string[],
+        staleSources: [] as Array<{ unitId: string; title: string }>,
+        supplementConfirmed: false,
+        ...overrides,
+    });
+
+    test("无新重名且来源未变化：放行", () => {
+        const gate = decidePreSaveCheck(checkInput());
+        expect(gate.allowed).toBe(true);
+    });
+
+    test("出现新的重名（之前未见过的角色）：不放行，提示回到审核", () => {
+        const gate = decidePreSaveCheck(checkInput({ duplicates: [{ id: "asset-9", title: "林夏" }] }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/重名|重复/);
+    });
+
+    test("重名是先前已见过的同一角色：不重复拦截（排除自身后的既有命中）", () => {
+        const gate = decidePreSaveCheck(checkInput({ duplicates: [{ id: "asset-3", title: "陈默", aliases: ["默哥"] }], previouslySeenIds: ["asset-3"] }));
+        expect(gate.allowed).toBe(true);
+    });
+
+    test("补充模式：用户明确确认沿用（supplementConfirmed）后重名不再拦截", () => {
+        const gate = decidePreSaveCheck(checkInput({ duplicates: [{ id: "asset-9", title: "林夏" }], supplementConfirmed: true }));
+        expect(gate.allowed).toBe(true);
+    });
+
+    test("来源章节 updatedAt 变化：不放行，要求重新提取或明确沿用", () => {
+        const gate = decidePreSaveCheck(checkInput({ staleSources: [{ unitId: "unit-1", title: "第一集" }] }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/重新提取|已保存|变化/);
+    });
+
+    test("查重不完整（complete=false）：不放行，不得当查无此人放行", () => {
+        const gate = decidePreSaveCheck(checkInput({ duplicatesComplete: false }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/不完整|重新/);
+    });
+
+    test("查重失败为 null 与 false 同样不放行（网络失败写不出）", () => {
+        const gate = decidePreSaveCheck(checkInput({ duplicatesComplete: null }));
+        expect(gate.allowed).toBe(false);
+    });
+
+    test("未开启建议流程：直接放行（不发起复查的网络语义由调用方保证）", () => {
+        const gate = decidePreSaveCheck(checkInput({ suggestionActive: false, duplicatesComplete: false }));
+        expect(gate.allowed).toBe(true);
+    });
+});
+
+// ---------- 保存前复查判定（sourceStaleness / duplicatesChanged 纯判定） ----------
+
+describe("isSourceStale 快照来源过期判定", () => {
+    test("章节摘要 updatedAt 相对快照发生变化 → 过期", () => {
+        expect(isSourceStale([
+            { unitId: "unit-1", snapshotUpdatedAt: "2026-10-01T08:00:00.000Z", currentUpdatedAt: "2026-10-01T08:00:00.000Z" },
+        ])).toBe(false);
+        expect(isSourceStale([
+            { unitId: "unit-1", snapshotUpdatedAt: "2026-10-01T08:00:00.000Z", currentUpdatedAt: "2026-10-05T08:00:00.000Z" },
+        ])).toBe(true);
+    });
+
+    test("快照中的章节在当前摘要里已不存在（被删除）→ 过期", () => {
+        expect(isSourceStale([
+            { unitId: "unit-1", snapshotUpdatedAt: "2026-10-01T08:00:00.000Z", currentUpdatedAt: null },
+        ])).toBe(true);
+    });
+});
+
+describe("duplicatesChanged 新重名判定", () => {
+    test("先前未见过的命中才是新重名；同一角色不算", () => {
+        expect(duplicatesChanged(["asset-3"], [{ id: "asset-3", title: "陈默" }])).toBe(false);
+        expect(duplicatesChanged(["asset-3"], [{ id: "asset-9", title: "林夏" }])).toBe(true);
+    });
+
+    test("空先前命中时任何命中都是新重名", () => {
+        expect(duplicatesChanged([], [{ id: "asset-9", title: "林夏" }])).toBe(true);
+        expect(duplicatesChanged([], [])).toBe(false);
     });
 });

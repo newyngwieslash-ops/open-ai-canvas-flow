@@ -368,6 +368,18 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         const definition = asset === "new" ? {} : asset.character?.definition || {};
         form.setFieldsValue({ name: asset === "new" ? "" : asset.title, ...Object.fromEntries(characterFields.map(([key]) => [key, fieldValue(definition[key])])) } as CharacterForm);
     };
+    // 补充已有角色（Task 4 / design §7）：读取目标角色最新版本后进入原编辑模式。
+    // 表单回填走 openCharacterEditor（既有值原样保留）；保存经 saveCharacter 自动走
+    // updateProjectCharacter（editorAsset 非 "new"）。不合并候选、不自动覆盖既有值。
+    const supplementCharacter = async (assetId: string) => {
+        try {
+            const latest = await getProjectCharacter(detail.project.id, assetId);
+            setPreviewAsset(null);
+            openCharacterEditor(latest.asset);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "角色读取失败，无法补充该角色");
+        }
+    };
     const openImages = (asset: ProjectAsset) => setImageAsset(asset);
     const openVoice = (asset: ProjectAsset) => { const sampleResourceId = asset.character?.voice?.profile.sampleResourceId || ""; setVoiceAsset(asset); setVoiceSample(sampleResourceId ? { resourceId: sampleResourceId, name: asset.character?.voice?.profile.name || "当前声音", url: resourceFileUrl(sampleResourceId) } : null); setVoiceInstructions(asset.character?.voice?.instructions || ""); };
     const openFolderEditor = (folder?: ProjectAssetFolder, parentId = folderId === ALL_FOLDERS ? "" : folderId) => {
@@ -502,7 +514,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                 }}
             />
             <ProjectAssetPreviewModal asset={previewAsset} personalAsset={previewAsset ? personalAssets.find((item) => item.id === previewAsset.id) : undefined} onClose={() => setPreviewAsset(null)} onDownload={() => previewAsset && downloadPreviewAsset(previewAsset)} onReplaceImage={() => { if (!previewAsset || !assetSupportsImageBinding(previewAsset)) return; setPreviewAsset(null); openImages(previewAsset); }} />
-            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} projectId={detail.project.id} editorAssetId={editorAsset === "new" ? "new" : (editorAsset?.id || "")} form={form} loading={saveCharacter.isPending} messageApi={message} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} />
+            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} projectId={detail.project.id} editorAssetId={editorAsset === "new" ? "new" : (editorAsset?.id || "")} form={form} loading={saveCharacter.isPending} messageApi={message} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} onSupplementCharacter={(assetId) => void supplementCharacter(assetId)} />
             <Modal className="workspace-modal workspace-modal-compact" title={folderEditor?.folder ? "重命名文件夹" : "新建文件夹"} open={Boolean(folderEditor)} okText={folderEditor?.folder ? "保存" : "创建"} cancelText="取消" okButtonProps={{ loading: createFolderMutation.isPending || renameFolderMutation.isPending }} onCancel={() => { setFolderEditor(null); setFolderName(""); }} onOk={saveFolder}>
                 <div className="grid gap-2"><span className="text-[var(--fs-label)] text-foreground/48">位置：{folderEditor ? projectAssetFolderParentLabel(assetFolders, folderEditor.parentId) : ""}</span><Input autoFocus maxLength={60} value={folderName} placeholder="输入文件夹名称" onChange={(event) => setFolderName(event.target.value)} onPressEnter={saveFolder} /></div>
             </Modal>
@@ -698,7 +710,7 @@ function projectAssetFolderDescendantAssetCount(folders: ProjectAssetFolder[], f
     return Array.from(descendantIds).reduce((total, id) => total + (folderCounts[id] || 0), 0);
 }
 
-function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, loading, onClose, onSave, messageApi }: {
+function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, loading, onClose, onSave, onSupplementCharacter, messageApi }: {
     open: boolean;
     editing: boolean;
     projectId: string;
@@ -707,10 +719,13 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
     loading: boolean;
     onClose: () => void;
     onSave: () => void;
+    // 用户选择"补充此角色"：父组件 getProjectCharacter 读最新版本并切换到原编辑模式。
+    onSupplementCharacter: (assetId: string) => void;
     messageApi: { warning: (content: string) => void };
 }) {
-    // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）与关闭时会话失效。
-    const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", invalidateSession: () => undefined });
+    // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）、保存前复查
+    // （重名/来源过期，Task 4）与关闭时会话失效。
+    const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", preSaveCheck: async () => "", invalidateSession: () => undefined });
     // 运行通知通道由编辑器创建并持有：面板经 api 对象拿到同一引用后只写快照。
     // 订阅绑在通道上，面板 api 对象替换（useMemo 依赖翻转）不会孤儿化订阅——
     // 旧实现把回调挂在面板对象上，第一次 api 替换后保存禁用通知即丢失（Fix Round 2）。
@@ -720,7 +735,11 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
         return runningChannelRef.current.subscribe(onStoreChange);
     }, []);
     const runningSnapshot = useSyncExternalStore(runningSubscribe, () => runningChannelRef.current.getRunning());
+    // 弹窗打开状态 ref：保存前复查是异步流程，await 期间用户可能关闭弹窗；
+    // 关闭后不再执行保存（不在弹窗已关闭后自动弹出并写入，design §7）。
+    const openRef = useRef(open);
     useEffect(() => {
+        openRef.current = open;
         if (open) return;
         // 弹窗关闭：失效当前建议会话（守卫 + abort），旧响应不再应用（design §5）。
         panelApiRef.current.invalidateSession();
@@ -731,7 +750,16 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
             messageApi.warning(blocked);
             return;
         }
-        onSave();
+        void (async () => {
+            // 保存前复查：重新查重 + 来源新鲜度。拦截文案非空 → 回审核，不写入。
+            const preSaveBlock = await panelApiRef.current.preSaveCheck();
+            if (!openRef.current) return; // await 期间弹窗已关闭：不自动弹出、不写入
+            if (preSaveBlock) {
+                messageApi.warning(preSaveBlock);
+                return;
+            }
+            onSave();
+        })();
     };
     const savingDisabled = runningSnapshot;
     const field = (key: CharacterFormKey) => characterFields.find(([name]) => name === key)!;
@@ -756,7 +784,7 @@ function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, l
             <div className="flex min-h-0 flex-col" style={{ height: "min(860px, calc(100dvh - 120px))" }}>
                 <div className="shrink-0 px-6 pt-5 pb-1"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6" style={{ scrollbarGutter: "stable" }}>
-                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} runningChannel={runningChannelRef.current} onApiReady={(api) => { panelApiRef.current = api; }} />
+                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} runningChannel={runningChannelRef.current} onSupplementCharacter={onSupplementCharacter} onApiReady={(api) => { panelApiRef.current = api; }} />
                     <Form form={form} layout="vertical" requiredMark={false} className="pt-2">
                         <Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item>
                         <Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} />

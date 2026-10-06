@@ -10,6 +10,9 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 - 已实现：角色卡编辑弹窗改用 AppModal flush 就地内嵌「从剧本提取」建议区（不再开一层全屏模态）；模型/章节范围选择、建议逐字段审核（剧本依据/AI 推断/制作建议/正文未明确、冲突选择、身份歧义先选人，选定人物后进入该人物的字段审核）、n/N 读取进度与「模型分析中」任务状态、逐字段 dirty 标记（自动填充/采纳的写入不误标为用户编辑，编辑标记跨重提取保留）、提取运行中禁用保存、会话守卫失效（关闭/重开/改名/改范围/换项目/换用户/换编辑对象/重新提取，旧建议区与门禁一并完整清理）、停止序列（失效守卫 → abort → 已知 taskId 取消 → 迟到 taskId 补取消且与停止时共享防重记录，取消失败只提示不重提取）、保存门禁（有未处理建议字段时不放行保存）。自动填充字段显示「已自动填充」标注。自动验证：`web/test/project-character-suggestions.test.ts` 113 项通过；`bun run build`、`bun run lint` 通过。
 - 修复轮（评审 Fix Round 1）：12 字段逐字段 useWatch 订阅（原数组 NamePath 用法使 dirty 追踪整体失效）、歧义人物选定后的可审核闭环与门禁解除、提取中禁用保存按钮、迟到取消单轨防重、已测纯函数（decideSaveGate/applyAdoptionToDraft/isReviewResolved/computeSafeAutoFillFields 等）接线到组件、extracting 阶段真实进入、身份漂移完整清理（verified/reviewPerson/stopNotice/excludedUnits）。组件接线本身由 tsc/build/lint 与代码审读证明（Bun 无 DOM/React harness，不伪造组件渲染测试）。
 - 修复轮（评审 Fix Round 2）：运行禁用保存的通知改走编辑器创建并持有的稳定通道（`createRunningChannel`，api 对象替换不再孤儿化订阅，禁用可靠生效与解除）；歧义选人开新轮继承歧义轮的 dirty 标记（`beginRunInheritingDirty`，重提取不重写用户清空字段）；程序化写入集改在 effect 主体消耗（StrictMode 双调用不再错标 dirty）。自动验证：`web/test/project-character-suggestions.test.ts` 120 项通过；`bun run build`、`bun run lint` 通过。
+- 已实现（重名、别名和补充已有角色）：项目内重名/别名查重（UI 辅助）：输入姓名（防抖）与模型结果返回后遍历 `listProjectAssetsPage` category=character 全部分页（pageSize=80 对齐后端上限、按 total/hasMore 停止、不传 folderId/query、signal 全程透传），复用 `normalizeCharacterName` 比较 title/definition.aliases 并排除编辑对象自身；请求失败或空页未达 total 报「查重不完整」，不当「查无此人」。候选全部展示并可「查看」（只读摘要）、「补充此角色」或明确「仍要新建」；assetId 由用户选择，模型/代码不自动决定。补充模式：`getProjectCharacter` 读最新版本 → `openCharacterEditor` 切换原编辑模式（既有值原样保留）→ 当前审核建议经 `supplementHandoffIdentity` 移交到补充会话继续常规采纳流程（不自动合并、不自动覆盖既有值）→ 保存走 `updateProjectCharacter`（复用既有 editorAsset 判定，未改 saveCharacter）。保存前复查（`decidePreSaveCheck`/`isSourceStale`/`duplicatesChanged` 纯函数）：重新查重 + 对比快照章节 updatedAt；新的重名、查重不完整或来源版本变化 → 拦截并回审核，弹窗关闭（open ref 防护）后复查结果不触发任何写入，网络失败一律拦截。已知悉的命中（明确「仍要新建」或补充目标本身）不重复拦截。
+- 边界说明：此查重为前端 UI 提示，遍历与复查之间、以及多会话并发创建之间存在竞态，**不保证跨会话原子唯一性**；后端未新增姓名唯一约束。补充模式与提取运行共享会话守卫（换名/关窗/换项目失效）。
+- 自动验证：`web/test/project-character-suggestions.test.ts` 146 项通过（新增分页遍历 6 项、查重编排 5 项、补充移交身份 2 项、保存前复查门禁 8 项、来源过期/新重名判定 4 项）；`bun run build`、`bun run lint` 通过。组件接线（候选列表渲染、查看/补充/仍要新建交互、补充移交时序）由 tsc/build/lint 与代码审读证明（Bun 无 DOM/React harness，不伪造组件渲染测试）。
 
 仍待真实环境验收（Bun 测试环境无 DOM/React harness，以下只能真实浏览器确认）：
 
@@ -17,6 +20,7 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 - [ ] 浏览器验收：真实模型提取返回后逐字段建议、来源原文展开、冲突选择、身份歧义列表（选定人物后字段行出现且可采纳/替换/暂不采用）、not_found 反馈渲染正确；matched 安全事实自动填充空字段并显示「已自动填充」。
 - [ ] 浏览器验收：提取运行中显示 n/N 读取进度与「模型分析中：任务状态」，重复提取与保存按钮被禁用；字段编辑（含清空）被记录 dirty，结果不覆盖已编辑字段；重提取不回写已清空字段的 AI 值。
 - [ ] 浏览器验收：停止提取后本地结果丢弃、后端任务取消成功/失败如实显示；停止后迟到的任务 ID 只触发一次取消请求；关闭弹窗后迟到响应不污染表单；重新打开可再次提取。
+- [ ] 浏览器验收（重名查重）：输入已存在角色的姓名或别名（含第 2 页/其他文件夹的角色）后出现候选提示；「查看」展示只读摘要；「补充此角色」切换到该角色的编辑模式且既有值保留；「仍要新建」后不再重复提示；保存前再次触发新重名或来源章节被他人修改时保存被拦截并提示回审核。
 - [ ] 浏览器验收：深浅主题、键盘导航（展开/选择/采用/停止/保存焦点可达）、窄屏内容区滚动且底部保存可达。
 - [ ] 真实模型合同验收：解析拒绝（伪造引用/非法 JSON/超预算）在界面上的错误文案与重试路径；本任务未运行真实模型提取，未将任何 mock 结果写为模型准确性证据。
 

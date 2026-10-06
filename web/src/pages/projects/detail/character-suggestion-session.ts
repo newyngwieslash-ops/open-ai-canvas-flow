@@ -272,6 +272,77 @@ export function decideSaveGate(input: { suggestionActive: boolean; reviewResolve
     return { allowed: true };
 }
 
+// ---------- 保存前复查（Task 4 / design §7：重名复查 + 来源版本过期） ----------
+
+// 快照章节与当前章节摘要的 updatedAt 对比输入：currentUpdatedAt 为 null 表示章节已不存在。
+export type SourceFreshnessCheck = {
+    unitId: string;
+    snapshotUpdatedAt: string;
+    currentUpdatedAt: string | null;
+};
+
+// 来源是否过期：任一快照章节被删除或 updatedAt 变化即过期。
+export function isSourceStale(checks: SourceFreshnessCheck[]): boolean {
+    return checks.some((check) => !check.currentUpdatedAt || check.currentUpdatedAt !== check.snapshotUpdatedAt);
+}
+
+// 新重名判定：本次复查命中的角色中存在先前提示里未见过的 ID 才算"新重名"。
+// 用户已知悉过的命中（明确选择仍要新建后）不再重复拦截。
+export function duplicatesChanged(previousSeenIds: string[], currentMatches: Array<{ id: string }>): boolean {
+    const known = new Set(previousSeenIds);
+    return currentMatches.some((item) => !known.has(item.id));
+}
+
+// 保存前复查门禁（design §7）：
+// - 查重不完整（complete=false/null，请求失败）→ 不放行，不得当"查无此人"放行；
+// - 出现新的重名 → 不放行，回审核；先前已见过的命中不再重复拦截；
+// - 补充模式且用户明确确认沿用 → 重名不再拦截；
+// - 来源章节 updatedAt 变化 → 不放行，要求重新提取或明确沿用。
+export type PreSaveCheck = { allowed: boolean; reason?: string };
+
+export function decidePreSaveCheck(input: {
+    suggestionActive: boolean;
+    // 本次复查的完整性：true 完整 / false 失败或不完整 / null 复查尚未成功执行
+    duplicatesComplete: boolean | null;
+    duplicates: Array<{ id: string; title: string; aliases?: string[] }>;
+    previouslySeenIds: string[];
+    staleSources: Array<{ unitId: string; title: string }>;
+    supplementConfirmed: boolean;
+}): PreSaveCheck {
+    if (!input.suggestionActive) return { allowed: true };
+    if (input.duplicatesComplete !== true) {
+        return { allowed: false, reason: "保存前查重未完成（项目角色列表读取不完整），请重试保存或退出建议流程后手工保存" };
+    }
+    if (!input.supplementConfirmed && duplicatesChanged(input.previouslySeenIds, input.duplicates)) {
+        return { allowed: false, reason: "保存前复查发现新的重名角色，请回到审核确认身份（查看、补充该角色，或确认另建新身份）" };
+    }
+    if (input.staleSources.length) {
+        return { allowed: false, reason: `剧本来源已变化（${input.staleSources.map((item) => item.title).join("、")}），请重新提取或明确沿用旧结果` };
+    }
+    return { allowed: true };
+}
+
+// ---------- 补充已有角色：移交身份与会话复位清单（Task 4 / design §7） ----------
+
+// 用户从查重候选中选择"补充已有角色"后，面板的移交交接数据：
+// duplicateMatches 是当轮向用户展示过的全部候选（用户已知情）；handoffPerson 是
+// 当前审核中的人物（移交到补充会话继续审核，不自动合并）；notice 是给用户的移交提示。
+export type SupplementHandoff = {
+    duplicateMatches: Array<{ id: string; title: string; aliases?: string[] }>;
+    handoffPerson: VerifiedPerson | null;
+    notice: string | null;
+};
+
+export function emptySupplementHandoff(): SupplementHandoff {
+    return { duplicateMatches: [], handoffPerson: null, notice: null };
+}
+
+// 补充模式的会话身份：绑定补充目标 assetId（editorAssetId=目标角色），姓名用
+// 当前审核人物的正式名。移交后 run 身份与新编辑对象一致，旧轮不会污染新表单。
+export function supplementHandoffIdentity(currentIdentity: SuggestionRunIdentity, targetAssetId: string, person: { name: string }): SuggestionRunIdentity {
+    return { ...currentIdentity, editorAssetId: targetAssetId, characterName: person.name.trim() };
+}
+
 // ---------- 提取阶段与状态文案 ----------
 
 // 提取阶段推进（design §4：idle → loading-sources → extracting → review/error）。

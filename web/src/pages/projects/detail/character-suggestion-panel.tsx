@@ -1,7 +1,7 @@
 // 角色剧本建议面板：页面私有组件，只做渲染编排与会话状态持有。
 // 生命周期纯逻辑（守卫、dirty、采纳决策、停止序列、保存门禁）在 character-suggestion-session.ts，
 // 建议产生（读取/预算/任务/解析核验）在 project-character-suggestions.ts。
-// 依据：docs/openspec/changes/character-script-suggestions/design.md §5（生命周期）§6（界面）。
+// 依据：docs/openspec/changes/character-script-suggestions/design.md §5（生命周期）§6（界面）§7（重名/补充）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Collapse, Form, Spin, Tag, type FormInstance } from "antd";
@@ -10,7 +10,7 @@ import { Sparkles, Square } from "lucide-react";
 import { ModelPicker } from "@/components/model-picker";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { cancelGenerationTask } from "@/services/api/task-center";
-import { listProjectUnits } from "@/services/api/projects";
+import { getProjectCharacter, listProjectAssetsPage, listProjectUnits } from "@/services/api/projects";
 import { useEffectiveConfig, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import {
@@ -20,24 +20,31 @@ import {
     canUseSuggestionResult,
     createSuggestionSessionGuard,
     createStopController,
+    decidePreSaveCheck,
     decideSaveGate,
     emptySuggestionSessionUi,
+    emptySupplementHandoff,
     fieldReview,
     isReviewResolved,
+    isSourceStale,
     markDirtyFieldsFromValues,
     observeProgrammaticWrites,
     phaseAfterTaskUpdate,
     recordAutoFillEvidence,
     suggestionStatusText,
+    supplementHandoffIdentity,
     type RunningChannel,
+    type SourceFreshnessCheck,
     type SuggestionAdoptionAction,
     type SuggestionRun,
     type SuggestionRunIdentity,
+    type SupplementHandoff,
 } from "./character-suggestion-session";
 import {
     characterFields,
     computeSafeAutoFillFields,
     type CharacterFieldKey,
+    type ExistingCharacterRef,
     type VerifiedPerson,
     type VerifiedSuggestionResult,
 } from "./character-script-suggestions";
@@ -45,6 +52,7 @@ import {
     defaultCharacterSuggestionDependencies,
     defaultSelectedStoryUnits,
     extractCharacterSuggestions,
+    findProjectCharacterDuplicates,
     type CharacterSuggestionRun,
 } from "./project-character-suggestions";
 
@@ -73,11 +81,14 @@ export function asSuggestionForm(form: FormInstance): CharacterSuggestionForm {
     };
 }
 
-// 面板暴露给编辑器的最小 API：保存门禁 + 运行通知通道（运行中禁用保存）
+// 面板暴露给编辑器的最小 API：保存门禁 + 保存前复查（Task 4）+ 运行通知通道（运行中禁用保存）
 // + 弹窗关闭时的会话失效。通道由编辑器创建、经 props 注入并随 api 对象携带：
 // 订阅绑在编辑器持有的通道上，api 对象替换不会孤儿化订阅（Fix Round 2）。
+// preSaveCheck：保存前重新查重 + 来源新鲜度复查，返回空串放行、否则返回拦截文案；
+// 编辑器在 reviewGate 放行后调用，弹窗关闭后绝不写入（含复查网络失败的零写承诺）。
 export type CharacterSuggestionPanelApi = {
     reviewGate: () => string;
+    preSaveCheck: () => Promise<string>;
     invalidateSession: () => void;
     runningChannel?: RunningChannel;
 };
@@ -91,13 +102,16 @@ export type CharacterSuggestionPanelProps = {
     editorAssetId: string;
     // 运行通知通道：编辑器创建并订阅，注入后经 api 对象携带（单一事实来源在编辑器侧）。
     runningChannel: RunningChannel;
+    // 用户从查重候选中选择"补充已有角色"：编辑器加载该角色最新版本并切换到原编辑模式；
+    // 面板随后经 supplementResume 把当前审核移交到新编辑会话（editorAssetId 变化后触发）。
+    onSupplementCharacter: (assetId: string) => void;
     // API 注册：面板挂载后把保存门禁与会话失效句柄交给编辑器。
     onApiReady: (api: CharacterSuggestionPanelApi) => void;
 };
 
 // ---------- 主组件 ----------
 
-export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAssetId, runningChannel, onApiReady }: CharacterSuggestionPanelProps) {
+export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAssetId, runningChannel, onSupplementCharacter, onApiReady }: CharacterSuggestionPanelProps) {
     // 姓名来自编辑器表单（useWatch 订阅）：改名即构成新会话身份（design §5）。
     const watchedName = Form.useWatch("name", watchForm) || "";
     const characterName = typeof watchedName === "string" ? watchedName : "";
@@ -169,6 +183,23 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
     const [reviewPerson, setReviewPerson] = useState<VerifiedPerson | null>(null);
     const [stopNotice, setStopNotice] = useState<string | null>(null);
     const [run, setRun] = useState<SuggestionRun | null>(null);
+    // ---------- 重名查重（Task 4 / design §7）：打开弹窗、改名、模型结果返回后均会重扫 ----------
+    // duplicates.complete=false（请求失败/分页不完整）时不误报"查无"，也不报错误细节——
+    // 只提示查重不完整，保存前复查同样会因不完整而拦截。
+    const [duplicates, setDuplicates] = useState<{ matches: ExistingCharacterRef[]; complete: boolean }>({ matches: [], complete: true });
+    const [duplicateScanning, setDuplicateScanning] = useState(false);
+    // 用户对当前候选明确表态后（仍要新建），后续保存前复查不再重复拦截同一批命中。
+    const acknowledgedDuplicateIdsRef = useRef<string[]>([]);
+    const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+    // 候选只读预览（GET 最新版本渲染摘要）；不改动当前表单与审核状态。
+    const [viewingCandidate, setViewingCandidate] = useState<{ id: string; title: string; detail: Awaited<ReturnType<typeof getProjectCharacter>> | null; loading: boolean } | null>(null);
+    // 补充模式移交态：用户点了"补充此角色"到编辑器切换完编辑对象之间的过渡数据。
+    const [supplementHandoff, setSupplementHandoff] = useState<SupplementHandoff>(emptySupplementHandoff());
+    const pendingSupplementRef = useRef<{ targetAssetId: string } | null>(null);
+    // 提取本轮使用的章节快照（保存前复查的来源新鲜度基准）。
+    const snapshotRef = useRef<CharacterSuggestionRun["snapshot"] | null>(null);
+    // 查重扫描序号：旧扫描响应晚于新扫描时丢弃（与提取会话守卫同一思路）。
+    const duplicateScanSeqRef = useRef(0);
 
     // 会话守卫跨渲染存活；AbortController 每轮新建。
     const guardRef = useRef(createSuggestionSessionGuard());
@@ -221,6 +252,8 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
 
     const running = phase === "loading-sources" || phase === "extracting";
     const nameReady = Boolean(characterName.trim());
+    // 查重输入用防抖姓名：输入名称后不逐键扫描（design §7 查重时机：输入名称后防抖）。
+    const duplicateScanName = useDebouncedName(characterName.trim());
     const modelReady = Boolean(selectedTextModel && isAiConfigReady(effectiveConfig, selectedTextModel));
     const rangeReady = selectedUnitIds.length > 0;
     const blockReason = !nameReady ? "请先输入角色名称" : !modelReady ? "请先选择可用的文本模型" : !rangeReady ? "请至少选择一个章节" : "";
@@ -267,7 +300,49 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         setVerified(null);
         setReviewPerson(null);
         setExcludedUnits([]);
+        // 查重与移交态一并复位（与关闭一致的完整清理，不残留旧候选或半失效门禁）。
+        setDuplicates({ matches: [], complete: true });
+        setDuplicateNotice(null);
+        acknowledgedDuplicateIdsRef.current = [];
+        setViewingCandidate(null);
+        setSupplementHandoff(emptySupplementHandoff());
+        pendingSupplementRef.current = null;
+        snapshotRef.current = null;
     }, [runningChannel]);
+
+    // ---------- 重名查重扫描（Task 4 / design §7） ----------
+    // 触发时机：防抖姓名变化（输入后）、模型结果返回后（对模型正式名/别名）。全部为 UI 辅助：
+    // 查重不完整只提示，不当"查无此人"；候选展示由渲染层读取 duplicates。
+    const runDuplicateScan = useCallback(async (name: string, scanSeq: number) => {
+        if (!name) {
+            setDuplicates({ matches: [], complete: true });
+            setDuplicateScanning(false);
+            setDuplicateNotice(null);
+            return;
+        }
+        setDuplicateScanning(true);
+        try {
+            const result = await findProjectCharacterDuplicates(
+                { projectId, name, excludeCharacterId: editorAssetId === "new" ? undefined : editorAssetId },
+                listProjectAssetsPage,
+            );
+            if (duplicateScanSeqRef.current !== scanSeq) return; // 旧扫描响应丢弃
+            // 姓名变化后旧确认文案失效：候选集合随姓名改变，用户需重新表态。
+            if (duplicateNotice) setDuplicateNotice(null);
+            setDuplicates(result);
+        } catch {
+            if (duplicateScanSeqRef.current !== scanSeq) return;
+            setDuplicates({ matches: [], complete: false });
+        } finally {
+            if (duplicateScanSeqRef.current === scanSeq) setDuplicateScanning(false);
+        }
+    }, [projectId, editorAssetId, duplicateNotice]);
+
+    useEffect(() => {
+        const seq = duplicateScanSeqRef.current + 1;
+        duplicateScanSeqRef.current = seq;
+        void runDuplicateScan(duplicateScanName, seq);
+    }, [duplicateScanName, runDuplicateScan]);
 
     // matched 安全事实自动填充（design §4）：走 Task 1 已测的 computeSafeAutoFillFields
     // （matched + fact 唯一选项 + 字段空 + 未编辑）。填充的字段登记程序化写入（不误标用户编辑）
@@ -330,6 +405,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
             if (controller.signal.aborted) return;
             if (!guard.isCurrent(nextRun.token)) return;
             if (!canUseSuggestionResult(nextRun.identity, currentIdentityRef.current)) return;
+            snapshotRef.current = result.snapshot;
             setVerified(result.verified);
             setExcludedUnits(result.excludedUnits);
             setPhase("review");
@@ -337,6 +413,11 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                 const person = result.verified.people[0];
                 setReviewPerson(person);
                 applySafeAutoFill(person, nextRun);
+                // 模型结果返回后对已校验正式名重扫重名（design §7 查重时机之三）。
+                // 模型可能改写正式姓名（回写由 chooseAmbiguousPerson / 手工确认），重扫不回写表单。
+                const scanSeq = duplicateScanSeqRef.current + 1;
+                duplicateScanSeqRef.current = scanSeq;
+                void runDuplicateScan(person.name.trim(), scanSeq);
             }
         } catch (error) {
             // 停止/身份切换导致的终止不上报为当前轮失败。
@@ -352,7 +433,7 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                 abortRef.current = null;
             }
         }
-    }, [running, nameReady, modelReady, rangeReady, projectId, characterName, selectedUnitIds, selectedTextModel, effectiveConfig, applySafeAutoFill]);
+    }, [running, nameReady, modelReady, rangeReady, projectId, characterName, selectedUnitIds, selectedTextModel, effectiveConfig, applySafeAutoFill, runDuplicateScan]);
 
     // 停止序列（character-suggestion-session.createStopController）：
     // 失效守卫 → abort 读取/监听 → 对已知 taskId 调后端取消接口；取消失败只如实显示。
@@ -426,29 +507,130 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
         if (characterName.trim() !== person.name) form.setFieldsValue({ name: person.name });
     }, [characterName, form]);
 
+    // ---------- 重名候选交互（Task 4 / design §7） ----------
+    // 查看候选：打开只读预览（GET 最新版本渲染摘要）；不改动当前表单与审核状态。
+    // assetId 永远由用户选择：模型/代码不得自动决定补充目标。
+    const viewCandidate = useCallback((candidate: ExistingCharacterRef) => {
+        setViewingCandidate({ id: candidate.id, title: candidate.title, detail: null, loading: true });
+        getProjectCharacter(projectId, candidate.id)
+            .then((detail) => setViewingCandidate((current) => (current && current.id === candidate.id ? { ...current, detail, loading: false } : current)))
+            .catch(() => setViewingCandidate((current) => (current && current.id === candidate.id ? { ...current, loading: false } : current)));
+    }, [projectId]);
+
+    // 补充已有角色：把当前审核移交到目标编辑会话。先记录移交数据并失效当前会话，
+    // 再通知编辑器加载目标角色（openCharacterEditor）——editorAssetId 变化后由
+    // supplementResume effect 开新轮（身份绑定目标 assetId），当前建议经常规采纳流程审核。
+    const supplementCandidate = useCallback((candidate: ExistingCharacterRef) => {
+        pendingSupplementRef.current = { targetAssetId: candidate.id };
+        setSupplementHandoff({
+            duplicateMatches: duplicates.matches,
+            handoffPerson: reviewPerson,
+            notice: `已切换到补充「${candidate.title}」：已有设定保留原值，AI 建议可在下方逐条采纳；保存将更新该角色而不是新建。`,
+        });
+        // 会话失效（守卫 + abort + UI 状态），但保留移交数据。
+        guardRef.current.invalidate();
+        setRun(null);
+        abortRef.current?.abort();
+        abortRef.current = null;
+        knownTaskIdRef.current = null;
+        runningChannel.setRunning(false);
+        setPhase("idle");
+        setProgress(null);
+        setTaskStatusText("");
+        setRunError(null);
+        setStopNotice(null);
+        setVerified(null);
+        setReviewPerson(null);
+        setExcludedUnits([]);
+        setDuplicates({ matches: [], complete: true });
+        setDuplicateNotice(null);
+        acknowledgedDuplicateIdsRef.current = [];
+        setViewingCandidate(null);
+        snapshotRef.current = null;
+        onSupplementCharacter(candidate.id);
+    }, [duplicates.matches, reviewPerson, runningChannel, onSupplementCharacter]);
+
+    // 编辑器完成切换（editorAssetId 已变为补充目标）后恢复会话：开新轮并绑定移交身份，
+    // 恢复移交前正在审核的人物继续走常规采纳流程（不自动合并到既有值）。
+    useEffect(() => {
+        if (!pendingSupplementRef.current) return;
+        const target = pendingSupplementRef.current.targetAssetId;
+        if (editorAssetId !== target) return; // 编辑器尚未切换完成
+        pendingSupplementRef.current = null;
+        const identity = supplementHandoffIdentity(currentIdentityRef.current, target, { name: supplementHandoff.handoffPerson?.name || characterName.trim() });
+        const nextRun = beginRunInheritingDirty({ guard: guardRef.current, identity, previousRun: null });
+        programmaticWritesRef.current = new Set();
+        setRun(nextRun);
+        setPhase("idle");
+        // 移交回来的审核人物恢复展示（verified 设为 matched 单人，字段建议照常采纳）。
+        if (supplementHandoff.handoffPerson) {
+            setVerified({ status: "matched", people: [supplementHandoff.handoffPerson] });
+            setReviewPerson(supplementHandoff.handoffPerson);
+        }
+    }, [editorAssetId, supplementHandoff.handoffPerson, characterName]);
+
+    // 用户明确表示另一个身份继续新建：登记已知悉的命中，保存前复查不再重复拦截同一批。
+    const confirmCreateNew = useCallback(() => {
+        acknowledgedDuplicateIdsRef.current = duplicates.matches.map((item) => item.id);
+        setDuplicateNotice(`已确认与现有角色（${duplicates.matches.map((item) => item.title).join("、")}）不同身份，可继续新建。`);
+    }, [duplicates.matches]);
+
+    // ---------- 保存门禁与保存前复查 ----------
     // 保存门禁注册给编辑器：走 session.ts 已测的 decideSaveGate / isReviewResolved
     // （含提取运行中禁用与身份歧义分支；建议流程未开启时放行原保存）。
     // 审核对象来自 matched 或用户已确认的 ambiguous 人物（design §6）。
     const reviewGate = useCallback((): string => {
-        const suggestionActive = Boolean(run);
+        const suggestionActive = Boolean(run) || Boolean(supplementHandoff.handoffPerson);
         const identityChosen = !verified || verified.status !== "ambiguous" || Boolean(reviewPerson);
         const pending = reviewPerson
             ? characterFields.filter(([key]) => reviewPerson.fields[key as CharacterFieldKey].status !== "unspecified" && !run?.evidence?.[key as CharacterFieldKey]).length
             : 0;
         const gate = decideSaveGate({
-            suggestionActive: suggestionActive || Boolean(reviewPerson),
+            suggestionActive,
             running,
             identityChosen,
             reviewResolved: isReviewResolved(pending, run?.evidence || {}),
         });
         return gate.allowed ? "" : gate.reason || "建议审核未完成，暂不能保存";
-    }, [run, reviewPerson, verified, running]);
+    }, [run, reviewPerson, verified, running, supplementHandoff.handoffPerson]);
+
+    // 保存前复查（design §7）：编辑器在 reviewGate 放行后调用。
+    // 重新读取角色分页 + 当前章节摘要；新的重名或来源版本变化 → 返回拦截文案回到审核，
+    // 不在弹窗已关闭后自动弹出并写入（本函数在弹窗打开期间同步 await，关闭即失效）。
+    // 网络失败 → 查重不完整，一律拦截（写不出）。
+    const preSaveCheck = useCallback(async (): Promise<string> => {
+        if (!run && !supplementHandoff.handoffPerson) return ""; // 建议流程未开启：原方式保存
+        const scan = await findProjectCharacterDuplicates(
+            { projectId, name: characterName.trim(), excludeCharacterId: editorAssetId === "new" ? undefined : editorAssetId },
+            listProjectAssetsPage,
+        ).catch(() => ({ matches: [] as ExistingCharacterRef[], complete: false }));
+        // 来源新鲜度：用快照章节 updatedAt 对比当前摘要（本 effect 前已拉取 unitsQuery）。
+        const summaryById = new Map((unitsQuery.data?.units || []).map((unit) => [unit.id, unit]));
+        const snapshot = snapshotRef.current;
+        const freshness: SourceFreshnessCheck[] = (snapshot?.units || []).map((unit) => ({
+            unitId: unit.unitId,
+            snapshotUpdatedAt: unit.updatedAt,
+            currentUpdatedAt: summaryById.get(unit.unitId)?.updatedAt ?? null,
+        }));
+        const staleSources = freshness.filter((item) => !item.currentUpdatedAt || item.currentUpdatedAt !== item.snapshotUpdatedAt)
+            .map((item) => ({ unitId: item.unitId, title: summaryById.get(item.unitId)?.title || item.unitId }));
+        const gate = decidePreSaveCheck({
+            suggestionActive: true,
+            duplicatesComplete: scan.complete,
+            duplicates: scan.matches,
+            previouslySeenIds: [...acknowledgedDuplicateIdsRef.current, ...(supplementHandoff.handoffPerson ? supplementHandoff.duplicateMatches.map((item) => item.id) : [])],
+            staleSources: isSourceStale(freshness) ? staleSources : [],
+            // 补充模式：目标角色本身就是用户明确选定的已有角色，重名提示不拦截（用户已表态）。
+            supplementConfirmed: Boolean(supplementHandoff.handoffPerson),
+        });
+        return gate.allowed ? "" : gate.reason || "保存前复查未通过，请回到审核确认";
+    }, [run, supplementHandoff, projectId, characterName, editorAssetId, unitsQuery.data]);
     // API 注册：门禁与运行通道随审核状态更新，失效句柄保持稳定引用。
     // 通道由编辑器创建并订阅（props 注入），随 api 对象携带：api 对象替换
     // （useMemo 依赖翻转生成新对象）不会孤儿化订阅（Fix Round 2 · Important 1）。
     const api = useMemo<CharacterSuggestionPanelApi>(
-        () => ({ reviewGate, invalidateSession, runningChannel }),
-        [reviewGate, invalidateSession, runningChannel],
+        () => ({ reviewGate, preSaveCheck, invalidateSession, runningChannel }),
+        [reviewGate, preSaveCheck, invalidateSession, runningChannel],
     );
     useEffect(() => {
         onApiReady(api);
@@ -534,6 +716,59 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                             {verified?.status === "not_found" ? (
                                 <p className="text-[var(--fs-label)] text-foreground/62">本次范围内没有找到「{characterName}」，可以调整姓名、扩大范围或手工填写。</p>
                             ) : null}
+                            {duplicateScanning ? (
+                                <p className="text-[var(--fs-tiny)] text-foreground/45" role="status">正在检查项目内重名与别名…</p>
+                            ) : null}
+                            {!duplicateScanning && !duplicates.complete ? (
+                                <p className="text-[var(--fs-tiny)] text-foreground/55" role="status">项目角色列表读取不完整，本次重名检查可能遗漏，保存前会再次复查。</p>
+                            ) : null}
+                            {duplicates.matches.length ? (
+                                <div className="rounded-md border border-border/70 bg-foreground/[.03] p-2.5" role="status">
+                                    <p className="text-[var(--fs-label)] font-medium text-foreground/80">项目内已有{duplicates.matches.length}个同名/别名角色，请确认身份：</p>
+                                    <ul className="mt-1.5 grid gap-1.5">
+                                        {duplicates.matches.map((candidate) => (
+                                            <li key={candidate.id} className="flex flex-wrap items-center justify-between gap-2">
+                                                <span className="min-w-0">
+                                                    <span className="text-[var(--fs-label)] font-medium">{candidate.title}</span>
+                                                    {candidate.aliases?.length ? <span className="ml-2 text-[var(--fs-tiny)] text-foreground/50">别名：{candidate.aliases.join("、")}</span> : null}
+                                                </span>
+                                                <span className="flex shrink-0 items-center gap-1">
+                                                    <Button type="text" size="small" onClick={() => viewCandidate(candidate)}>查看</Button>
+                                                    <Button type="text" size="small" onClick={() => supplementCandidate(candidate)}>补充此角色</Button>
+                                                </span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    {duplicateNotice ? (
+                                        <p className="mt-1.5 text-[var(--fs-tiny)] text-foreground/55">{duplicateNotice}</p>
+                                    ) : (
+                                        <div className="mt-1.5">
+                                            <Button type="text" size="small" className="justify-self-start" onClick={confirmCreateNew}>是另一个身份，仍要新建</Button>
+                                        </div>
+                                    )}
+                                    {viewingCandidate ? (
+                                        <div className="mt-2 rounded border border-border/60 p-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="text-[var(--fs-label)] font-medium">{viewingCandidate.title}（只读预览）</span>
+                                                <Button type="text" size="small" onClick={() => setViewingCandidate(null)}>收起</Button>
+                                            </div>
+                                            {viewingCandidate.loading ? <Spin size="small" className="mt-2" /> : viewingCandidate.detail ? (
+                                                <ul className="mt-1.5 grid gap-1 text-[var(--fs-tiny)] leading-5 text-foreground/55">
+                                                    {characterFields.map(([key, label]) => {
+                                                        const value = viewingCandidate.detail?.character.definition[key];
+                                                        const text = Array.isArray(value) ? value.join("、") : typeof value === "string" ? value : "";
+                                                        return text ? <li key={key}><span className="text-foreground/40">{label}：</span>{text}</li> : null;
+                                                    })}
+                                                    {!characterFields.some(([key]) => {
+                                                        const value = viewingCandidate.detail?.character.definition[key];
+                                                        return Array.isArray(value) ? value.length : typeof value === "string" && value;
+                                                    }) ? <li>该角色暂无已填写的设定。</li> : null}
+                                                </ul>
+                                            ) : <p className="mt-1.5 text-[var(--fs-tiny)] text-foreground/45">角色详情读取失败，请重试或直接补充。</p>}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
                             {verified?.status === "ambiguous" ? (
                                 <div className="rounded-md border border-border/70 bg-foreground/[.03] p-2.5">
                                     <p className="text-[var(--fs-label)] font-medium text-foreground/80">存在多个同名/近名人物，请先确认要整理谁：</p>
@@ -549,6 +784,9 @@ export function CharacterSuggestionPanel({ projectId, form, watchForm, editorAss
                                         ))}
                                     </ul>
                                 </div>
+                            ) : null}
+                            {supplementHandoff.notice ? (
+                                <p className="rounded-md border border-border/70 bg-foreground/[.03] p-2.5 text-[var(--fs-tiny)] leading-5 text-foreground/62" role="status">{supplementHandoff.notice}</p>
                             ) : null}
                             {reviewPerson && (verified?.status === "matched" || verified?.status === "ambiguous") ? (
                                 <div className="grid gap-2">
@@ -673,4 +911,14 @@ function taskStatusLabel(status: string): string {
     if (status === "failed") return "失败";
     if (status === "cancelled") return "已取消";
     return status;
+}
+
+// 姓名防抖（页面私有）：查重扫描不逐键发起。无 DOM 依赖，纯时序。
+function useDebouncedName(value: string, delay = 400): string {
+    const [debounced, setDebounced] = useState(value);
+    useEffect(() => {
+        const timer = setTimeout(() => setDebounced(value), delay);
+        return () => clearTimeout(timer);
+    }, [value, delay]);
+    return debounced;
 }

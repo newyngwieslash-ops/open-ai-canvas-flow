@@ -10,8 +10,10 @@ import type { GenerationTask } from "@/services/api/task-center";
 import type { AiConfig } from "@/stores/use-config-store";
 import {
     characterFieldKeys,
+    findMatchingExistingCharacters,
     parseCharacterSuggestions,
     verifySuggestionEvidence,
+    type ExistingCharacterRef,
     type SuggestionResult,
     type VerifiedSuggestionResult,
 } from "./character-script-suggestions";
@@ -321,4 +323,76 @@ export function defaultSelectedStoryUnits(units: Array<{ id: string; kind: strin
         .filter((unit) => unit.kind === "chapter" || unit.kind === "episode")
         .sort((a, b) => a.position - b.position)
         .map((unit) => unit.id);
+}
+
+// ---------- 重名查重编排：全量角色分页遍历（Task 4 / design §7） ----------
+
+// 分页 GET 的最小依赖面（生产注入 listProjectAssetsPage；测试注入假 fetcher）。
+// 只透传 page/pageSize/category/signal：不传 folderId/query，查重不受当前列表筛选影响。
+export type ProjectCharacterPageFetcher = (
+    projectId: string,
+    options: { page: number; pageSize: number; category: "character"; signal?: AbortSignal },
+) => Promise<{ assets: Array<{ id: string; title: string; character?: { definition?: Record<string, unknown> } | null }>; total: number; hasMore: boolean }>;
+
+// 遍历用的单页大小：后端 ProjectAssetsPage 的 pageSize 上限是 80（project_workbench_read.go），
+// 请求超过会被钳制，因此按 80 翻页能保证每次都是有效页。
+const DUPLICATE_SCAN_PAGE_SIZE = 80;
+
+// 兜底页数上限：total 明显不可信（空页/异常分页）时不再无限翻页，按不完整收口。
+const DUPLICATE_SCAN_MAX_PAGES = 200;
+
+// 从角色资产的 character.definition 提取 aliases（写入约定见 assets.tsx characterDefinition：string[]）。
+function definitionAliases(asset: { character?: { definition?: Record<string, unknown> } | null }): string[] {
+    const value = asset.character?.definition?.aliases;
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+// 角色分页遍历结果：complete=false 表示"查重不完整"（空页未达 total、请求失败、超页数兜底），
+// 调用方不得把它当"查无此人"。
+export type CollectedProjectCharacters = {
+    characters: Array<{ id: string; title: string; aliases: string[] }>;
+    complete: boolean;
+};
+
+// 遍历项目全部角色分页（category=character）：按 total 与实际页数据停止；
+// 任一页失败或空页未达 total 返回不完整状态而非部分结果当全量；signal 全程透传。
+export async function collectProjectCharacters(projectId: string, fetcher: ProjectCharacterPageFetcher, options: { signal?: AbortSignal } = {}): Promise<CollectedProjectCharacters> {
+    const characters: CollectedProjectCharacters["characters"] = [];
+    let page = 1;
+    while (page <= DUPLICATE_SCAN_MAX_PAGES) {
+        if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        let response: Awaited<ReturnType<ProjectCharacterPageFetcher>>;
+        try {
+            response = await fetcher(projectId, { page, pageSize: DUPLICATE_SCAN_PAGE_SIZE, category: "character", signal: options.signal });
+        } catch (error) {
+            if (options.signal?.aborted) throw error;
+            // 请求失败如实报不完整：失败不能解释为无重复。
+            return { characters, complete: false };
+        }
+        for (const asset of response.assets) {
+            characters.push({ id: asset.id, title: asset.title, aliases: definitionAliases(asset) });
+        }
+        const collected = (page - 1) * DUPLICATE_SCAN_PAGE_SIZE + response.assets.length;
+        // 按 total 与 hasMore 双条件停止：空页但未达 total 视为不完整，不认作查无。
+        if (!response.assets.length) return { characters, complete: collected >= response.total };
+        if (collected >= response.total || !response.hasMore) return { characters, complete: true };
+        page += 1;
+    }
+    return { characters, complete: false };
+}
+
+// 项目重名/别名查重编排：遍历全部分页后复用 findMatchingExistingCharacters
+// （规范化姓名/别名比较），排除编辑对象自身；查询失败 → complete=false 且不匹配，
+// 绝不把失败当"查无此人"。查重只是 UI 提示，不是数据库唯一约束。
+export async function findProjectCharacterDuplicates(
+    input: { projectId: string; name: string; excludeCharacterId?: string },
+    fetcher: ProjectCharacterPageFetcher,
+    options: { signal?: AbortSignal } = {},
+): Promise<{ matches: ExistingCharacterRef[]; complete: boolean }> {
+    const collected = await collectProjectCharacters(input.projectId, fetcher, options);
+    if (!input.name.trim()) return { matches: [], complete: collected.complete };
+    return {
+        matches: findMatchingExistingCharacters(input.name, collected.characters, input.excludeCharacterId),
+        complete: collected.complete,
+    };
 }
