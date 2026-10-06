@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Dropdown, Form, Input, Modal, Popconfirm, Tabs, type FormInstance } from "antd";
 import { Box, Check, ChevronDown, Download, FileText, FolderOpen, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, MoveRight, Music2, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound, Video, VolumeX } from "lucide-react";
@@ -7,6 +7,7 @@ import { WorkspaceState } from "@/components/layout/workspace-state";
 import { PaginationBar } from "@/components/layout/workspace-page";
 import { AssetMediaPreview } from "@/components/asset-media-preview";
 import { CachedResourceImage } from "@/components/cached-resource-image";
+import { AppModal } from "@/components/ui/product/app-modal";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
 import { AssetLibraryPickerModal, type AssetLibraryPickerItem } from "@/components/assets/asset-library-picker-modal";
 import { useExternalAssetSources } from "@/hooks/use-external-asset-sources";
@@ -54,6 +55,7 @@ import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { generateCharacterTurnaround } from "./project-character-media";
 // 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
 import { characterFields } from "./character-script-suggestions";
+import { CharacterSuggestionPanel, asSuggestionForm, type CharacterSuggestionPanelApi } from "./character-suggestion-panel";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
 
 const categories = ["all", ...ASSET_CATEGORIES];
@@ -499,7 +501,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                 }}
             />
             <ProjectAssetPreviewModal asset={previewAsset} personalAsset={previewAsset ? personalAssets.find((item) => item.id === previewAsset.id) : undefined} onClose={() => setPreviewAsset(null)} onDownload={() => previewAsset && downloadPreviewAsset(previewAsset)} onReplaceImage={() => { if (!previewAsset || !assetSupportsImageBinding(previewAsset)) return; setPreviewAsset(null); openImages(previewAsset); }} />
-            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} form={form} loading={saveCharacter.isPending} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} />
+            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} projectId={detail.project.id} editorAssetId={editorAsset === "new" ? "new" : (editorAsset?.id || "")} form={form} loading={saveCharacter.isPending} messageApi={message} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} />
             <Modal className="workspace-modal workspace-modal-compact" title={folderEditor?.folder ? "重命名文件夹" : "新建文件夹"} open={Boolean(folderEditor)} okText={folderEditor?.folder ? "保存" : "创建"} cancelText="取消" okButtonProps={{ loading: createFolderMutation.isPending || renameFolderMutation.isPending }} onCancel={() => { setFolderEditor(null); setFolderName(""); }} onOk={saveFolder}>
                 <div className="grid gap-2"><span className="text-[var(--fs-label)] text-foreground/48">位置：{folderEditor ? projectAssetFolderParentLabel(assetFolders, folderEditor.parentId) : ""}</span><Input autoFocus maxLength={60} value={folderName} placeholder="输入文件夹名称" onChange={(event) => setFolderName(event.target.value)} onPressEnter={saveFolder} /></div>
             </Modal>
@@ -695,14 +697,65 @@ function projectAssetFolderDescendantAssetCount(folders: ProjectAssetFolder[], f
     return Array.from(descendantIds).reduce((total, id) => total + (folderCounts[id] || 0), 0);
 }
 
-function CharacterEditorModal({ open, editing, form, loading, onClose, onSave }: { open: boolean; editing: boolean; form: FormInstance<CharacterForm>; loading: boolean; onClose: () => void; onSave: () => void }) {
+function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, loading, onClose, onSave, messageApi }: {
+    open: boolean;
+    editing: boolean;
+    projectId: string;
+    editorAssetId: string;
+    form: FormInstance<CharacterForm>;
+    loading: boolean;
+    onClose: () => void;
+    onSave: () => void;
+    messageApi: { warning: (content: string) => void };
+}) {
+    // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）与关闭时会话失效。
+    const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", invalidateSession: () => undefined });
+    useEffect(() => {
+        if (open) return;
+        // 弹窗关闭：失效当前建议会话（守卫 + abort），旧响应不再应用（design §5）。
+        panelApiRef.current.invalidateSession();
+    }, [open]);
+    const requestSave = () => {
+        const blocked = panelApiRef.current.reviewGate();
+        if (blocked) {
+            messageApi.warning(blocked);
+            return;
+        }
+        onSave();
+    };
     const field = (key: CharacterFormKey) => characterFields.find(([name]) => name === key)!;
     const textArea = (key: CharacterFormKey, rows = 3) => <Form.Item name={key} label={field(key)[1]}><Input.TextArea rows={rows} placeholder={key === "appearance" ? "先描述用户能看到的稳定特征…" : undefined} /></Form.Item>;
     const input = (key: CharacterFormKey) => <Form.Item name={key} label={field(key)[1]}><Input /></Form.Item>;
-    return <Modal className="workspace-modal workspace-modal-wide library-modal" title={null} open={open} forceRender okText={editing ? "保存角色设定" : "创建角色卡"} cancelText="取消" okButtonProps={{ loading }} onCancel={onClose} onOk={onSave} styles={{ body: { paddingTop: 0 } }}>
-        <div className="mb-1 pb-4"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
-        <Form form={form} layout="vertical" requiredMark={false} className="pt-2"><Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item><Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} /></Form>
-    </Modal>;
+    return (
+        <AppModal
+            flush
+            className="workspace-modal workspace-modal-wide library-modal character-editor-modal"
+            title={null}
+            open={open}
+            forceRender
+            okButtonProps={{ loading }}
+            onCancel={onClose}
+            onOk={requestSave}
+            styles={{ body: { minHeight: 0, flex: 1 }, header: { margin: 0 }, footer: { margin: 0 } }}
+            footer={(
+                <div className="flex items-center justify-end gap-2 px-6 py-4" style={{ borderTop: "1px solid var(--workspace-border)" }}>
+                    <Button onClick={onClose}>取消</Button>
+                    <Button type="primary" loading={loading} onClick={requestSave}>{editing ? "保存角色设定" : "创建角色卡"}</Button>
+                </div>
+            )}
+        >
+            <div className="flex min-h-0 flex-col" style={{ height: "min(860px, calc(100dvh - 120px))" }}>
+                <div className="shrink-0 px-6 pt-5 pb-1"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6" style={{ scrollbarGutter: "stable" }}>
+                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} onApiReady={(api) => { panelApiRef.current = api; }} />
+                    <Form form={form} layout="vertical" requiredMark={false} className="pt-2">
+                        <Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item>
+                        <Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} />
+                    </Form>
+                </div>
+            </div>
+        </AppModal>
+    );
 }
 
 type CharacterFormKey = (typeof characterFields)[number][0];

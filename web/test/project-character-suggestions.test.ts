@@ -862,3 +862,406 @@ test("模块导出面：不再导出 fallbackConfig 死代码", async () => {
     const mod = await import("@/pages/projects/detail/project-character-suggestions");
     expect("fallbackConfig" in mod).toBe(false);
 });
+
+// ============================================================
+// Task 3：审核界面与请求生命周期（纯逻辑层）
+// ============================================================
+// 弹窗组件不依赖 React 渲染即可测试的部分全部抽到 character-suggestion-session.ts：
+// dirty 标记管理、采纳/替换决策、会话守卫失效状态机、停止序列编排、保存门禁。
+// 组件本体只做渲染编排（Bun 无 DOM/React harness，组件交互留给真实浏览器验收）。
+
+import {
+    appendUnitIds,
+    applyAdoptionToDraft,
+    beginSuggestionRun,
+    canUseSuggestionResult,
+    createSuggestionSessionGuard,
+    createStopController,
+    decideSaveGate,
+    fieldReview,
+    invalidateSuggestionSession,
+    isReviewResolved,
+    needsExplicitConfirm,
+    type SuggestionAdoptionAction,
+    type SuggestionRunIdentity,
+    type StopSequenceEvent,
+} from "@/pages/projects/detail/character-suggestion-session";
+
+// ---------- 会话守卫状态机（不用 isMounted 布尔量，跨轮共享 token） ----------
+
+describe("createSuggestionSessionGuard 会话守卫", () => {
+    test("新轮 begin 使旧轮 token 失效", () => {
+        const guard = createSuggestionSessionGuard();
+        const first = guard.begin();
+        expect(guard.isCurrent(first)).toBe(true);
+        const second = guard.begin();
+        expect(guard.isCurrent(second)).toBe(true);
+        expect(guard.isCurrent(first)).toBe(false);
+    });
+
+    test("invalidate 后当前轮也失效；旧 token 不复活", () => {
+        const guard = createSuggestionSessionGuard();
+        const token = guard.begin();
+        guard.invalidate();
+        expect(guard.isCurrent(token)).toBe(false);
+        // 失效后新一轮 begin 仍然有效（关闭重开场景）。
+        const next = guard.begin();
+        expect(guard.isCurrent(next)).toBe(true);
+        expect(guard.isCurrent(token)).toBe(false);
+    });
+});
+
+// ---------- 运行身份：关闭/重开/改名/改范围/换项目/换用户/换编辑对象全部换身份 ----------
+
+const runIdentity = (overrides: Partial<SuggestionRunIdentity> = {}): SuggestionRunIdentity => ({
+    projectId: "proj-1",
+    userId: "user-1",
+    editorAssetId: "new",
+    characterName: "林夏",
+    selectedUnitIds: ["unit-1", "unit-2"],
+    model: "chan::doubao-text",
+    ...overrides,
+});
+
+describe("canUseSuggestionResult 运行身份校验", () => {
+    test("身份逐项一致才允许应用结果", () => {
+        const identity = runIdentity();
+        expect(canUseSuggestionResult(identity, identity)).toBe(true);
+    });
+
+    test("关闭重开（新身份对象）后旧结果不可应用", () => {
+        const staleIdentity = runIdentity();
+        const freshIdentity = runIdentity({ characterName: "吴奶奶" });
+        expect(canUseSuggestionResult(staleIdentity, freshIdentity)).toBe(false);
+    });
+
+    test("改名、改范围、换项目、换用户、换编辑对象各自使结果失效", () => {
+        const base = runIdentity();
+        expect(canUseSuggestionResult(base, runIdentity({ characterName: "夏夏" }))).toBe(false);
+        expect(canUseSuggestionResult(base, runIdentity({ selectedUnitIds: ["unit-1"] }))).toBe(false);
+        expect(canUseSuggestionResult(base, runIdentity({ projectId: "proj-2" }))).toBe(false);
+        expect(canUseSuggestionResult(base, runIdentity({ userId: "user-2" }))).toBe(false);
+        expect(canUseSuggestionResult(base, runIdentity({ editorAssetId: "asset-9" }))).toBe(false);
+    });
+
+    test("换文本模型不失效（模型属于发起前配置，不属于会话目标）", () => {
+        const base = runIdentity();
+        expect(canUseSuggestionResult(base, runIdentity({ model: "chan::other" }))).toBe(true);
+    });
+});
+
+describe("beginSuggestionRun 运行发起", () => {
+    test("发起即发放新 token：旧轮 token 与旧运行身份同时失效", () => {
+        const guard = createSuggestionSessionGuard();
+        const oldToken = guard.begin();
+        const run = beginSuggestionRun(guard, runIdentity());
+        expect(guard.isCurrent(oldToken)).toBe(false);
+        expect(guard.isCurrent(run.token)).toBe(true);
+        expect(run.identity).toEqual(runIdentity());
+    });
+});
+
+describe("invalidateSuggestionSession 关闭/重开/切换失效", () => {
+    test("关闭弹窗：当前 token 失效且运行记录清空", () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const invalidated = invalidateSuggestionSession(guard, run.token);
+        expect(invalidated).toBe(true);
+        expect(guard.isCurrent(run.token)).toBe(false);
+    });
+
+    test("重复失效幂等（第二次不再报变更）", () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        expect(invalidateSuggestionSession(guard, run.token)).toBe(true);
+        expect(invalidateSuggestionSession(guard, run.token)).toBe(false);
+    });
+});
+
+// ---------- dirty 标记管理 ----------
+
+describe("dirty 字段标记", () => {
+    test("beginSuggestionRun 后每个字段初始未 dirty", () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        expect(run.dirtyFields).toEqual({});
+        expect(Object.keys(run.dirtyFields)).toHaveLength(0);
+    });
+});
+
+// ---------- 采纳/替换/冲突决策（design §4、§5） ----------
+
+describe("fieldReview 单字段审核决策", () => {
+    // 构造已核验的 suggested fact 字段。
+    const suggestedFact = (value: string | string[] = "fact 值") => ({
+        status: "suggested" as const,
+        options: [{ value, basis: "fact" as const, evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] }],
+    });
+    const conflictField = () => ({
+        status: "conflict" as const,
+        options: [
+            { value: "短发", basis: "fact" as const, evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] },
+            { value: "长发", basis: "inference" as const, evidence: [{ unitId: "unit-2", quote: "吴奶奶把米色布袋放在桌上", unitTitle: "第二集·对门的灯" }] },
+        ],
+    });
+
+    test("suggested + 字段为空 + fact：自动填充（无需用户操作）", () => {
+        const review = fieldReview({ field: suggestedFact(), formValue: "", dirty: false });
+        expect(review.action).toBe("auto");
+    });
+
+    test("suggested + 字段已有值：需要用户点「替换」，不自动覆盖", () => {
+        const review = fieldReview({ field: suggestedFact(), formValue: "用户手填的值", dirty: false });
+        expect(review.action).toBe("replace");
+    });
+
+    test("inference/production 建议永远需要用户主动「采用」", () => {
+        const inferenceField = { status: "suggested" as const, options: [{ value: "推断值", basis: "inference" as const, evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] }] };
+        const productionField = { status: "suggested" as const, options: [{ value: "制作建议", basis: "production" as const, evidence: [] }] };
+        expect(fieldReview({ field: inferenceField, formValue: "", dirty: false }).action).toBe("adopt");
+        expect(fieldReview({ field: productionField, formValue: "", dirty: false }).action).toBe("adopt");
+    });
+
+    test("conflict 必须由用户选择一项或显式暂不采用，不自动填充", () => {
+        expect(fieldReview({ field: conflictField(), formValue: "", dirty: false }).action).toBe("choose");
+        expect(fieldReview({ field: conflictField(), formValue: "已有值", dirty: false }).action).toBe("choose");
+    });
+
+    test("unspecified 只反馈状态，无操作", () => {
+        const review = fieldReview({ field: { status: "unspecified", options: [] }, formValue: "", dirty: false });
+        expect(review.action).toBe("none");
+    });
+
+    test("字段已被用户编辑过（含清空）：fact 建议也不自动填充，退化为主动替换", () => {
+        expect(fieldReview({ field: suggestedFact(), formValue: "", dirty: true }).action).toBe("replace");
+    });
+});
+
+describe("applyAdoptionToDraft 采纳应用", () => {
+    const verifiedResult = () => verifySuggestionEvidence(parseOk(JSON.stringify(validResult())), evidenceSnapshot);
+    const baseDraft = () => ({ name: "林夏", role: "", aliases: "", appearance: "" } as Record<string, string>);
+
+    test("显式采用：写入建议值并保留原建议作为 AI 依据", () => {
+        const field = verifiedResult().people[0].fields.role;
+        const draft = baseDraft();
+        const applied = applyAdoptionToDraft({
+            draft, fieldKey: "role", field, optionIndex: 0, action: "adopt",
+        });
+        expect(applied.values.role).toBe("加班晚归的都市上班族");
+        // 原建议证据仍标注为 AI 的原建议（后续用户改写不清掉依据）。
+        expect(applied.evidence.role).toBeDefined();
+        expect(applied.evidence.role?.origin).toBe("ai");
+    });
+
+    test("显式暂不采用（dismiss）：不写入值，该字段标记已处理", () => {
+        const field = verifiedResult().people[0].fields.role;
+        const applied = applyAdoptionToDraft({ draft: baseDraft(), fieldKey: "role", field, optionIndex: 0, action: "dismiss" });
+        expect(applied.values.role).toBe("");
+        expect(applied.evidence.role?.dismissed).toBe(true);
+    });
+
+    test("aliases 采纳把字符串数组转换为表单逗号串", () => {
+        const field = verifiedResult().people[0].fields.aliases;
+        const applied = applyAdoptionToDraft({ draft: baseDraft(), fieldKey: "aliases", field, optionIndex: 0, action: "adopt" });
+        expect(applied.values.aliases).toBe("夏夏");
+    });
+
+    test("conflict 选择其中一个选项：写入该选项值", () => {
+        const conflictField = {
+            status: "conflict" as const,
+            options: [
+                { value: "加班晚归的都市上班族", basis: "fact" as const, evidence: [{ unitId: "unit-1", quote: "这么晚还不走？", unitTitle: "第一集·深夜加班" }] },
+                { value: "大学生", basis: "inference" as const, evidence: [{ unitId: "unit-1", quote: "改完这一稿就睡。", unitTitle: "第一集·深夜加班" }] },
+            ],
+        };
+        const applied = applyAdoptionToDraft({ draft: baseDraft(), fieldKey: "role", field: conflictField, optionIndex: 1, action: "choose" });
+        expect(applied.values.role).toBe("大学生");
+        expect(applied.evidence.role?.origin).toBe("ai");
+    });
+
+    test("越界 optionIndex 拒绝应用（合同防御）", () => {
+        const field = verifiedResult().people[0].fields.role;
+        expect(() => applyAdoptionToDraft({ draft: baseDraft(), fieldKey: "role", field, optionIndex: 5, action: "choose" })).toThrow();
+    });
+});
+
+describe("无关字段编辑与改写后的证据归属", () => {
+    test("markFieldDirty 只影响目标字段，不清掉其他字段的已采纳依据", () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const withEvidence = { ...run, evidence: { role: { origin: "ai" as const, dismissed: false } } };
+        const afterEdit = { ...withEvidence, dirtyFields: { ...withEvidence.dirtyFields, appearance: true } };
+        // appearance 编辑后 role 依据原样保留。
+        expect(afterEdit.evidence.role?.origin).toBe("ai");
+        expect(afterEdit.dirtyFields.appearance).toBe(true);
+        expect(afterEdit.dirtyFields.role).toBeUndefined();
+    });
+
+    test("用户改写已采纳值：原证据仍是 AI 原建议的依据，不冒充手写值的证明", () => {
+        const guard = createSuggestionSessionGuard();
+        let run = beginSuggestionRun(guard, runIdentity());
+        const withEvidence = { ...run, evidence: { role: { origin: "ai" as const, dismissed: false } } };
+        // 用户随后改写了 role 字段值。
+        run = { ...withEvidence, dirtyFields: { ...withEvidence.dirtyFields, role: true } };
+        // 证据 origin 仍是 "ai"：显示为“AI 原建议的依据”，且表单值不再被声明为 AI 当前值。
+        expect(run.evidence.role?.origin).toBe("ai");
+        expect(run.dirtyFields.role).toBe(true);
+    });
+});
+
+// ---------- 保存门禁（design §4/§5：未解决的冲突/身份不放行） ----------
+
+describe("decideSaveGate 保存门禁", () => {
+    const gateInput = (overrides: Partial<Parameters<typeof decideSaveGate>[0]> = {}) => ({
+        suggestionActive: false,
+        reviewResolved: true,
+        identityChosen: true,
+        ...overrides,
+    });
+
+    test("未开启建议流程：按原方式放行手工保存", () => {
+        const gate = decideSaveGate(gateInput());
+        expect(gate.allowed).toBe(true);
+        expect(gate.reason).toBeUndefined();
+    });
+
+    test("建议流程已开启但用户尚未完成审核（有未处理建议）：不放行", () => {
+        const gate = decideSaveGate(gateInput({ suggestionActive: true, reviewResolved: false }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/未完成|处理/);
+    });
+
+    test("身份歧义未选择：不放行并提示先选择人物", () => {
+        const gate = decideSaveGate(gateInput({ suggestionActive: true, identityChosen: false }));
+        expect(gate.allowed).toBe(false);
+        expect(gate.reason).toMatch(/人物|身份/);
+    });
+
+    test("审核完成（全部字段已处理）：放行保存", () => {
+        const gate = decideSaveGate(gateInput({ suggestionActive: true }));
+        expect(gate.allowed).toBe(true);
+    });
+});
+
+describe("isReviewResolved / needsExplicitConfirm 审核完成判定", () => {
+    test("全部字段 dismissed 或已采纳 → 已完成；存在未处理字段 → 未完成", () => {
+        const allHandled = { role: { origin: "ai" as const, dismissed: false }, clothing: { origin: "ai" as const, dismissed: true } };
+        expect(isReviewResolved(2, allHandled)).toBe(true);
+        expect(isReviewResolved(3, allHandled)).toBe(false);
+        expect(needsExplicitConfirm({ action: "choose" as const })).toBe(true);
+        expect(needsExplicitConfirm({ action: "auto" as const })).toBe(false);
+    });
+});
+
+// ---------- 停止序列（design §4：失效 → abort → 补取消迟到 taskId） ----------
+
+describe("createStopController 停止序列", () => {
+    const setup = () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const cancelCalls: string[] = [];
+        const stop = createStopController({
+            guard,
+            runToken: run.token,
+            signal: controller.signal,
+            abort: () => controller.abort(),
+            cancelTask: (taskId: string) => {
+                cancelCalls.push(taskId);
+            },
+        });
+        return { guard, run, controller, cancelCalls, stop };
+    };
+
+    test("停止：先失效守卫，再 abort，再取消已知 taskId（顺序可观测）", async () => {
+        const { guard, controller, cancelCalls, stop } = setup();
+        const order: string[] = [];
+        const events: StopSequenceEvent[] = [];
+        await stop({ taskId: "task-1", onEvent: (event) => { events.push(event); order.push(event.kind); } });
+        expect(guard.isCurrent(controller ? 1 : 0)).toBe(false);
+        expect(controller.signal.aborted).toBe(true);
+        expect(cancelCalls).toEqual(["task-1"]);
+        // 事件顺序：先 invalidation，再 abort，最后 cancel。
+        expect(order.indexOf("invalidated")).toBeLessThan(order.indexOf("aborted"));
+        expect(order.indexOf("aborted")).toBeLessThan(order.indexOf("cancel"));
+        expect(events.some((event) => event.kind === "invalidated" && event.staleToken === 1)).toBe(true);
+    });
+
+    test("取消失败：如实报告取消失败，不吞错、不触发重提取", async () => {
+        const { stop } = setup();
+        const cancelTask = async () => { throw new Error("网络错误，取消未送达"); };
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const failingStop = createStopController({ guard, runToken: run.token, signal: controller.signal, abort: () => controller.abort(), cancelTask });
+        const events: StopSequenceEvent[] = [];
+        await failingStop({ taskId: "task-9", onEvent: (event) => events.push(event) });
+        const failed = events.find((event) => event.kind === "cancel-failed");
+        expect(failed?.kind).toBe("cancel-failed");
+        if (failed?.kind === "cancel-failed") expect(failed.message).toContain("取消");
+        expect(stop).toBeDefined();
+    });
+
+    test("未收到 taskId 时停止：失效+abort 照常，不发取消请求（不假定任务未创建）", async () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const cancelCalls: string[] = [];
+        const stop = createStopController({
+            guard, runToken: run.token, signal: controller.signal, abort: () => controller.abort(),
+            cancelTask: (taskId: string) => { cancelCalls.push(taskId); },
+        });
+        const events: StopSequenceEvent[] = [];
+        await stop({ taskId: undefined, onEvent: (event) => events.push(event) });
+        expect(cancelCalls).toEqual([]);
+        expect(controller.signal.aborted).toBe(true);
+        expect(events.some((event) => event.kind === "invalidated")).toBe(true);
+    });
+
+    test("迟到 taskId：停止后 onTaskUpdate 才送来 taskId → 不应用结果并补取消", async () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const cancelCalls: string[] = [];
+        const stop = createStopController({
+            guard, runToken: run.token, signal: controller.signal, abort: () => controller.abort(),
+            cancelTask: (taskId: string) => { cancelCalls.push(taskId); },
+        });
+        // 停止时还没有 taskId。
+        await stop({ taskId: undefined, onEvent: () => undefined });
+        // 停止后 onTaskUpdate 才收到 taskId。
+        const late = stop.reportLateTaskId("task-late-1");
+        expect(late.cancelled).toBe(true);
+        expect(cancelCalls).toEqual(["task-late-1"]);
+        // 守卫已失效：迟到响应整体不可应用（canUseSuggestionResult 覆盖），补取消已发生。
+    });
+
+    test("迟到 taskId 重复上报：只补取消一次", async () => {
+        const guard = createSuggestionSessionGuard();
+        const run = beginSuggestionRun(guard, runIdentity());
+        const controller = new AbortController();
+        const cancelCalls: string[] = [];
+        const stop = createStopController({
+            guard, runToken: run.token, signal: controller.signal, abort: () => controller.abort(),
+            cancelTask: (taskId: string) => { cancelCalls.push(taskId); },
+        });
+        await stop({ taskId: undefined, onEvent: () => undefined });
+        stop.reportLateTaskId("task-late-1");
+        const second = stop.reportLateTaskId("task-late-1");
+        expect(second.cancelled).toBe(false);
+        expect(cancelCalls).toEqual(["task-late-1"]);
+    });
+});
+
+// ---------- 章节范围选择纯逻辑（appendUnitIds） ----------
+
+describe("appendUnitIds 章节多选辅助", () => {
+    test("toggle 选择未选项追加，已选项移除", () => {
+        expect(appendUnitIds(["unit-1"], "unit-2")).toEqual(["unit-1", "unit-2"]);
+        expect(appendUnitIds(["unit-1", "unit-2"], "unit-1")).toEqual(["unit-2"]);
+    });
+
+    test("移除后保留原有顺序", () => {
+        expect(appendUnitIds(["unit-3", "unit-1", "unit-2"], "unit-1")).toEqual(["unit-3", "unit-2"]);
+    });
+});
