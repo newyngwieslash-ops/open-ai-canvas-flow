@@ -39,7 +39,7 @@ export type SuggestionOption<T extends string | string[] = string | string[]> = 
 export type SuggestedFieldStatus = "suggested" | "unspecified" | "conflict";
 
 export type SuggestedField =
-    | { status: "suggested"; options: [SuggestionOption] | [SuggestionOption, SuggestionOption] }
+    | { status: "suggested"; options: [SuggestionOption] }
     | { status: "unspecified"; options: [] }
     | { status: "conflict"; options: [SuggestionOption, SuggestionOption, ...SuggestionOption[]] };
 
@@ -261,7 +261,7 @@ export type VerifiedOption<T extends string | string[] = string | string[]> = {
 };
 
 export type VerifiedSuggestedField =
-    | { status: "suggested"; options: [VerifiedOption] | [VerifiedOption, VerifiedOption] }
+    | { status: "suggested"; options: [VerifiedOption] }
     | { status: "unspecified"; options: [] }
     | { status: "conflict"; options: [VerifiedOption, VerifiedOption, ...VerifiedOption[]] };
 
@@ -301,7 +301,7 @@ function verifyOption(fieldKey: string, option: SuggestionOption, units: Map<str
 // 任一引用无效抛错拒绝整轮，调用方不得部分采纳。
 export function verifySuggestionEvidence(result: SuggestionResult, snapshot: SuggestionSnapshot): VerifiedSuggestionResult {
     const units = new Map(snapshot.units.map((unit) => [unit.unitId, unit]));
-    const people = result.people.map((person, personIndex) => {
+    const people = result.people.map((person) => {
         const label = `人物「${person.name}」`;
         const identityEvidence = person.identityEvidence.map((item, index) => verifyEvidence(item, units, `${label}的身份引用 ${index + 1}`));
         const fields = {} as Record<CharacterFieldKey, VerifiedSuggestedField>;
@@ -316,7 +316,6 @@ export function verifySuggestionEvidence(result: SuggestionResult, snapshot: Sug
                 ? { status: "suggested", options: [options[0]] }
                 : { status: "conflict", options }) as VerifiedSuggestedField;
         }
-        void personIndex;
         return { ...person, identityEvidence, fields };
     });
     return { status: result.status, people };

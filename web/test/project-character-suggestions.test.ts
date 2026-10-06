@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
     findMatchingExistingCharacters,
     computeSafeAutoFillFields,
+    aliasesArrayToFormValue,
+    aliasesFormValueToArray,
     characterFieldKeys,
     characterFields,
     parseCharacterSuggestions,
@@ -446,5 +448,26 @@ describe("computeSafeAutoFillFields 安全填充决策", () => {
     test("dirty 标记未提供的字段按未编辑处理", () => {
         const fill = computeSafeAutoFillFields(baseInputs());
         expect(fill.role).toBeDefined();
+    });
+});
+
+// ---------- aliases 表单转换约定（与 assets.tsx 保存/回填一致） ----------
+
+describe("aliases 表单转换", () => {
+    test("数组转表单值使用中文逗号连接", () => {
+        expect(aliasesArrayToFormValue(["夏夏", "林工"])).toBe("夏夏，林工");
+        expect(aliasesArrayToFormValue([])).toBe("");
+    });
+
+    test("表单值转数组按中英文逗号拆分并去空白", () => {
+        expect(aliasesFormValueToArray("夏夏，林工, 小雨")).toEqual(["夏夏", "林工", "小雨"]);
+        expect(aliasesFormValueToArray("  ")).toEqual([]);
+        expect(aliasesFormValueToArray("，")).toEqual([]);
+    });
+
+    test("与 assets 保存路径一致：拆分→去重前先过滤空项", () => {
+        // 与 characterDefinition 的拆分行为一致：trim + filter(Boolean)
+        const formValue = aliasesArrayToFormValue(["夏夏", "", "小雨"]);
+        expect(aliasesFormValueToArray(formValue)).toEqual(["夏夏", "小雨"]);
     });
 });
