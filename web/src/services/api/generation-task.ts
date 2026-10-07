@@ -317,7 +317,7 @@ function backendGenerationTaskInput(options: BackendGenerationTaskOptions, prepa
     };
 }
 
-function generationMetadata(config: AiConfig, metadata?: Record<string, unknown>) {
+export function generationMetadata(config: AiConfig, metadata?: Record<string, unknown>) {
     const channel = resolveModelChannel(config, config.model);
     const model = modelOptionName(config.model);
     const modelCost = channel.modelCosts?.find((item) => item.model === model);
@@ -331,7 +331,11 @@ function generationMetadata(config: AiConfig, metadata?: Record<string, unknown>
         : {};
     const defaults = modelCost?.defaultOptions && typeof modelCost.defaultOptions === "object" ? modelCost.defaultOptions : {};
     if (!Object.keys(defaults).length && !Object.keys(namespace).length) return metadata;
-    return { ...metadata, providerOptions: { ...existing, [protocol]: { ...defaults, ...namespace } } };
+    const merged = { ...defaults, ...namespace };
+    if (protocol === "fisher-h3-video" && namespace.audio_control && typeof namespace.audio_control === "object" && !Array.isArray(namespace.audio_control)) {
+        merged.audio_control = { ...(defaults.audio_control && typeof defaults.audio_control === "object" && !Array.isArray(defaults.audio_control) ? defaults.audio_control : {}), ...namespace.audio_control };
+    }
+    return { ...metadata, providerOptions: { ...existing, [protocol]: merged } };
 }
 
 async function prepareBackendMediaReference(media: ReferenceVideo | ReferenceAudio) {

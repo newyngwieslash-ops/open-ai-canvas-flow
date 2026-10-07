@@ -394,6 +394,14 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.resolutions = ["1080p"];
         video.defaultResolution = "1080p";
     }
+    if (protocol === "fisher-h3-video") {
+        Object.assign(video.references, { promptMaxChars: 10000, maxImages: 11, maxVideos: 3, maxVideoBytes: 50 * 1024 * 1024, maxVideoDurationSeconds: 15, maxAudios: 4, maxAudioBytes: 15 * 1024 * 1024, maxAudioDurationSeconds: 60 });
+        video.duration = { selection: "range", min: 4, max: 60, step: 1, default: 5 };
+        video.ratios = ["16:9", "9:16", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9", "adaptive", "auto"];
+        video.resolutions = ["480P", "768P", "1080P"];
+        video.defaultResolution = "768P";
+        video.operations.push("reference_to_video", "audio_to_video");
+    }
     if (protocol === "minimax-video") {
         video.references.maxImages = 9;
         video.references.maxImageBytes = 30 * 1024 * 1024;

@@ -1,0 +1,16 @@
+{
+  "change": "fisher-h3-video",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "97420bcd455542cdd73a065b0591c72fabe5661a85a4529b59a1a889fc6fecf8",
+  "files": [
+    { "path": "docs/openspec/changes/fisher-h3-video/proposal.md", "sha256": "c1ba1133aabde2b8da58fa2e79382c575657f413bb673f7564f2754af825e6c6" },
+    { "path": "docs/openspec/changes/fisher-h3-video/design.md", "sha256": "01aec5bc88a911a90c13a331f3d4b9e2747a241f4264ed78d5702f15c4f02d1b" },
+    { "path": "docs/openspec/changes/fisher-h3-video/tasks.md", "sha256": "77314063ebfeaaa85367f89d7c6de92acab7e317c29d07e94ccc84e4029c9b39" },
+    { "path": "docs/openspec/changes/fisher-h3-video/.openspec.yaml", "sha256": "720b3de6231f9647898feba395449b03234e0c4fa3bd4ce47fc3bb341b0f16d6" },
+    { "path": "docs/openspec/changes/fisher-h3-video/specs/fisher-h3-video/spec.md", "sha256": "1fb7d43412cac3a87e3b18e6b43817030ec00ab6f930d2212c048706d327770a" }
+  ]
+}

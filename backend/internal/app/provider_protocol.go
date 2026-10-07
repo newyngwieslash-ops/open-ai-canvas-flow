@@ -46,6 +46,16 @@ func runProtocolAdapterTaskWithPolicy(ctx context.Context, input canvasGeneratio
 	// 不把“已提交但结果未知”伪装成成功，也不把下载失败降级成空结果。
 	request := protocolRequestFromInput(input)
 	taskID := resumedProviderRequestID(ctx)
+	var fisher *fisherSubmission
+	if input.Config.InterfaceType == fisherH3Protocol {
+		if taskID == "" {
+			if err := validateFisherH3Input(input, request); err != nil {
+				return nil, err
+			}
+		}
+		fisher = &fisherSubmission{}
+		ctx = context.WithValue(ctx, fisherSubmissionKey{}, fisher)
+	}
 	var created protocol.CreateResult
 	if taskID == "" {
 		// 幂等键只存在于宿主请求元数据中，声明式插件可以把它映射到 Header，
@@ -60,10 +70,31 @@ func runProtocolAdapterTaskWithPolicy(ctx context.Context, input canvasGeneratio
 			return nil, err
 		}
 		body, streamedResult, err := executeProtocolCreateRequest(withProviderRequestKind(ctx, "create"), input, spec)
-		if err != nil {
+		fisherBodyID := ""
+		if fisher != nil && err == nil {
+			var payload struct {
+				TaskID string `json:"task_id"`
+			}
+			if json.Unmarshal(body, &payload) == nil {
+				fisherBodyID = FisherH3TaskID(payload.TaskID, input.Config.APIKey)
+			}
+		}
+		if fisher != nil && fisher.PersistError != nil {
+			return nil, fisher.PersistError
+		}
+		if err != nil && (fisher == nil || fisher.TaskID == "") {
+			if fisher != nil {
+				var httpErr providerHTTPError
+				if !errors.As(err, &httpErr) || httpErr.StatusCode >= 500 {
+					return nil, routeDispatchUncertainError{fmt.Sprintf("Fisher-H3 创建结果不确定，请核对已有任务与费用：%v", err)}
+				}
+			}
 			return nil, err
 		}
-		if streamedResult != nil {
+		if fisher != nil && (fisherBodyID != "" || fisher.TaskID != "") {
+			created = protocol.CreateResult{TaskID: firstNonEmpty(fisherBodyID, fisher.TaskID), Status: protocol.StatusPending}
+			err = nil
+		} else if streamedResult != nil {
 			created = protocol.CreateResult{Status: protocol.StatusSucceeded, Result: streamedResult}
 		} else {
 			if parser, ok := adapter.(protocol.RequestAwareCreateParser); ok {
@@ -73,10 +104,18 @@ func runProtocolAdapterTaskWithPolicy(ctx context.Context, input canvasGeneratio
 			}
 		}
 		if err != nil {
+			if fisher != nil && !json.Valid(body) {
+				return nil, routeDispatchUncertainError{fmt.Sprintf("Fisher-H3 创建响应无效，结果不确定，请核对已有任务与费用：%v", err)}
+			}
 			return nil, err
 		}
 		taskID = created.TaskID
-		if taskID == "" {
+		if fisher != nil {
+			taskID = firstNonEmpty(fisherBodyID, fisher.TaskID)
+			if err := persistFisherTaskID(ctx, fisher, taskID); err != nil {
+				return nil, err
+			}
+		} else if taskID == "" {
 			extracted, extractErr := extractProviderTaskID(body)
 			if extractErr != nil {
 				return nil, extractErr
@@ -85,6 +124,9 @@ func runProtocolAdapterTaskWithPolicy(ctx context.Context, input canvasGeneratio
 		}
 		if created.Status == protocol.StatusFailed || created.Status == protocol.StatusCancelled {
 			return nil, protocolResultError(created.Message, taskID)
+		}
+		if fisher != nil && taskID == "" {
+			return nil, routeDispatchUncertainError{"Fisher-H3 创建请求未返回 task_id，结果不确定；请核对已有任务与费用"}
 		}
 		if created.Status == protocol.StatusSucceeded {
 			return finishProtocolAdapterResult(ctx, input, adapter, request, taskID, created.Result, policy)
@@ -107,7 +149,7 @@ func runProtocolAdapterTaskWithPolicy(ctx context.Context, input canvasGeneratio
 		if err != nil {
 			return videoPollOutcome{}, err
 		}
-		if state.TaskID != "" {
+		if state.TaskID != "" && fisher == nil {
 			taskID = state.TaskID
 		}
 		switch state.Status {

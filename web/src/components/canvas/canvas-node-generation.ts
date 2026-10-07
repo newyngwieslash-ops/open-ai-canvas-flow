@@ -96,7 +96,10 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
             mentionInputs,
             prompt,
             // 工作流节点由字段映射接收全部连线媒体；视频节点的历史首尾帧字段不能再额外追加参考图。
-            autoIncludeWorkflowMedia || (promptOnly && hasConnectedMedia) ? [] : [sourceNode?.metadata?.videoStartFrameNodeId, sourceNode?.metadata?.videoEndFrameNodeId].filter((id): id is string => Boolean(id)),
+            [
+                ...(autoIncludeWorkflowMedia || (promptOnly && hasConnectedMedia) ? [] : [sourceNode?.metadata?.videoStartFrameNodeId, sourceNode?.metadata?.videoEndFrameNodeId]),
+                typeof sourceNode?.metadata?.providerOptions?.["fisher-h3-video"]?.driveAudioId === "string" ? sourceNode.metadata.providerOptions["fisher-h3-video"].driveAudioId as string : undefined,
+            ].filter((id): id is string => Boolean(id)),
             promptOnly,
             autoIncludeWorkflowMedia || (promptOnly && hasConnectedMedia),
             connectedInputs,
@@ -255,8 +258,8 @@ function buildComposerGenerationContext(
     // 首尾帧是结构化生成参数，不受提示词中的 @ 引用筛选影响。
     const selectedNodeIds = new Set(selectedInputs.map((input) => input.nodeId));
     videoFrameNodeIds.forEach((nodeId) => {
-        const input = nodeInputById.get(nodeId);
-        if (!input?.image || selectedNodeIds.has(nodeId)) return;
+        const input = inputs.find((item) => item.nodeId === nodeId || item.image?.id === nodeId || item.audio?.id === nodeId);
+        if ((!input?.image && !input?.audio) || selectedNodeIds.has(input.nodeId)) return;
         selectedInputs.push(input);
         selectedNodeIds.add(nodeId);
     });

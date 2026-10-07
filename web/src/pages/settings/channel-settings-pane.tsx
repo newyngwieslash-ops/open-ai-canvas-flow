@@ -9,6 +9,7 @@ import { ensureChannelModelCosts, mergeFetchedChannelModelCosts } from "@/lib/ch
 import { fetchChannelModels } from "@/services/api/image";
 import {
     createModelChannel,
+    createFisherH3Channel,
     defaultBaseUrlForApiFormat,
     filterModelsByCapability,
     modelOptionsFromChannels,
@@ -60,8 +61,8 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
         updateChannel(channel.id, { apiFormat, interfaceType: undefined, baseUrl });
     };
 
-    const addChannel = () => {
-        const channel = createModelChannel({ name: `渠道 ${userChannels.length + 1}` });
+    const addChannel = (preset?: "fisher") => {
+        const channel = preset === "fisher" ? createFisherH3Channel() : createModelChannel({ name: `渠道 ${userChannels.length + 1}` });
         updateChannels([...config.channels, channel]);
         setNewChannelId(channel.id);
         setEditingChannelId(channel.id);
@@ -180,7 +181,8 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
                 </div>
                 <div className="flex w-full gap-2 sm:w-auto sm:shrink-0">
                     <Button className="h-10 flex-1 sm:h-8 sm:flex-none" icon={<RefreshCw className="size-4" />} loading={loadingChannelIds.includes("all")} disabled={loadingChannelIds.some((id) => id !== "all")} onClick={() => void refreshAllModels()}>拉取全部</Button>
-                    <Button className="h-10 flex-1 sm:h-8 sm:flex-none" type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>新增渠道</Button>
+                    <Button className="h-10 flex-1 sm:h-8 sm:flex-none" type="primary" icon={<Plus className="size-4" />} onClick={() => addChannel()}>新增渠道</Button>
+                    <Button className="h-10 sm:h-8" onClick={() => addChannel("fisher")}>添加 Fisher-H3</Button>
                 </div>
             </div>
             {onOpenRunningHub ? <section className="settings-section mb-3">
@@ -267,7 +269,7 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
                         );
                     })}
                 </div>
-            ) : <WorkspaceState icon="settings" compact title="当前没有个人模型渠道" description="管理员配置的系统渠道会出现在模型选择中；也可以添加自己的模型服务。" action={<Button icon={<Plus className="size-4" />} onClick={addChannel}>新增个人模型渠道</Button>} />}
+            ) : <WorkspaceState icon="settings" compact title="当前没有个人模型渠道" description="管理员配置的系统渠道会出现在模型选择中；也可以添加自己的模型服务。" action={<Button icon={<Plus className="size-4" />} onClick={() => addChannel()}>新增个人模型渠道</Button>} />}
         </Form>
     );
 }

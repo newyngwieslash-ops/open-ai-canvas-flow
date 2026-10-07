@@ -1,12 +1,36 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestFisherCORSCarriesProtocolAndTaskID(t *testing.T) {
+	t.Setenv("CANVAS_CORS_ORIGINS", "https://app.example.com")
+	gin.SetMode(gin.TestMode)
+	middleware, err := cors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(middleware)
+	router.GET("/api/ai/custom", func(c *gin.Context) { c.Header("X-Task-Id", "task-one"); c.Status(http.StatusOK) })
+	for _, method := range []string{http.MethodOptions, http.MethodGet} {
+		request := httptest.NewRequest(method, "/api/ai/custom", nil)
+		request.Header.Set("Origin", "https://app.example.com")
+		request.Header.Set("Access-Control-Request-Headers", "x-canvas-upstream-protocol")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Allow-Headers")), "x-canvas-upstream-protocol") || !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Expose-Headers")), "x-task-id") {
+			t.Fatalf("browser cannot carry Fisher task contract: method=%s headers=%v", method, response.Header())
+		}
+	}
+}
 
 func TestAllowedOriginWildcard(t *testing.T) {
 	t.Setenv("CANVAS_CORS_ORIGINS", "*")

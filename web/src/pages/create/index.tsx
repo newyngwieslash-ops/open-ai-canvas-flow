@@ -18,7 +18,10 @@ import type { BackendGenerationResult } from "@/services/api/generation-task";
 import type { Skill } from "@/services/api/skills";
 import type { GenerationTask } from "@/services/api/task-center";
 import { loadCreationConversations, pendingCreationTaskIds, removeCreationConversationSnapshot, saveCreationConversations, updateCreationConversationSnapshot } from "@/services/creation-conversation-store";
-import { resolveModelChannel, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { resolveModelChannel, resolveModelRequestConfig, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { fisherH3VideoProfile, validateFisherH3Submission } from "@/lib/fisher-h3-ui-state";
+import { generationMetadata } from "@/services/api/generation-task";
+import type { CanvasNodeMetadata } from "@/types/canvas";
 import { useCreationPreferencesStore } from "@/stores/use-creation-preferences-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
@@ -105,6 +108,7 @@ export default function CreatePage() {
     const [mode, setMode] = useState<CreationMode>(() => initialComposerPreferences.mode || defaultCreationMode);
     const [prompt, setPrompt] = useState("");
     const [attachments, setAttachments] = useState<CreationAttachment[]>([]);
+    const [fisherMetadata, setFisherMetadata] = useState<CanvasNodeMetadata>({});
     const promptRef = useRef(prompt);
     const attachmentsRef = useRef(attachments);
     const [draftReferences, setDraftReferences] = useState<CreationReference[]>([]);
@@ -169,7 +173,9 @@ export default function CreatePage() {
         ? creationVideoConfig(config, selectedModel, { ratio, seconds, videoQuality })
         : config, [config, mode, ratio, seconds, selectedModel, videoQuality]);
     const imageProfile = useMemo(() => modelCapabilityConfigFor(config, selectedModel).image!, [config, selectedModel]);
-    const videoProfile = useMemo(() => modelCapabilityConfigFor(config, selectedModel).video!, [config, selectedModel]);
+    const fisherSelected = mode === "video" && resolveModelRequestConfig(config, selectedModel).interfaceType === "fisher-h3-video";
+    const baseVideoProfile = useMemo(() => modelCapabilityConfigFor(config, selectedModel).video!, [config, selectedModel]);
+    const videoProfile = useMemo(() => fisherSelected ? fisherH3VideoProfile(baseVideoProfile, generationMetadata({ ...config, model: selectedModel }, fisherMetadata)) : baseVideoProfile, [baseVideoProfile, config, fisherMetadata, fisherSelected, selectedModel]);
     // 同名逻辑模型可能把文生视频、图生视频和全模态参考拆到不同路由。
     // 入口需要展示整个模型组的引用能力，添加素材后再由兼容路由选择具体模型。
     const videoReferenceLimits = useMemo(() => mode === "video"
@@ -242,24 +248,25 @@ export default function CreatePage() {
         if (!composerPreferencesHydrated || !composerPreferencesInitialized || mode !== "video") return;
         const saved = useCreationPreferencesStore.getState().preferences.video;
         // 优先恢复用户上次选择；只有当前模型不支持该值时，normalizeVideoValue 才回退到模型默认值。
-        const normalized = normalizeVideoValue(videoProfile, {
-            seconds: saved?.seconds || String(videoProfile.duration.default),
-            ratio: saved?.ratio || videoProfile.defaultRatio,
-            resolution: saved?.videoQuality || videoProfile.defaultResolution,
+        const normalized = normalizeVideoValue(baseVideoProfile, {
+            seconds: saved?.seconds || String(baseVideoProfile.duration.default),
+            ratio: saved?.ratio || baseVideoProfile.defaultRatio,
+            resolution: saved?.videoQuality || baseVideoProfile.defaultResolution,
         });
         setSeconds(normalized.seconds);
         setRatio(normalized.ratio);
         setVideoQuality(normalized.resolution.replace(/p$/i, ""));
-    }, [composerPreferencesHydrated, composerPreferencesInitialized, mode, selectedModel, videoProfile]);
+    }, [composerPreferencesHydrated, composerPreferencesInitialized, mode, selectedModel, baseVideoProfile]);
 
     useEffect(() => {
+        if (fisherSelected) return;
         const reconciled = mode === "video" && videoReferenceLimits
             ? reconcileCreationAttachmentLimits(attachments, mentionReferences, videoReferenceLimits)
             : reconcileCreationAttachmentLimit(attachments, mentionReferences, maxReferences);
         if (reconciled.attachments === attachments) return;
         setAttachments(reconciled.attachments);
         if (reconciled.removedReferences.length) setPrompt((current) => removeCreationReferenceTokens(current, reconciled.removedReferences));
-    }, [attachments, maxReferences, mentionReferences, mode, videoReferenceLimits]);
+    }, [attachments, fisherSelected, maxReferences, mentionReferences, mode, videoReferenceLimits]);
 
     useEffect(() => {
         if (!userSessionHydrated) return;
@@ -487,6 +494,7 @@ export default function CreatePage() {
         if (!next.length) return;
         setAttachments((current) => {
             const candidates = [...current.filter((item) => !next.some((candidate) => candidate.id === item.id)), ...next];
+            if (fisherSelected) return candidates;
             const reconciled = mode === "video" && videoReferenceLimits
                 ? reconcileCreationAttachmentLimits(candidates, [], videoReferenceLimits)
                 : reconcileCreationAttachmentLimit(candidates, [], maxReferences);
@@ -506,6 +514,7 @@ export default function CreatePage() {
         const attachmentIds = new Set(attachments.map((item) => item.id));
         const references = mentionReferences.filter((item) => item.attachmentId && attachmentIds.has(item.attachmentId));
         setAttachments([]);
+        setFisherMetadata({});
         if (references.length) setPrompt((current) => removeCreationReferenceTokens(current, references));
     };
 
@@ -514,6 +523,7 @@ export default function CreatePage() {
         attachmentsRef.current = [];
         setPrompt("");
         setAttachments([]);
+        setFisherMetadata({});
         setDraftReferences([]);
         window.requestAnimationFrame(() => composerFocusRef.current?.focus());
     };
@@ -599,7 +609,7 @@ export default function CreatePage() {
             releaseSubmitGate();
             return;
         }
-        const reconciledAttachments = mode === "video" && videoReferenceLimits
+        const reconciledAttachments = fisherSelected ? { attachments } : mode === "video" && videoReferenceLimits
             ? reconcileCreationAttachmentLimits(attachments, mentionReferences, videoReferenceLimits)
             : reconcileCreationAttachmentLimit(attachments, mentionReferences, maxReferences);
         if (reconciledAttachments.attachments !== attachments) {
@@ -608,10 +618,14 @@ export default function CreatePage() {
             releaseSubmitGate();
             return;
         }
-        const settings = { ratio, seconds, quality, videoQuality, count };
+        const settings = { ratio, seconds, quality, videoQuality, count, ...(fisherSelected ? { fisherMetadata } : {}) };
         const references = selectedCreationReferences(text, mentionReferences);
         // 后端对图片和视频使用不同的参考字段；这里先拆分，避免媒体类型在写入任务时被误判。
         const { referenceImages, referenceVideos, referenceAudios } = splitCreationAttachments(attachments);
+        if (fisherSelected) {
+            try { validateFisherH3Submission(generationConfig, fisherMetadata, { referenceImages, referenceVideos, referenceAudios }, text); }
+            catch (error) { toast.error(error instanceof Error ? error.message : "Fisher-H3 参数无效"); releaseRetryLock(); releaseSubmitGate(); return; }
+        }
         const videoOperation = inferVideoOperation({
             textCount: text ? 1 : 0,
             imageCount: referenceImages.length,
@@ -645,6 +659,10 @@ export default function CreatePage() {
         }
         const expandedPrompt = skillExecution.prompt;
         const referenceMetadata = skillExecution.metadata;
+        if (fisherSelected) {
+            try { validateFisherH3Submission(generationConfig, { ...referenceMetadata, ...fisherMetadata }, { referenceImages, referenceVideos, referenceAudios }, expandedPrompt); }
+            catch (error) { toast.error(error instanceof Error ? error.message : "Fisher-H3 参数无效"); releaseRetryLock(); releaseSubmitGate(); return; }
+        }
         followLatestMessageRef.current = true;
         const userMessage = newMessage("user", text, { mode, model: selectedModel, attachments, references, settings });
         const assistantMessage = newMessage("assistant", "", { mode, model: selectedModel, status: mode === "text" && textStreaming ? "streaming" : "pending", settings, ...retryContext });
@@ -674,6 +692,7 @@ export default function CreatePage() {
         setAttachments([]);
         setDraftReferences([]);
         setBusy(true);
+        setFisherMetadata({});
         const controller = new AbortController();
         const requestLifecycle = runtime.beginGenerationConsumer(controller.signal);
         abortRef.current = controller;
@@ -760,7 +779,7 @@ export default function CreatePage() {
                     referenceVideos,
                     referenceAudios,
                     signal: requestLifecycle.signal,
-                    metadata: { source: "create-page", conversationId: activeConversation.id, messageId: assistantMessage.id, videoEditOperation: videoOperation, ...referenceMetadata },
+                    metadata: { source: "create-page", conversationId: activeConversation.id, messageId: assistantMessage.id, videoEditOperation: videoOperation, ...referenceMetadata, ...(fisherSelected ? fisherMetadata : {}) },
                     onTaskUpdate: bindTask,
                     ...retryContext,
                 }));
@@ -808,6 +827,7 @@ export default function CreatePage() {
         setActiveId(next.id);
         setPrompt("");
         setAttachments([]);
+        setFisherMetadata({});
         setDraftReferences([]);
         setHistoryOpen(false);
     };
@@ -855,6 +875,7 @@ export default function CreatePage() {
         setActiveId(conversation.id);
         setPrompt("");
         setAttachments([]);
+        setFisherMetadata({});
         setDraftReferences([]);
         setHistoryOpen(false);
     };
@@ -884,6 +905,7 @@ export default function CreatePage() {
                         setActiveId(fallback.id);
                         setPrompt("");
                         setAttachments([]);
+                        setFisherMetadata({});
                         setDraftReferences([]);
                     }
                     toast.success("历史对话已删除，素材仍保留");
@@ -911,6 +933,7 @@ export default function CreatePage() {
         setPrompt(item.content);
         setAttachments(item.attachments ? [...item.attachments] : []);
         setDraftReferences(item.references ? [...item.references] : []);
+        setFisherMetadata(nextSettings?.fisherMetadata || {});
         if (item.model) updateConfig(nextMode === "text" ? "textModel" : nextMode === "image" ? "imageModel" : "videoModel", item.model);
         if (!nextSettings) return;
         setRatio(nextSettings.ratio);
@@ -1005,6 +1028,8 @@ export default function CreatePage() {
         modelRequirements,
         imageProfile,
         videoProfile,
+        fisherMetadata: fisherSelected ? generationMetadata(generationConfig, fisherMetadata) : undefined,
+        onFisherMetadataChange: (patch: Partial<CanvasNodeMetadata>) => setFisherMetadata((current) => ({ ...current, ...patch })),
         config: generationConfig,
         onModelChange: (value: string) => updateConfig(mode === "text" ? "textModel" : mode === "image" ? "imageModel" : "videoModel", value),
         ratio,

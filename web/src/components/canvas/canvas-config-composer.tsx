@@ -11,6 +11,7 @@ import { generationInputMentionLabel, normalizeGenerationNodeMentionTokens, type
 import { CanvasVideoPromptTools } from "./canvas-video-prompt-tools";
 import { CanvasPresetPicker, type CanvasPromptPreset } from "./canvas-preset-picker";
 import type { CanvasGenerationMode, CanvasNodeMetadata, CanvasWorkspaceMode } from "@/types/canvas";
+import { resolveModelRequestConfig, useEffectiveConfig } from "@/stores/use-config-store";
 
 type CanvasConfigComposerProps = {
     value: string;
@@ -53,6 +54,8 @@ export function CanvasConfigComposer({ value, inputs, skillReferences = [], gene
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const [presetOpen, setPresetOpen] = useState(false);
     const simpleMode = workspaceMode === "simple";
+    const config = useEffectiveConfig();
+    const fisherSelected = resolveModelRequestConfig(config, metadata?.model || config.videoModel).interfaceType === "fisher-h3-video";
     const workflowVideoReferenceMode = generationMode === "video" && isCanvasWorkflowProvider(metadata);
     const normalizedValue = useMemo(() => normalizeGenerationNodeMentionTokens(value, inputs), [inputs, value]);
     const tokens = useMemo(() => parseComposerTokens(normalizedValue, inputs), [inputs, normalizedValue]);
@@ -61,8 +64,8 @@ export function CanvasConfigComposer({ value, inputs, skillReferences = [], gene
         () =>
             inputs
                 .filter((input) => input.type === "image" && input.image)
-                .map((input) => ({ nodeId: input.nodeId, label: resourceLabel(input, inputs), title: input.title, previewUrl: input.image?.dataUrl })),
-        [inputs],
+                .map((input) => ({ nodeId: fisherSelected ? input.image!.id : input.nodeId, label: resourceLabel(input, inputs), title: input.title, previewUrl: input.image?.dataUrl })),
+        [fisherSelected, inputs],
     );
     const candidates = useMemo(() => {
         if (!mention) return [];
@@ -182,11 +185,14 @@ export function CanvasConfigComposer({ value, inputs, skillReferences = [], gene
                     <Button size="small" type="text" className="!h-7 !w-7 !min-w-7 !p-0" icon={<X className="size-3.5" />} onClick={onClose} />
                 </div>
             </div>
-            {generationMode === "video" && onMetadataChange && !simpleMode ? (
+            {generationMode === "video" && onMetadataChange && (!simpleMode || fisherSelected) ? (
                 <div className="mb-3 rounded-lg px-2 py-2" style={{ background: theme.node.fill }}>
                     <CanvasVideoPromptTools
                         metadata={metadata}
+                        config={{ ...config, model: metadata?.model || config.videoModel }}
                         frameOptions={videoFrameOptions}
+                        audioOptions={inputs.flatMap((input) => input.audio ? [{ id: input.audio.id, label: input.title }] : [])}
+                        videoOptions={inputs.flatMap((input) => input.video ? [{ id: input.video.id, label: input.title }] : [])}
                         referenceMode={workflowVideoReferenceMode ? "all" : "frames"}
                         referenceSummary={{
                             imageCount: inputs.filter((input) => input.type === "image" || input.type === "character").length,

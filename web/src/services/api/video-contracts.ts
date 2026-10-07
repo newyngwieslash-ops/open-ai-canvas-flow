@@ -1,4 +1,5 @@
 import type { resolveModelRequestConfig } from "@/stores/use-config-store";
+import type { FisherH3Options } from "@/lib/fisher-h3-video";
 
 export type VideoResponse = {
     id?: string;
@@ -43,8 +44,9 @@ export type RequestOptions = {
     videoEditOperation?: string;
     videoStartFrameNodeId?: string;
     videoEndFrameNodeId?: string;
+    fisherH3?: FisherH3Options;
 };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "agnes" | "seedance" | "video-generations" | "gemini-veo" | "novita" | "minimax"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "agnes" | "seedance" | "video-generations" | "gemini-veo" | "novita" | "minimax" | "fisher-h3"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };

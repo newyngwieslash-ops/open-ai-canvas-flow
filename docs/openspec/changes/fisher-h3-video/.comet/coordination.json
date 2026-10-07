@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "taskIds": [
+    "72abd7c7-a9e6-4141-b88d-343d256d5a6c",
+    "dba57f72-d5ff-4e6e-9ef3-e33879178c6d",
+    "02117ce2-6692-46cc-9fdc-07e68f3d6291",
+    "5bd4c7be-cd3c-4f85-b013-5a58349b0926",
+    "bc057669-f32b-4943-b2e4-7f2fcfe63c03",
+    "a6ae1330-0a08-41b7-b286-05dba38ec546",
+    "7e3648c5-3671-4009-a27c-b521a37f7134",
+    "b50a3969-3691-47dd-94e6-1ba438c3f89d"
+  ],
+  "revision": "77314063ebfeaaa85367f89d7c6de92acab7e317c29d07e94ccc84e4029c9b39",
+  "stage": "done",
+  "sessionId": "/root; /root/plugin; /root/backend; /root/frontend",
+  "evidence": [
+    "docs/superpowers/plans/2026-10-07-fisher-h3-video.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/plugin-evidence.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/root-evidence.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/backend-evidence.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/frontend-evidence.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/root-task-review.md",
+    "docs/openspec/changes/fisher-h3-video/.comet/plugin-task-review.md"
+  ],
+  "unresolved": [],
+  "reviewRounds": 1
+}

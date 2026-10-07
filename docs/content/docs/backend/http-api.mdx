@@ -5,6 +5,12 @@ description: 信封、错误码与 OpenAPI
 
 # HTTP API 合同
 
+## Fisher-H3 模型中转
+
+`/api/ai/custom` 的 Fisher 视频创建请求携带 `X-Canvas-Upstream-Protocol: fisher-h3-video`，在已有登录态、出站 URL 和凭据脱敏边界内执行 Fisher 参数校验。该协议身份不由域名或 `MiniMax-H3` 模型名称猜测；系统模型中转则使用渠道配置的实际协议限制创建与查询路径。
+
+Fisher 创建响应中的有效 `X-Task-Id` 会保留给客户端和已有任务恢复流程，不接受追踪 `request_id` 或包含当前 Key 的编号。即使响应体损坏或缺少 task_id，也不能丢弃已受理编号或自动重新 POST；响应不足以确认创建结果时返回错误并保留编号供查询。跨域请求允许协议身份头并向浏览器暴露 `X-Task-Id`；这不改变业务 API 的统一信封合同。
+
 ## 注册邮箱等价检查
 
 公开注册与邮箱绑定的唯一性检查将 `gmail.com` 和 `googlemail.com` 视为同一域，移除本地部分的点及 `+` 后缀。例如 `a.b+x@googlemail.com` 与 `ab@gmail.com` 不允许创建两个账号。其他域保留点和 `+`；现有域名白名单规则保持不变。

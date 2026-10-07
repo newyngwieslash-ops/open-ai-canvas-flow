@@ -8,6 +8,9 @@ import { type CanvasTheme } from "@/lib/canvas-theme";
 import { formatVideoResolutionLabel, isVideoResolutionMatch, normalizeVideoDuration, videoDimensionsForRatioAndResolution, videoResolutionComparisonKey, VIDEO_DURATION_MIN } from "@/lib/video-generation-options";
 import { modelCapabilityConfigFor, resolveVideoRatioValue, resolveVideoResolutionValue, videoDurationOptions, type VideoCapabilityConfig } from "@/lib/model-capabilities";
 import { modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { fisherH3VideoProfile } from "@/lib/fisher-h3-ui-state";
+import { generationMetadata } from "@/services/api/generation-task";
+import type { CanvasNodeMetadata } from "@/types/canvas";
 
 const sizeOptions = [
     { value: "1280x720", label: "横屏", width: 1280, height: 720 },
@@ -20,14 +23,17 @@ const sizeOptions = [
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
+    metadata?: CanvasNodeMetadata;
     onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoArkPrivateAssetUpload", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
 };
 
-export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[292px] space-y-3" }: VideoSettingsPanelProps) {
-    const profile = modelCapabilityConfigFor(config, config.model).video!;
+export function VideoSettingsPanel({ config, metadata, onConfigChange, theme, showTitle = true, className = "w-[292px] space-y-3" }: VideoSettingsPanelProps) {
+    const fisher = resolveModelRequestConfig(config, config.model).interfaceType === "fisher-h3-video";
+    const baseProfile = modelCapabilityConfigFor(config, config.model).video!;
+    const profile = fisher ? fisherH3VideoProfile(baseProfile, generationMetadata(config, metadata)) : baseProfile;
 	const priceTiers = modelPriceTiers(config);
     if (resolveModelRequestConfig(config, config.model).interfaceType === "volcengine-jimeng-video") {
 		return <JiMengVideoSettingsPanel config={config} profile={profile} priceTiers={priceTiers} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
@@ -36,10 +42,10 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
 		return <SeedanceVideoSettingsPanel config={config} profile={profile} priceTiers={priceTiers} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
-    const seconds = normalizeVideoDuration(config.videoSeconds);
+    const seconds = fisher ? config.videoSeconds : normalizeVideoDuration(config.videoSeconds);
     const resolution = resolveVideoResolutionValue(profile, config.vquality);
     const ratio = resolveVideoRatioValue(profile, config.size);
-    const dimensions = videoDimensionsForRatioAndResolution(ratio, resolution);
+    const dimensions = fisher ? undefined : videoDimensionsForRatioAndResolution(ratio, resolution);
     const sizeSupported = profile.ratios.length > 0;
     const configuredResolutions = profile.resolutions.map((value) => ({ value, label: formatVideoResolutionLabel(value) }));
     const generateAudio = boolConfig(config.videoGenerateAudio, profile.generateAudio.default);
@@ -49,6 +55,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-sm font-semibold">视频设置</div> : null}
+                {fisher ? <p className="text-[var(--fs-label)] opacity-65">1080P 保留原生对齐尺寸；16:9 为 1920×1088。</p> : null}
                 {configuredResolutions.length ? <SettingGroup title="分辨率" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-1.5">
                         {configuredResolutions.map((item) => (
@@ -81,7 +88,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                     </div>
                 </SettingGroup> : null}
                 <SettingGroup title="秒数" color={theme.node.muted}>
-					<VideoDurationControl profile={profile} value={Number(seconds)} theme={theme} disabled={(value) => !hasPriceTierForVideoSelection(priceTiers, resolution, value)} onChange={(value) => onConfigChange("videoSeconds", String(value))} />
+                    {fisher && profile.duration.selection === "range" ? <label className="flex items-center gap-2"><input aria-label="视频时长（秒）" type="number" min={profile.duration.min} max={profile.duration.max} step={profile.duration.step || 1} value={seconds} className="h-8 w-24 rounded-md border bg-transparent px-2" style={{ borderColor: theme.toolbar.border }} onChange={(event) => onConfigChange("videoSeconds", event.target.value)} /><span>{profile.duration.min}–{profile.duration.max} 秒</span></label> : <VideoDurationControl profile={profile} value={Number(seconds)} theme={theme} disabled={(value) => !hasPriceTierForVideoSelection(priceTiers, resolution, value)} onChange={(value) => onConfigChange("videoSeconds", String(value))} />}
                 </SettingGroup>
                 {profile.generateAudio.supported || profile.watermark.supported ? <SettingGroup title="输出" color={theme.node.muted}><div className="grid grid-cols-2 gap-3 rounded-md px-2" style={{ background: theme.toolbar.itemHover }}>{profile.generateAudio.supported ? <SwitchRow label="生成声音" checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}{profile.watermark.supported ? <SwitchRow label="添加水印" checked={watermark} theme={theme} onChange={(checked) => onConfigChange("videoWatermark", String(checked))} /> : null}</div></SettingGroup> : null}
             </div>

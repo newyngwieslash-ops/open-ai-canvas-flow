@@ -9,6 +9,7 @@ export type ChannelScene = "image" | "video" | "audio";
 export type ChannelTransportConfig = Parameters<typeof channelRequest>[0] & {
     apiKey?: string;
     baseUrl?: string;
+    interfaceType?: string;
 };
 
 export type ChannelCallOptions = {
@@ -32,6 +33,7 @@ export function createChannelTransport(config: ChannelTransportConfig, scene?: C
     const sceneHeaders = (contentType?: string, extra?: Record<string, string>) => ({
         ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
         ...(contentType ? { "Content-Type": contentType } : {}),
+        ...(config.interfaceType === "fisher-h3-video" ? { "X-Canvas-Upstream-Protocol": "fisher-h3-video" } : {}),
         ...(scene && config.baseUrl && isSystemProxyBaseUrl(config.baseUrl)
             ? { "X-Canvas-Scene": scene, "X-Idempotency-Key": createClientId() }
             : {}),

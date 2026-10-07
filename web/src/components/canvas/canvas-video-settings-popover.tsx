@@ -8,15 +8,17 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { modelCapabilityConfigFor, resolveVideoRatioValue, resolveVideoResolutionValue } from "@/lib/model-capabilities";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import type { AiConfig } from "@/stores/use-config-store";
+import type { CanvasNodeMetadata } from "@/types/canvas";
 
 type CanvasVideoSettingsPopoverProps = {
     config: AiConfig;
+    metadata?: CanvasNodeMetadata;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
     buttonClassName?: string;
     placement?: "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
 };
 
-export function CanvasVideoSettingsPopover({ config, onConfigChange, buttonClassName, placement = "topLeft" }: CanvasVideoSettingsPopoverProps) {
+export function CanvasVideoSettingsPopover({ config, metadata, onConfigChange, buttonClassName, placement = "topLeft" }: CanvasVideoSettingsPopoverProps) {
     const theme = canvasThemes[useActiveTheme()];
     const buttonRef = useRef<HTMLSpanElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -54,7 +56,7 @@ export function CanvasVideoSettingsPopover({ config, onConfigChange, buttonClass
         };
     }, [open]);
 
-    const panel = open && buttonRect ? <VideoSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} onConfigChange={onConfigChange} /> : null;
+    const panel = open && buttonRect ? <VideoSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} metadata={metadata} onConfigChange={onConfigChange} /> : null;
 
     return (
         <>
@@ -74,6 +76,7 @@ function VideoSettingsPortal({
     placement,
     theme,
     config,
+    metadata,
     onConfigChange,
 }: {
     buttonRect: DOMRect;
@@ -81,6 +84,7 @@ function VideoSettingsPortal({
     placement: CanvasVideoSettingsPopoverProps["placement"];
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
     config: AiConfig;
+    metadata?: CanvasNodeMetadata;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
 }) {
     const gap = 8;
@@ -118,7 +122,7 @@ function VideoSettingsPortal({
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
         >
-            <VideoSettingsPanel config={config} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-3" />
+            <VideoSettingsPanel config={config} metadata={metadata} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-3" />
         </div>,
         document.body,
     );

@@ -1,4 +1,6 @@
 import { ImageSizePicker } from "@/components/image-size-picker";
+import { FisherH3ReferenceControls } from "@/components/fisher-h3-reference-controls";
+import type { CanvasNodeMetadata } from "@/types/canvas";
 import { imageResolutionUsesQuality } from "@/lib/image-size-presets";
 import { createPortal } from "react-dom";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject } from "react";
@@ -102,6 +104,8 @@ type ComposerProps = {
     model: string;
     modelRequirements: ModelRequirements;
     videoProfile: VideoCapabilityConfig;
+    fisherMetadata?: CanvasNodeMetadata;
+    onFisherMetadataChange: (patch: Partial<CanvasNodeMetadata>) => void;
     imageProfile: ImageCapabilityConfig;
     config: AiConfig;
     onModelChange: (value: string) => void;
@@ -365,6 +369,7 @@ export function CreationComposer(props: ComposerProps) {
             </div>
         </div>
         <footer className="creation-chat-dock">
+            {props.fisherMetadata ? <FisherH3ReferenceControls metadata={props.fisherMetadata} images={props.attachments.filter((item) => creationAttachmentKind(item) === "image").map((item) => ({ id: item.id, label: item.name }))} audios={props.attachments.filter((item) => creationAttachmentKind(item) === "audio").map((item) => ({ id: item.id, label: item.name }))} videos={props.attachments.filter((item) => creationAttachmentKind(item) === "video").map((item) => ({ id: item.id, label: item.name }))} onChange={props.onFisherMetadataChange} /> : null}
             <div className="creation-chat-controls">
                 {props.variant === "thread" ? <ModePicker mode={props.mode} onModeChange={props.onModeChange} /> : null}
                 <VoiceRecordingButton
@@ -387,7 +392,7 @@ export function CreationComposer(props: ComposerProps) {
                 </Tooltip> : null}
 				<ModelPicker config={props.config} value={props.model} onChange={props.onModelChange} capability={props.mode} requirements={props.modelRequirements} className="creation-model-picker" placeholder={`选择${modeLabels[props.mode]}模型`} showSelectedPrice={false} showOptionPrices variant="creation" />
                 {props.mode === "video" || (props.mode === "image" && imageSettingsSupported) ? <GenerationSettingsMenu {...props} /> : null}
-                {props.mode === "video" ? <DurationMenu profile={props.videoProfile} seconds={props.seconds} onChange={props.setSeconds} /> : null}
+                {props.mode === "video" ? <DurationMenu profile={props.videoProfile} seconds={props.seconds} onChange={props.setSeconds} strict={Boolean(props.fisherMetadata)} /> : null}
                 {props.mode === "text" ? <>
                     <Tooltip title={interactionBusy ? "生成中，此开关将在下次发送时生效" : (props.textStreaming ? "流式输出已开启" : "流式输出已关闭")}><button type="button" className="creation-chat-control" aria-pressed={props.textStreaming} disabled={interactionBusy} onClick={() => props.setTextStreaming(!props.textStreaming)}><Waves /><span>流式</span></button></Tooltip>
                     <Tooltip title={interactionBusy ? "生成中，此开关将在下次发送时生效" : (props.textThinking ? "思考已开启，会展示模型返回的推理摘要" : "开启模型思考")}><button type="button" className="creation-chat-control" aria-pressed={props.textThinking} disabled={interactionBusy} onClick={() => props.setTextThinking(!props.textThinking)}><Brain /><span>思考</span></button></Tooltip>
@@ -513,9 +518,9 @@ function SettingSection({ title, value, children }: { title: string; value?: str
     return <section className="creation-parameter-section"><header><h3>{title}</h3>{value ? <span>{value}</span> : null}</header>{children}</section>;
 }
 
-function DurationMenu({ profile, seconds, onChange }: { profile: VideoCapabilityConfig; seconds: string; onChange: (value: string) => void }) {
+function DurationMenu({ profile, seconds, onChange, strict = false }: { profile: VideoCapabilityConfig; seconds: string; onChange: (value: string) => void; strict?: boolean }) {
     const [open, setOpen] = useState(false);
-    const value = Number(normalizeVideoValue(profile, { seconds }).seconds);
+    const value = strict ? Number(seconds) : Number(normalizeVideoValue(profile, { seconds }).seconds);
     const presets = profile.duration.selection === "enum" ? videoDurationOptions(profile) : [];
     const fallbackPreset = presets.length ? presets : [profile.duration.default];
     const min = profile.duration.selection === "range" ? profile.duration.min || 1 : Math.min(...fallbackPreset);
@@ -524,7 +529,7 @@ function DurationMenu({ profile, seconds, onChange }: { profile: VideoCapability
     const durationControl = profile.duration.selection === "range" ? <>
         <input className="h-8 w-full" style={{ accentColor: "var(--creation-text)" }} type="range" min={min} max={max} step={step} value={value} aria-label="视频时长（秒）" onChange={(event) => onChange(event.target.value)} />
         <div className="flex justify-between px-0.5 text-[var(--fs-tiny)] text-[var(--creation-muted)]"><span>{min}s</span><span>{max}s</span></div>
-        <label className="creation-custom-value is-duration"><span>自定义时长</span><span className="creation-duration-custom-field"><input type="number" min={min} max={max} step={step} inputMode="numeric" value={seconds} onFocus={(event) => event.currentTarget.select()} onBlur={() => onChange(String(value))} onChange={(event) => onChange(event.target.value)} aria-label="自定义视频时长，单位秒" /><em>秒</em></span></label>
+        <label className="creation-custom-value is-duration"><span>自定义时长</span><span className="creation-duration-custom-field"><input type="number" min={min} max={max} step={step} inputMode="numeric" value={seconds} onFocus={(event) => event.currentTarget.select()} onBlur={strict ? undefined : () => onChange(String(value))} onChange={(event) => onChange(event.target.value)} aria-label="自定义视频时长，单位秒" /><em>秒</em></span></label>
     </> : <div className="creation-duration-choices">{presets.map((item) => <button key={item} type="button" className={item === value ? "is-selected" : ""} onClick={() => onChange(String(item))}>{item}s</button>)}</div>;
     return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="bottom" arrow={false} classNames={{ root: "creation-control-popover", container: "creation-control-popover-surface", content: "creation-control-popover-content" }} content={<div className="creation-duration-menu"><div className="creation-duration-heading"><span>时长</span><strong>{value} 秒</strong></div>{durationControl}</div>}>
         <button type="button" className="creation-chat-control is-duration" aria-label={`视频时长：${value}秒`}><Clock3 /><span>{value}s</span><ChevronDown className={open ? "is-open" : ""} /></button>

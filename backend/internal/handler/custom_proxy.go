@@ -98,6 +98,12 @@ func proxyCustomRelayRequestWithService(c *gin.Context, policy service.RuntimeRe
 		fail(c, http.StatusBadRequest, errors.New("模型列表请求不允许携带请求体"))
 		return
 	}
+	if c.Request.Method == http.MethodPost && c.GetHeader("X-Canvas-Upstream-Protocol") == "fisher-h3-video" && strings.HasSuffix(target.Path, "/v2/video_generation") {
+		if err := service.ValidateFisherH3VideoPayload(body); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+	}
 	upstreamReq, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		fail(c, http.StatusBadRequest, errors.New("构造自定义渠道请求失败"))
@@ -135,6 +141,9 @@ func proxyCustomRelayRequestWithService(c *gin.Context, policy service.RuntimeRe
 func writeCustomRelayResponse(c *gin.Context, svc *service.Service, resp *http.Response, apiKey string, responseLimit int64, allowBinary bool) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
+	if c.Request.Method == http.MethodPost && strings.HasSuffix(c.GetHeader("X-Canvas-Upstream-URL"), "/v2/video_generation") {
+		copyFisherTaskHeader(c, resp, apiKey)
+	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		writeCustomRelayError(c, svc, resp, apiKey, mediaType)
@@ -169,6 +178,12 @@ func writeCustomRelayResponse(c *gin.Context, svc *service.Service, resp *http.R
 	}
 	body = redactRelaySecret(body, apiKey)
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", body)
+}
+
+func copyFisherTaskHeader(c *gin.Context, resp *http.Response, apiKey string) {
+	if id := service.FisherH3TaskID(resp.Header.Get("X-Task-Id"), apiKey); id != "" {
+		c.Header("X-Task-Id", id)
+	}
 }
 
 func writeCustomRelayError(c *gin.Context, svc *service.Service, resp *http.Response, apiKey string, mediaType string) {

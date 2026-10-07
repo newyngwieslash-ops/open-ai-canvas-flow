@@ -19,6 +19,7 @@ import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, typ
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { generationSpecMetadata, readNodeGenerationSpec, resolveGenerationSelection } from "@/lib/canvas/generation-contract";
+import { validateFisherH3Submission } from "@/lib/fisher-h3-ui-state";
 
 export async function runBackendCanvasGenerationTask(
     {
@@ -57,6 +58,7 @@ export async function runBackendCanvasGenerationTask(
     dependencies?: GenerationTaskDependencies,
 ) {
     if (mode === "image") assertCanvasImageReferenceLimit(config, referenceImages);
+    if (mode === "video" && resolveModelRequestConfig(config, config.model).interfaceType === "fisher-h3-video") validateFisherH3Submission(config, metadata, { referenceImages, referenceVideos, referenceAudios }, prompt);
     return runBackendGenerationTask(
         {
             projectId,
@@ -340,6 +342,7 @@ export function buildVideoGenerationMetadata(
         videoCameraMovePrompt: metadata?.videoCameraMovePrompt,
         videoStartFrameNodeId: startFrame,
         videoEndFrameNodeId: endFrame,
+        providerOptions: metadata?.providerOptions,
     };
 }
 
@@ -441,7 +444,7 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
             ? node?.metadata?.size ?? config.size ?? defaultConfig.size
             : workflowOutputSize || node?.metadata?.size || config.size || defaultConfig.size,
         transparentBackground: node?.metadata?.transparentBackground ?? config.transparentBackground ?? defaultConfig.transparentBackground,
-        videoSeconds: workflowProvider === "model" ? normalizeVideoDuration(node?.metadata?.seconds ?? workflowParameterValue("videoSeconds") ?? config.videoSeconds ?? defaultConfig.videoSeconds) : String(node?.metadata?.seconds ?? workflowParameterValue("videoSeconds") ?? config.videoSeconds ?? defaultConfig.videoSeconds),
+        videoSeconds: workflowProvider === "model" && resolveModelRequestConfig(config, preferredModel).interfaceType !== "fisher-h3-video" ? normalizeVideoDuration(node?.metadata?.seconds ?? workflowParameterValue("videoSeconds") ?? config.videoSeconds ?? defaultConfig.videoSeconds) : String(node?.metadata?.seconds ?? workflowParameterValue("videoSeconds") ?? config.videoSeconds ?? defaultConfig.videoSeconds),
         vquality: workflowProvider === "model" ? normalizeVideoResolution(node?.metadata?.vquality ?? workflowParameterValue("vquality") ?? config.vquality ?? defaultConfig.vquality) : String(node?.metadata?.vquality ?? workflowParameterValue("vquality") ?? config.vquality ?? defaultConfig.vquality),
         videoGenerateAudio: node?.metadata?.generateAudio ?? config.videoGenerateAudio ?? defaultConfig.videoGenerateAudio,
         videoWatermark: node?.metadata?.watermark ?? config.videoWatermark ?? defaultConfig.videoWatermark,

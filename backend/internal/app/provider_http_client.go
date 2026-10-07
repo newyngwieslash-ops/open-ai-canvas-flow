@@ -313,6 +313,20 @@ func doBinaryWithConsumer(req *http.Request, onChunk func(string, []byte)) ([]by
 		return nil, "", err
 	}
 	defer resp.Body.Close()
+	if submission, ok := req.Context().Value(fisherSubmissionKey{}).(*fisherSubmission); ok && req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/v2/video_generation") {
+		id := resp.Header.Get("X-Task-Id")
+		if key := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "); key != "" && strings.Contains(id, key) {
+			id = ""
+		}
+		if err := persistFisherTaskID(req.Context(), submission, id); err != nil {
+			return nil, "", err
+		}
+		if submission.TaskID != "" {
+			metadata, _ := req.Context().Value(providerAnalyticsKey{}).(providerAnalyticsContext)
+			metadata.ProviderRequestID = submission.TaskID
+			req = req.WithContext(context.WithValue(req.Context(), providerAnalyticsKey{}, metadata))
+		}
+	}
 	if resp.ContentLength > responseLimit {
 		err = fmt.Errorf("上游响应超过 %s 限制", formatStorageLimit(responseLimit))
 		recordProviderRequest(req, startedAt, resp.StatusCode, nil, err)
@@ -451,6 +465,23 @@ func recordProviderRequest(req *http.Request, startedAt time.Time, statusCode in
 		}
 	}
 	metadata.Service.EnrichAPICallLog(&callLog, responseBody)
+	if submission, ok := req.Context().Value(fisherSubmissionKey{}).(*fisherSubmission); ok {
+		var payload struct {
+			TaskID string `json:"task_id"`
+		}
+		_ = json.Unmarshal(responseBody, &payload)
+		if requestKind == "create" {
+			callLog.ProviderRequestID = firstNonEmpty(submission.TaskID, validFisherTaskID(payload.TaskID))
+			if statusCode >= 200 && statusCode < 300 && validFisherTaskID(payload.TaskID) != "" {
+				callLog.ProviderRequestID = validFisherTaskID(payload.TaskID)
+			}
+		} else {
+			callLog.ProviderRequestID = firstNonEmpty(submission.TaskID, metadata.ProviderRequestID, providerRequestIDFromPath(req.URL.Path))
+		}
+		if key := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "); key != "" && strings.Contains(callLog.ProviderRequestID, key) {
+			callLog.ProviderRequestID = ""
+		}
+	}
 	callLog.Error = withUserVisibleLogError(requestErr, callLog.Error)
 	if err := metadata.Service.LogAPICall(callLog); err != nil {
 		if !channelSlotFailure && metadata.Billing != nil {

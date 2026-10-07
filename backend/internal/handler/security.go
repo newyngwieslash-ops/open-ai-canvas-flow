@@ -193,7 +193,7 @@ func authorizeSystemProxy(channel *model.ModelChannel, protocol model.ChannelInt
 		}
 		return nil
 	}
-	if protocol == model.ChannelInterfaceMiniMaxVideo {
+	if protocol == model.ChannelInterfaceMiniMaxVideo || protocol == "fisher-h3-video" {
 		if method == http.MethodGet && systemMiniMaxTaskPath.MatchString(requestPath) {
 			return nil
 		}
@@ -207,6 +207,9 @@ func authorizeSystemProxy(channel *model.ModelChannel, protocol model.ChannelInt
 		modelName := proxyRequestModel(contentType, body)
 		if modelName == "" || !channelAllowsModel(channel, modelName) {
 			return errors.New("当前系统渠道未授权该模型")
+		}
+		if protocol == "fisher-h3-video" {
+			return service.ValidateFisherH3VideoPayload(body)
 		}
 		return nil
 	}
@@ -248,7 +251,7 @@ func interfaceAllowsProxyPath(interfaceType model.ChannelInterfaceType, requestP
 		return requestPath == "/images/generations"
 	case model.ChannelInterfaceOpenAIAudio:
 		return requestPath == "/audio/speech"
-	case model.ChannelInterfaceAsyncAudio, model.ChannelInterfaceNewAPIVideo, model.ChannelInterfaceNewAPIChannel1, model.ChannelInterfaceNewAPIChannel2, model.ChannelInterfaceXAIVideo, model.ChannelInterfaceVolcengineArkVideo, model.ChannelInterfaceVolcengineArkAgentPlanVideo, model.ChannelInterfaceVolcengineJiMengImage, model.ChannelInterfaceVolcengineJiMengVideo, model.ChannelInterfaceGeminiVeo, model.ChannelInterfaceGeminiImage, model.ChannelInterfaceNovitaVideo, model.ChannelInterfaceMiniMaxVideo:
+	case model.ChannelInterfaceAsyncAudio, model.ChannelInterfaceNewAPIVideo, model.ChannelInterfaceNewAPIChannel1, model.ChannelInterfaceNewAPIChannel2, model.ChannelInterfaceXAIVideo, model.ChannelInterfaceVolcengineArkVideo, model.ChannelInterfaceVolcengineArkAgentPlanVideo, model.ChannelInterfaceVolcengineJiMengImage, model.ChannelInterfaceVolcengineJiMengVideo, model.ChannelInterfaceGeminiVeo, model.ChannelInterfaceGeminiImage, model.ChannelInterfaceNovitaVideo, model.ChannelInterfaceMiniMaxVideo, "fisher-h3-video":
 		return false
 	default:
 		return true

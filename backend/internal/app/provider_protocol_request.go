@@ -99,6 +99,10 @@ func protocolRequestFromInput(input canvasGenerationInput) protocol.GenerationRe
 		options["response_format"] = grokImageResponseFormat(input.ImageCapability)
 		request.ProviderOptions[input.Config.InterfaceType] = options
 	}
+	if input.Config.InterfaceType == fisherH3Protocol {
+		applyFisherH3Options(input, &request)
+		request.Inputs = append(append(append([]protocol.MediaReference{}, request.Images...), request.Videos...), request.Audios...)
+	}
 	return request
 }
 

@@ -2,11 +2,12 @@ import type { GenerationRetryContext } from "@/lib/canvas/canvas-project-generat
 import { formatVideoResolutionLabel as videoResolutionLabel, VIDEO_RESOLUTION_OPTIONS } from "@/lib/video-generation-options";
 import type { CreationAttachment, CreationMode } from "./creation-assets";
 import type { CreationReference } from "./creation-references";
+import type { CanvasNodeMetadata } from "@/types/canvas";
 
 export type { CreationMode };
 
 export type CreationStatus = "streaming" | "pending" | "done" | "error" | "cancelled";
-export type CreationSettings = { ratio: string; seconds: string; quality: string; videoQuality: string; count: string };
+export type CreationSettings = { ratio: string; seconds: string; quality: string; videoQuality: string; count: string; fisherMetadata?: CanvasNodeMetadata };
 export type CreationRetryContext = GenerationRetryContext & { retryContextsByBatchIndex?: GenerationRetryContext[] };
 
 export type CreationMessage = {

@@ -332,6 +332,11 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 	if !(c.Request.Method == http.MethodGet && path == "/models") {
 		if c.Request.Method == http.MethodGet && systemMiniMaxTaskPath.MatchString(path) && modelName == "" {
 			supported, supportErr := svc.SystemChannelHasProtocol(channel.ID, model.ChannelInterfaceMiniMaxVideo)
+			protocol = model.ChannelInterfaceMiniMaxVideo
+			if supportErr == nil && !supported {
+				supported, supportErr = svc.SystemChannelHasProtocol(channel.ID, "fisher-h3-video")
+				protocol = "fisher-h3-video"
+			}
 			if supportErr != nil {
 				failService(c, supportErr)
 				return
@@ -340,7 +345,6 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 				fail(c, http.StatusForbidden, errors.New("当前系统渠道未授权 MiniMax 视频协议"))
 				return
 			}
-			protocol = model.ChannelInterfaceMiniMaxVideo
 			capability = "video"
 		} else {
 			var modelErr error
@@ -388,7 +392,7 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 	if err != nil {
 		log := apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), model.ApiCallStatusFailed, 0, time.Since(startedAt), err.Error(), concurrencyLimit)
 		log.ErrorCode, log.Error = service.ChannelSlotFailureDetails(err)
-		logSystemProxyCall(svc, log, nil)
+		logSystemProxyCall(svc, log, nil, protocol, "")
 		failInternal(c, http.StatusServiceUnavailable, err)
 		return
 	}
@@ -439,11 +443,14 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 		status = model.ApiCallStatusFailed
 		errorText = err.Error()
 		markSystemProxyBillingUncertain(svc, billingOrderID, "系统渠道连接中断，费用状态待核对")
-		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), nil)
+		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), nil, protocol, "")
 		fail(c, http.StatusBadGateway, errors.New("系统渠道连接失败"))
 		return
 	}
 	defer resp.Body.Close()
+	if protocol == "fisher-h3-video" && c.Request.Method == http.MethodPost {
+		copyFisherTaskHeader(c, resp, channel.APIKey)
+	}
 	statusCode = resp.StatusCode
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		status = model.ApiCallStatusFailed
@@ -457,6 +464,9 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 	} else {
 		responseBody, readErr = io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	}
+	if protocol == "fisher-h3-video" {
+		responseBody = redactRelaySecret(responseBody, channel.APIKey)
+	}
 	if readErr != nil {
 		status = model.ApiCallStatusFailed
 		errorText = readErr.Error()
@@ -465,7 +475,7 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 			billingNote = "上游已响应但流式响应体超过限制，费用状态待核对"
 		}
 		markSystemProxyBillingUncertain(svc, billingOrderID, billingNote)
-		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), responseBody)
+		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), responseBody, protocol, c.Writer.Header().Get("X-Task-Id"))
 		// SSE 响应头已经发送，流中断后只能关闭连接；非流式响应仍返回结构化错误。
 		if !streamed {
 			fail(c, http.StatusBadGateway, errors.New("系统渠道响应读取失败"))
@@ -477,15 +487,21 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 		fail(c, http.StatusBadGateway, fmt.Errorf("系统渠道响应超过 %dMB 限制", policy.Request.SystemRelayResponseMB))
 		return
 	}
-	logErr := logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), responseBody)
+	if protocol == "fisher-h3-video" && c.Request.Method == http.MethodPost && status == model.ApiCallStatusSucceeded && fisherProxyTaskID(responseBody, "") == "" {
+		markSystemProxyBillingUncertain(svc, billingOrderID, "Fisher-H3 创建响应缺少有效 task_id，费用状态待核对")
+		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), model.ApiCallStatusFailed, statusCode, time.Since(startedAt), "Fisher-H3 创建响应缺少有效 task_id", concurrencyLimit), responseBody, protocol, c.Writer.Header().Get("X-Task-Id"))
+		fail(c, http.StatusBadGateway, errors.New("Fisher-H3 创建响应缺少有效 task_id；请查询已有任务并核对费用"))
+		return
+	}
+	logErr := logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), responseBody, protocol, c.Writer.Header().Get("X-Task-Id"))
 	if status == model.ApiCallStatusSucceeded {
 		if logErr != nil {
 			markSystemProxyBillingUncertain(svc, billingOrderID, "上游成功但调用日志写入失败，费用状态待核对")
 		} else if err := svc.SettleBilling(billingOrderID, ""); err != nil {
 			markSystemProxyBillingUncertain(svc, billingOrderID, "上游成功但积分结算失败："+err.Error())
 		}
-	} else if statusCode == 524 {
-		markSystemProxyBillingUncertain(svc, billingOrderID, "上游返回 524，费用状态待核对")
+	} else if statusCode == 524 || protocol == "fisher-h3-video" && (c.Writer.Header().Get("X-Task-Id") != "" || statusCode >= 500) {
+		markSystemProxyBillingUncertain(svc, billingOrderID, "上游提交结果不确定，费用状态待核对")
 	} else {
 		refundSystemProxyBilling(svc, billingOrderID, "上游明确返回失败")
 	}
@@ -551,10 +567,29 @@ func apiCallLog(user *model.User, channel *model.ModelChannel, billingOrderID st
 	}
 }
 
-func logSystemProxyCall(svc *service.Service, log model.ApiCallLog, responseBody []byte) error {
+func logSystemProxyCall(svc *service.Service, log model.ApiCallLog, responseBody []byte, protocol model.ChannelInterfaceType, providerTaskID string) error {
 	log.ResponseBody = service.SanitizeAPICallPayload(responseBody, "")
 	svc.EnrichAPICallLog(&log, responseBody)
+	if protocol == "fisher-h3-video" {
+		if log.Method == http.MethodPost {
+			log.ProviderRequestID = fisherProxyTaskID(responseBody, providerTaskID)
+		} else {
+			log.ProviderRequestID = service.FisherH3TaskID(log.Path[strings.LastIndex(log.Path, "/")+1:], "")
+		}
+	}
 	return svc.LogAPICall(log)
+}
+
+func fisherProxyTaskID(body []byte, headerID string) string {
+	var payload struct {
+		TaskID string `json:"task_id"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		if id := service.FisherH3TaskID(payload.TaskID, ""); id != "" {
+			return id
+		}
+	}
+	return service.FisherH3TaskID(headerID, "")
 }
 
 func readPayloadModel(body []byte) string {

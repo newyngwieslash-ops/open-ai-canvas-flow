@@ -103,6 +103,66 @@ function add(spec) {
   specs.push(spec);
 }
 
+{
+  const fisherParams = videoParams
+    .filter(([name]) => !["generateAudio", "watermark"].includes(name))
+    .map(([name, type, required, mapping, description]) => [name, type, required || ["duration", "resolution"].includes(name), mapping, description]);
+  const imageRole = coalesce(ref("media.role"), "first_frame");
+  const audioRole = coalesce(ref("media.role"), "reference_audio");
+  const countRole = (path, role, fallback) => len(filter(ref(path), "media", eq(coalesce(ref("media.role"), fallback), role)));
+  const driveCount = countRole("request.audios", "drive_audio", "reference_audio");
+  const hasDrive = gt(driveCount, 0);
+  const hasFrames = gt(addNumbers(countRole("request.images", "first_frame", "first_frame"), countRole("request.images", "last_frame", "first_frame")), 0);
+  const hasReferences = gt(addNumbers(len(ref("request.images")), len(ref("request.videos")), len(ref("request.audios"))), 0);
+  const controlPath = "request.providerOptions.fisher-h3-video.audio_control";
+  const mode = coalesce(ref(`${controlPath}.mode`), conditional(hasDrive, "lock_source", "native"));
+  const denoise = coalesce(ref(`${controlPath}.denoise_strength`), conditional(hasDrive, 0, 0.35));
+  const driveAsReference = coalesce(ref(`${controlPath}.add_drive_as_reference`), hasDrive);
+  const ratios = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
+  const validEvery = (path, condition) => eq(len(filter(ref(path), "media", condition)), len(ref(path)));
+  const includes = (value, values) => ({ $in: [value, values] });
+  add({
+    id: "fisher-h3-video", providerId: "fisher-h3-video", name: "Fisher-H3", vendor: "Fisher", capability: "video",
+    baseUrl: "https://api.work-fisher.com", auth: bearer, params: fisherParams, requiresPublicMediaUrls: true,
+    workflows: [{ id: "fisher-h3-video", label: "MiniMax-H3", providerId: "fisher-h3-video", capability: "video", parameters: parameters(fisherParams), defaults: { model: "MiniMax-H3", resolution: "768P", duration: 5, aspectRatio: "16:9" } }],
+    notes: "Fisher 服务 MiniMax V2 扩展，模型名称精确为 MiniMax-H3。普通任务 4–15 秒整数，独立驱动音频可达 60 秒；最多 9 张参考图、各 1 张首尾帧、3 条参考视频、3 条参考音频和额外 1 条驱动音频，允许混合和仅尾帧。纯文本必须指定固定比例，参考省略时 16:9；adaptive/auto 只适用于关键帧，选择最近固定比例。每条视频及偏移后剩余为 2–15 秒，start_time_seconds 按 24 FPS 换算。音频默认有驱动 lock_source/0/true，无驱动 native/0.35/false；reference_only 要求驱动作为参考。480P/768P/1080P 标准参考价每秒 0.15/0.30/0.45 元，实际取决于账户分组和折扣；1080P 16:9 原生对齐输出 1920×1088，17n+5 帧对齐可能略长，按请求秒数计费。不提供 2K、Context-IR、再生成、seed、采样步数或 flow shift；不接收 target/conditions。创建只读取 task_id；超时、5xx、无效响应不自动重建，宿主保留 X-Task-Id 后查询。真实 Key 的付费生成尚待用户验收。",
+    validations: [
+      { assert: eq(ref("request.model"), "MiniMax-H3"), message: "Fisher-H3 模型必须为 MiniMax-H3。" },
+      { assert: and(gt(len(trim(ref("request.prompt"))), 0), lte(len(ref("request.prompt")), 10000)), message: "Fisher-H3 提示词不能为空且最多 10000 字符。" },
+      { assert: includes(lower(ref("request.resolution")), ["480p", "768p", "1080p"]), message: "Fisher-H3 分辨率仅支持 480P、768P、1080P。" },
+      { assert: and(gte(ref("request.duration"), 4), lte(ref("request.duration"), conditional(hasDrive, 60, 15))), message: "Fisher-H3 时长为 4–15 秒；独立驱动音频为 4–60 秒。" },
+      { assert: includes(coalesce(ref("request.aspectRatio"), conditional(hasReferences, "16:9", "")), conditional(hasFrames, [...ratios, "adaptive", "auto"], ratios)), message: "Fisher-H3 需要固定比例；adaptive/auto 仅适用于首尾帧。" },
+      { assert: and(lte(countRole("request.images", "reference_image", "first_frame"), 9), lte(countRole("request.images", "first_frame", "first_frame"), 1), lte(countRole("request.images", "last_frame", "first_frame"), 1)), message: "Fisher-H3 最多 9 张参考图及各 1 张首尾帧。" },
+      { assert: validEvery("request.images", includes(imageRole, ["reference_image", "first_frame", "last_frame"])), message: "Fisher-H3 图片角色无效。" },
+      { assert: and(lte(len(ref("request.videos")), 3), validEvery("request.videos", eq(coalesce(ref("media.role"), "reference_video"), "reference_video"))), message: "Fisher-H3 最多 3 条 reference_video。" },
+      { assert: and(lte(countRole("request.audios", "reference_audio", "reference_audio"), 3), lte(driveCount, 1), validEvery("request.audios", includes(audioRole, ["reference_audio", "drive_audio"]))), message: "Fisher-H3 最多 3 条参考音频和 1 条独立驱动音频。" },
+      { assert: includes(mode, ["native", "lock_source", "remix_source", "reference_only"]), message: "Fisher-H3 音频模式无效。" },
+      { assert: conditional(ne(mode, "native"), hasDrive, true), message: "Fisher-H3 非 native 模式要求驱动音频。" },
+      { assert: and(eq(denoise, toFloat(denoise)), gte(denoise, 0), lte(denoise, 1)), message: "Fisher-H3 去噪强度须为 0–1 数字。" },
+      { assert: and(includes(driveAsReference, [true, false]), conditional(eq(mode, "reference_only"), eq(driveAsReference, true), true)), message: "Fisher-H3 驱动作为参考须为布尔值，reference_only 必须为 true。" },
+      { assert: validEvery("request.videos", and(eq(coalesce(ref("media.metadata.start_time_seconds"), 0), toFloat(coalesce(ref("media.metadata.start_time_seconds"), 0))), gte(coalesce(ref("media.metadata.start_time_seconds"), 0), 0))), message: "Fisher-H3 视频起始偏移须为非负数字。" }
+    ],
+    create: jsonCreate("/v2/video_generation", {
+      model: ref("request.model"),
+      content: { $concatArrays: [
+        [{ type: "text", text: ref("request.prompt") }],
+        map(sorted(ref("request.images")), "media", { type: "image_url", image_url: { url: ref("media.value") }, role: imageRole }),
+        map(sorted(ref("request.videos")), "media", { type: "video_url", video_url: { url: ref("media.value") }, role: "reference_video", start_time_seconds: ref("media.metadata.start_time_seconds") }),
+        map(sorted(ref("request.audios")), "media", { type: "audio_url", audio_url: { url: ref("media.value") }, role: audioRole })
+      ] },
+      resolution: { $upper: ref("request.resolution") }, duration: ref("request.duration"), ratio: coalesce(ref("request.aspectRatio"), "16:9"),
+      audio_control: { mode, denoise_strength: denoise, add_drive_as_reference: driveAsReference }
+    }),
+    poll: { method: "GET", path: "/v2/query/video_generation/{{taskId}}" },
+    response: asyncResponse("video", {
+      taskId: coalesce(ref("response.task_id"), ref("taskId")),
+      status: coalesce(ref("response.task.status"), "pending"),
+      message: coalesce(ref("response.task.error.message"), ref("response.error.message"), ref("response.task.message")),
+      videos: ref("response.task.content.url"), errorPaths: ["task.error.code", "error.type"], resultEphemeral: true
+    })
+  });
+}
+
 add({
   id: "openai-chat-completions", providerId: "chat-completion", name: "OpenAI Chat Completions", vendor: "OpenAI", capability: "text",
   baseUrl: "https://api.openai.com", auth: bearer, params: textParams,
@@ -1216,6 +1276,7 @@ function manifestFor(spec) {
     permissions: ["generation.run", "media.read"],
     configuration: spec.configuration || config(),
     contributes: {
+      ...(spec.workflows ? { workflows: spec.workflows } : {}),
       providers: [{
         id: spec.providerId,
         label: spec.name,

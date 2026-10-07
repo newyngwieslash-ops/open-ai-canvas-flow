@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerE
 import { ArrowUp, ChevronDown, FileText, ImagePlus, LayoutList, LoaderCircle, Maximize2, Music2, SlidersHorizontal, Video, WandSparkles, X } from "lucide-react";
 
 import { ModelPicker } from "@/components/model-picker";
-import { modelOptionName, resolveModelChannel, useEffectiveConfig } from "@/stores/use-config-store";
+import { modelOptionName, resolveModelChannel, resolveModelRequestConfig, useEffectiveConfig } from "@/stores/use-config-store";
 import { canonicalGenerationMetadata, nodeGenerationPrompt } from "@/lib/canvas/generation-contract";
 import { PROMPT_EDITOR_VIEWPORT_MARGIN } from "@/lib/canvas/canvas-prompt-editor-size";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
@@ -183,8 +183,12 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
     const [routeQuote, setRouteQuote] = useState<LogicalModelQuote | null>(null);
     const credits = routeQuote ? routeQuote.amountMicrocredits / 1_000_000 : configuredCredits;
     const activeReferenceCount = activeReferences.length;
-    const videoFrameOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "image").map((item) => ({ nodeId: item.nodeId, label: item.label, title: item.title, previewUrl: item.previewUrl }));
-    const hasVideoPromptTools = mode === "video" && !simpleMode && videoFrameOptions.length > 0;
+    const fisherSelected = resolveModelRequestConfig(config, config.model).interfaceType === "fisher-h3-video";
+    const mediaId = (nodeId: string) => fisherSelected && nodeId.startsWith("asset:") ? nodeId.slice(6) : nodeId;
+    const videoFrameOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "image").map((item) => ({ nodeId: mediaId(item.nodeId), label: item.label, title: item.title, previewUrl: item.previewUrl }));
+    const videoAudioOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "audio").map((item) => ({ id: mediaId(item.nodeId), label: `${item.label} · ${item.title}` }));
+    const videoMediaOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "video").map((item) => ({ id: mediaId(item.nodeId), label: `${item.label} · ${item.title}` }));
+    const hasVideoPromptTools = mode === "video" && (fisherSelected || (!simpleMode && videoFrameOptions.length > 0));
     const monochromeAccent = theme.node.activeStroke;
     const composerTokens = {
         "--canvas-composer-surface": theme.node.panel,
@@ -515,6 +519,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                     ) : mode === "video" ? (
                         <CanvasVideoSettingsPopover
                             config={config}
+                            metadata={node.metadata}
                             buttonClassName="canvas-node-composer-settings-trigger [&>span]:min-w-0 [&_.lucide]:!size-3"
                             onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
                         />
@@ -616,7 +621,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                     </button>
                     {paramsExpanded ? (
                         <div className="pt-1">
-                            <CanvasVideoPromptTools metadata={node.metadata} frameOptions={videoFrameOptions} onMetadataChange={(patch) => onConfigChange(node.id, patch)} />
+                            <CanvasVideoPromptTools config={config} metadata={node.metadata} frameOptions={videoFrameOptions} audioOptions={videoAudioOptions} videoOptions={videoMediaOptions} onMetadataChange={(patch) => onConfigChange(node.id, patch)} />
                         </div>
                     ) : null}
                 </div>
@@ -649,7 +654,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                         {renderPromptEditor(true, Boolean(expandedModalSize))}
                         {hasVideoPromptTools ? (
                             <div className="canvas-node-composer-parameters shrink-0">
-                                <CanvasVideoPromptTools metadata={node.metadata} frameOptions={videoFrameOptions} onMetadataChange={(patch) => onConfigChange(node.id, patch)} />
+                                <CanvasVideoPromptTools config={config} metadata={node.metadata} frameOptions={videoFrameOptions} audioOptions={videoAudioOptions} videoOptions={videoMediaOptions} onMetadataChange={(patch) => onConfigChange(node.id, patch)} />
                             </div>
                         ) : null}
                         <div className="shrink-0">{renderComposerControls(true)}</div>

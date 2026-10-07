@@ -6,7 +6,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { nanoid } from "nanoid";
 import { modelProtocolCapability, normalizeModelProtocol, type ModelProtocol } from "@/lib/model-protocols";
 import { normalizeVideoDuration, normalizeVideoResolution } from "@/lib/video-generation-options";
-import { type ModelCapabilityConfig } from "@/lib/model-capabilities";
+import { defaultModelCapabilityConfig, type ModelCapabilityConfig } from "@/lib/model-capabilities";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec, PublicLogicalModelPriceTier } from "@/services/api/logical-models";
 import { type WorkflowFieldMapping, normalizeRunningHubCapability, normalizeRunningHubWorkflowKind, normalizeSavedWorkflowFields, mergeWorkflowFieldMappings, normalizeWorkflowFieldMappings } from "./config-workflow-fields";
@@ -512,6 +512,10 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
     };
 }
 
+export function createFisherH3Channel(): ModelChannel {
+    return createModelChannel({ name: "Fisher-H3", baseUrl: "https://api.work-fisher.com", apiKey: "", models: ["MiniMax-H3"], modelCosts: [{ model: "MiniMax-H3", displayName: "Fisher-H3", capability: "video", protocol: "fisher-h3-video", billingMode: "per_second", unitPriceMicrocredits: 0, capabilityConfig: defaultModelCapabilityConfig("fisher-h3-video", "MiniMax-H3"), description: "标准参考价：480P 0.15 元/秒、768P 0.30 元/秒、1080P 0.45 元/秒；实际价格以账户为准。" }] });
+}
+
 export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
@@ -594,6 +598,7 @@ export function defaultBaseUrlForChannelInterface(interfaceType?: ChannelInterfa
     if (interfaceType === "volcengine-ark-agent-plan-image" || interfaceType === "volcengine-ark-agent-plan-video") return "https://ark.cn-beijing.volces.com/api/plan/v3";
     if (interfaceType === "volcengine-ark-image" || interfaceType === "volcengine-ark-video") return "https://ark.cn-beijing.volces.com/api/v3";
     if (interfaceType === "volcengine-jimeng-image" || interfaceType === "volcengine-jimeng-video") return "https://visual.volcengineapi.com";
+    if (interfaceType === "fisher-h3-video") return "https://api.work-fisher.com";
     if (interfaceType === "minimax-video") return "https://api.minimaxi.com";
     if (interfaceType === "grok-image" || interfaceType === "newapi" || interfaceType === "newapi-channel-1" || interfaceType === "newapi-channel-2" || interfaceType === "xai-video") return "";
     return OPENAI_BASE_URL;

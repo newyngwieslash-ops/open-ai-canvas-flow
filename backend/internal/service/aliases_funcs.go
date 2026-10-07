@@ -3,6 +3,8 @@ package service
 import "infinite-canvas/backend/internal/app"
 
 var (
+	FisherH3TaskID                             = app.FisherH3TaskID
+	ValidateFisherH3VideoPayload               = app.ValidateFisherH3VideoPayload
 	ErrPlaybackNotReady                        = app.ErrPlaybackNotReady
 	ErrNotBuiltinSkill                         = app.ErrNotBuiltinSkill
 	AllowedPrivateUpstreamHost                 = app.AllowedPrivateUpstreamHost

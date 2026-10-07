@@ -17,7 +17,8 @@ import { navigateToSettings } from "@/lib/settings-navigation";
 import type { Skill } from "@/services/api/skills";
 import { skillRuntime } from "@/services/skill-runtime";
 import type { GenerationTask } from "@/services/api/task-center";
-import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { resolveModelRequestConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { generationMetadata } from "@/services/api/generation-task";
 import type { Asset } from "@/stores/use-asset-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
 
@@ -224,7 +225,7 @@ export function useCanvasGenerationExecutor({
                         mode,
                         prompt: effectivePrompt,
                         model: generationConfig.model,
-                        options: modelRequestOptions(generationConfig, mode),
+                        options: { ...modelRequestOptions(generationConfig, mode), ...(mode === "video" && resolveModelRequestConfig(generationConfig, generationConfig.model).interfaceType === "fisher-h3-video" ? { providerOptions: generationMetadata(generationConfig, sourceNode?.metadata)?.providerOptions, firstFrame: sourceNode?.metadata?.videoStartFrameNodeId, lastFrame: sourceNode?.metadata?.videoEndFrameNodeId } : {}) },
                         workflow:
                             generationConfig.taskWorkflowProvider && generationConfig.taskWorkflowProvider !== "model"
                                 ? {

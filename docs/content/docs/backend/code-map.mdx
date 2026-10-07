@@ -5,6 +5,13 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## Fisher-H3 视频生成
+
+- 插件源码及包生成：`plugin-packages/generate-catalog.mjs`、`plugin-packages/fisher-h3-video/`。
+- 配置预设：`web/src/stores/use-config-store.ts`、`pages/settings/channel-settings-pane.tsx`；画布与创作页共享输入：`components/fisher-h3-reference-controls.tsx`、`lib/fisher-h3-ui-state.ts`。
+- 前端请求合同与模型测试适配：`lib/fisher-h3-video.ts`、`services/api/video-provider-fisher.ts`；后端角色/参数校验及任务编号恢复：`backend/internal/app/provider_fisher.go`、`provider_protocol.go`、`provider_http_client.go`。
+- 中转信任边界：`backend/internal/handler/custom_proxy.go`、`auth.go`、`security.go`。接口和限制见 [Fisher-H3 视频生成](/docs/plugins/fisher-h3-video)。
+
 ## 自定义更新公告
 
 - 后台编辑：`web/src/pages/admin/settings/components/update-announcement-editor.tsx`；版本、排序与草稿校验：`web/src/lib/update-announcement.ts`。

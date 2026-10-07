@@ -107,6 +107,14 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		DefaultOperation:  "text_to_video",
 	}
 	switch model.ChannelInterfaceType(protocol) {
+	case "fisher-h3-video":
+		video.Operations = append(video.Operations, "reference_to_video", "audio_to_video")
+		video.References.PromptMaxChars = 10000
+		video.References.MaxImages, video.References.MaxVideos, video.References.MaxAudios = 11, 3, 4
+		video.References.MaxVideoDuration = 15
+		video.Duration = VideoDurationConfig{Selection: "range", Min: 4, Max: 60, Step: 1, Default: 5}
+		video.Ratios = []string{"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9", "adaptive", "auto"}
+		video.Resolutions, video.DefaultResolution = []string{"480P", "768P", "1080P"}, "768P"
 	case model.ChannelInterfaceVolcengineJiMengVideo:
 		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{5, 10}, Default: 5}
 		video.Resolutions = []string{"720p"}

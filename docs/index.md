@@ -56,6 +56,7 @@
 功能、代码地图、待办、待测试分别维护在以下页面；尚未建立的专题会在对应任务中补齐：
 
 - [AI 审美批改画布插件](content/docs/plugins/ai-art-critique.mdx)
+- [Fisher-H3 视频生成](content/docs/plugins/fisher-h3-video.mdx)
 - [功能](content/docs/overview/features.mdx)
 - [本地开发](content/docs/backend/local-development.mdx)
 - [HTTP API 合同](content/docs/backend/http-api.mdx)

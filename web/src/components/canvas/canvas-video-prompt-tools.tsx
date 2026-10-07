@@ -5,6 +5,9 @@ import { Check, ChevronDown, Image as ImageIcon } from "lucide-react";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import type { CanvasNodeMetadata } from "@/types/canvas";
+import { FisherH3ReferenceControls } from "@/components/fisher-h3-reference-controls";
+import { resolveModelRequestConfig, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { generationMetadata } from "@/services/api/generation-task";
 
 type VideoFrameOption = {
     nodeId: string;
@@ -25,6 +28,9 @@ type CanvasVideoPromptToolsProps = {
     onMetadataChange: (patch: Partial<CanvasNodeMetadata>) => void;
     referenceMode?: "frames" | "all";
     referenceSummary?: { imageCount: number; videoCount: number; audioCount: number };
+    audioOptions?: { id: string; label: string }[];
+    videoOptions?: { id: string; label: string }[];
+    config?: AiConfig;
 };
 
 const EMPTY_FRAME_VALUE = "__none__";
@@ -33,8 +39,11 @@ const MENU_MARGIN = 8;
 const MENU_ITEM_HEIGHT = 28;
 const CONTROL_TEXT_STYLE: CSSProperties = { fontFamily: "inherit", fontSize: 11, fontWeight: 400, letterSpacing: 0, lineHeight: 1 };
 
-export function CanvasVideoPromptTools({ metadata, frameOptions, onMetadataChange, referenceMode = "frames", referenceSummary }: CanvasVideoPromptToolsProps) {
+export function CanvasVideoPromptTools({ metadata, frameOptions, onMetadataChange, referenceMode = "frames", referenceSummary, audioOptions = [], videoOptions = [], config: selectedConfig }: CanvasVideoPromptToolsProps) {
     const theme = canvasThemes[useActiveTheme()];
+    const globalConfig = useEffectiveConfig();
+    const config = selectedConfig || globalConfig;
+    const selectedModel = selectedConfig?.model || metadata?.model || config.videoModel;
     const startFrame = metadata?.videoStartFrameNodeId || EMPTY_FRAME_VALUE;
     const endFrame = metadata?.videoEndFrameNodeId || EMPTY_FRAME_VALUE;
 
@@ -42,6 +51,10 @@ export function CanvasVideoPromptTools({ metadata, frameOptions, onMetadataChang
         const next = value === EMPTY_FRAME_VALUE ? undefined : value;
         onMetadataChange(key === "videoStartFrameNodeId" ? { videoStartFrameNodeId: next } : { videoEndFrameNodeId: next });
     };
+
+    if (resolveModelRequestConfig(config, selectedModel).interfaceType === "fisher-h3-video") {
+        return <FisherH3ReferenceControls metadata={generationMetadata({ ...config, model: selectedModel }, metadata)} images={frameOptions.map((item) => ({ id: item.nodeId, label: `${item.label} · ${item.title}` }))} audios={audioOptions} videos={videoOptions} onChange={onMetadataChange} />;
+    }
 
     if (referenceMode === "all") {
         const summary = referenceSummary

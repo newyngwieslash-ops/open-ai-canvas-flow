@@ -353,9 +353,9 @@ export function resolveModelGenerationDefaults(
             resolution: source("vquality"),
         });
         return {
-            videoSeconds: normalized.seconds,
-            size: normalized.ratio,
-            vquality: normalized.resolution.replace(/p$/i, ""),
+            videoSeconds: (cost?.protocol || channel.interfaceType) === "fisher-h3-video" && explicit.videoSeconds !== undefined ? String(explicit.videoSeconds) : normalized.seconds,
+            size: (cost?.protocol || channel.interfaceType) === "fisher-h3-video" && explicit.size !== undefined ? explicit.size : normalized.ratio,
+            vquality: (cost?.protocol || channel.interfaceType) === "fisher-h3-video" && explicit.vquality !== undefined ? explicit.vquality : normalized.resolution.replace(/p$/i, ""),
             videoGenerateAudio: source("videoGenerateAudio") ?? String(profile.video.generateAudio.default),
             videoWatermark: source("videoWatermark") ?? String(profile.video.watermark.default),
         };
