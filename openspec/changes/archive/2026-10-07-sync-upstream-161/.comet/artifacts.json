@@ -1,0 +1,9 @@
+{
+  "openspec_proposal": "openspec/changes/sync-upstream-161/proposal.md",
+  "openspec_design": "openspec/changes/sync-upstream-161/design.md",
+  "openspec_tasks": "openspec/changes/sync-upstream-161/tasks.md",
+  "openspec_delta_spec": "openspec/changes/sync-upstream-161/specs/upstream-sync/spec.md",
+  "handoff_context": "openspec/changes/sync-upstream-161/.comet/handoff/design-context.json",
+  "handoff_markdown": "openspec/changes/sync-upstream-161/.comet/handoff/design-context.md",
+  "archive_directory": "openspec/changes/archive/2026-10-07-sync-upstream-161"
+}

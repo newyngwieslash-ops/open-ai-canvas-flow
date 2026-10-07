@@ -2,6 +2,7 @@
 change: sync-upstream-161
 design-doc: docs/superpowers/specs/2026-10-07-sync-upstream-161-design.md
 base-ref: b355df6192a079158bf262501966f7c2106a15a9
+archived-with: 2026-10-07-sync-upstream-161
 ---
 
 # sync-upstream-161（上游 v1.6.1 融合）实施计划
