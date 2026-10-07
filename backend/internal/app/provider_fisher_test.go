@@ -114,6 +114,13 @@ func TestFisherInvalidInputStopsBeforeCreate(t *testing.T) {
 		"control needs driver": func(i *canvasGenerationInput) {
 			i.Metadata["providerOptions"] = map[string]interface{}{"fisher-h3-video": map[string]interface{}{"audio_control": map[string]interface{}{"mode": "reference_only"}}}
 		},
+		"negative driver": func(i *canvasGenerationInput) {
+			i.ReferenceAudios = []providerMedia{{ID: "drive", URL: "https://example.com/d.wav", DurationMs: -1}}
+			i.Metadata["providerOptions"] = map[string]any{"fisher-h3-video": map[string]any{"driveAudioId": "drive"}}
+		},
+		"negative video": func(i *canvasGenerationInput) {
+			i.ReferenceVideos = []providerMedia{{ID: "clip", URL: "https://example.com/v.mp4", DurationMs: -1}}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -258,6 +265,7 @@ func TestFisherLegalMixedCapacityAndControlDefaults(t *testing.T) {
 		input.ReferenceAudios = append(input.ReferenceAudios, providerMedia{ID: fmt.Sprintf("audio-%d", n), URL: "https://example.com/a.wav"})
 	}
 	input.Metadata["providerOptions"] = map[string]any{"fisher-h3-video": map[string]any{"driveAudioId": "audio-3"}}
+	input.ReferenceVideos = []providerMedia{{ID: "unknown-duration", URL: "https://example.com/v.mp4"}}
 	request := protocolRequestFromInput(input)
 	if err := validateFisherH3Input(input, request); err != nil {
 		t.Fatalf("legal mixed request rejected: %v", err)

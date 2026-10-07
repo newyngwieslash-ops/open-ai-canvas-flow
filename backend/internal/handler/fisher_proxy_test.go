@@ -136,3 +136,54 @@ func TestFisherSystemRejectsInvalidDuration(t *testing.T) {
 		t.Fatal("ordinary 60 second task passed authorization validation")
 	}
 }
+
+func TestFisherCustomMissingBodyTaskIDReturnsRecoverableError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, scenario := range []struct {
+		name, protocol, body, taskHeader string
+		contentType                      string
+		upstreamStatus, wantStatus       int
+	}{
+		{"trace_only", "fisher-h3-video", `{"request_id":"trace-only"}`, "existing-fisher-task", "application/json", 200, 502},
+		{"accepted_without_id", "fisher-h3-video", `{"request_id":"trace-only"}`, "", "application/json", 202, 502},
+		{"unsafe_body_id", "fisher-h3-video", `{"task_id":"../unsafe"}`, "existing-fisher-task", "application/json", 200, 502},
+		{"key_header", "fisher-h3-video", `{"request_id":"trace-only"}`, "test-key", "application/json", 200, 502},
+		{"valid_id", "fisher-h3-video", `{"task_id":"accepted-fisher-task"}`, "", "application/json", 200, 200},
+		{"other_protocol", "minimax-video", `{"request_id":"trace-only"}`, "existing-fisher-task", "application/json", 200, 200},
+		{"fisher_sse", "fisher-h3-video", "data: {}\n\n", "existing-fisher-task", "text/event-stream", 200, 502},
+		{"fisher_sse_no_header", "fisher-h3-video", "data: {}\n\n", "", "text/event-stream", 200, 502},
+		{"other_protocol_sse", "minimax-video", "data: {}\n\n", "existing-fisher-task", "text/event-stream", 200, 200},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			posts := 0
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("unexpected method %s", r.Method)
+				}
+				posts++
+				w.Header().Set("Content-Type", scenario.contentType)
+				w.Header().Set("X-Task-Id", scenario.taskHeader)
+				w.WriteHeader(scenario.upstreamStatus)
+				fmt.Fprint(w, scenario.body)
+			}))
+			defer upstream.Close()
+			useCustomRelayTestClient(t, upstream.Client())
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/ai/custom", strings.NewReader(`{"model":"MiniMax-H3","content":[{"type":"text","text":"prompt"}],"resolution":"768P","duration":5,"ratio":"16:9"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Header.Set("Authorization", "Bearer test-key")
+			c.Request.Header.Set("X-Canvas-Upstream-URL", upstream.URL+"/v2/video_generation")
+			c.Request.Header.Set("X-Canvas-Upstream-Protocol", scenario.protocol)
+			prepareRelayTestRequest(t, c.Request)
+			proxyCustomRelayRequest(c, defaultCustomRelayTestPolicy())
+			wantHeader := scenario.taskHeader
+			if wantHeader == "test-key" {
+				wantHeader = ""
+			}
+			if posts != 1 || rec.Code != scenario.wantStatus || rec.Header().Get("X-Task-Id") != wantHeader {
+				t.Fatalf("custom task cannot reach client recovery: posts=%d status=%d headers=%v body=%s", posts, rec.Code, rec.Header(), rec.Body.String())
+			}
+		})
+	}
+}

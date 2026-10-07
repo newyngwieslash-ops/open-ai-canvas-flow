@@ -8,14 +8,14 @@ subagent_dispatch: null
 tdd_mode: tdd
 review_mode: standard
 isolation: worktree
-verify_mode: null
+verify_mode: full
 auto_transition: true
 base_ref: 639c53e3d9970a109e6e1542572fc9c022642548
 design_doc: docs/openspec/changes/fisher-h3-video/design.md
 plan: docs/superpowers/plans/2026-10-07-fisher-h3-video.md
 verify_result: pending
-verify_failures: 0
-verification_report: null
+verify_failures: 1
+verification_report: docs/superpowers/reports/2026-10-07-fisher-h3-video-verify.md
 branch_status: pending
 created_at: 2026-10-07
 verified_at: null
@@ -28,4 +28,4 @@ handoff_hash: 97420bcd455542cdd73a065b0591c72fabe5661a85a4529b59a1a889fc6fecf8
 classic_profile: full
 classic_migration: 1
 run_id: 0762992d-17ea-4ab2-bf8e-f6bc5df97eda
-check_epoch: 3
+check_epoch: 5

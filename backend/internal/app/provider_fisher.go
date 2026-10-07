@@ -194,8 +194,8 @@ func validateFisherH3Request(request protocol.GenerationRequest) error {
 			return fail("音频角色无效")
 		}
 		if audio.Role == "drive_audio" {
-			if ms, ok := fisherNumber(audio.Metadata["durationMs"]); ok && ms > 60000 {
-				return fail("驱动音频最长 60 秒")
+			if ms, ok := fisherNumber(audio.Metadata["durationMs"]); ok && (ms < 0 || ms > 60000) {
+				return fail("驱动音频时长无效或超过 60 秒")
 			}
 		}
 	}
@@ -235,7 +235,7 @@ func validateFisherH3Request(request protocol.GenerationRequest) error {
 				return fail("视频起始偏移必须为非负有限数")
 			}
 		}
-		if ms, ok := fisherNumber(video.Metadata["durationMs"]); ok && ms > 0 {
+		if ms, ok := fisherNumber(video.Metadata["durationMs"]); ok && ms != 0 {
 			seconds := ms / 1000
 			if seconds < 2 || seconds > 15 || seconds-start < 2 || seconds-start > 15 {
 				return fail("参考视频和偏移后的剩余视频须为 2–15 秒")

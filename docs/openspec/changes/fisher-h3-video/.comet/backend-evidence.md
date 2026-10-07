@@ -68,3 +68,23 @@ go test ./internal/app ./internal/handler ./internal/generation ./cmd/server -ru
 ```
 
 结果：app、handler、cmd/server 全部通过；generation 包通过编译，插件缺失测试在 app 实际运行。`git diff --check -- backend` 通过。完整系统中转测试只为隔离 HTTP 响应合同在测试数据库禁用积分，没有写入项目账号配置或生产数据库。
+
+## 最终集成审查返回 Build 后的有界修复
+
+自定义中转也存在有效 JSON 缺少有效 task_id 的 HTTP 2xx 成功分支，导致前端不能消费成功响应头。新增 `TestFisherCustomMissingBodyTaskIDReturnsRecoverableError`，实际调用 custom handler 和 TLS 模拟上游。
+
+实际 RED：`go test ./internal/handler -run TestFisherCustomMissingBodyTaskIDReturnsRecoverableError -count=1`。仅 request_id、有危险 task_id、任务头含 Key 时均 POST=1、返回 200；无头的 accepted 响应 POST=1、返回 202。合法任务编号和非 Fisher 协议控制用例原本通过。
+
+修复仅限定明确的 Fisher 协议 POST 创建：复用系统中转的 task_id 检查，在正文脱敏后将缺少有效编号的成功 JSON 转为结构化 502，保留已过滤的 X-Task-Id。无有效任务头时同样返回不确定失败，不产生第二次 POST。解析实际 URL 路径识别创建，继续保留现有出站安全校验、Key 过滤和其他协议的响应行为。
+
+同轮非阻塞边界补充：已有非法输入表增加 negative_driver、negative_video。实际 RED 命令 `go test ./internal/app -run '^TestFisherInvalidInputStopsBeforeCreate/(negative_driver|negative_video)$' -count=1` 中，两者都到达 BuildCreate（calls=1）。最小修复拒绝已知负驱动时长，参考视频非零时长均执行 2–15 秒检查；0/缺省仍表示未知。合法混合输入检查增加缺省时长视频，证明未知时长仍接受。
+
+最终 GREEN：`go test ./internal/app ./internal/handler -run 'TestFisher|TestCustomRelay|TestAuthorizeCustomRelay|TestSystemProxy' -count=1`，app、handler 均通过。custom 响应检查的六种场景全部通过，分别确认只有一次上游 POST、有效恢复头保留、Key 头过滤、无头不伪成功、合法编号成功以及非 Fisher 语义保持。
+
+同一恢复问题的 SSE 补查：成功的 text/event-stream 响应会在正文 task_id 检查前返回 200。真实 custom handler 检查增加 Fisher SSE 有头、无头及非 Fisher SSE 对照。
+
+实际 RED：`go test ./internal/handler -run 'TestFisherCustomMissingBodyTaskIDReturnsRecoverableError/(fisher_sse|other_protocol_sse)' -count=1`。两个 Fisher 场景均 POST=1、返回 200/SSE；有头场景保留 existing-fisher-task，但无法触发前端的错误头恢复。非 Fisher SSE 对照通过。
+
+最小修复在流式响应发送前拒绝明确 Fisher 创建的非 JSON 成功响应，返回结构化 502；已有安全任务头保留，无任务头也不伪成功，不重建付费任务。其他协议 SSE 仍原样成功返回。
+
+SSE 修复 GREEN：`go test ./internal/handler -run 'TestFisher|TestCustomRelay|TestAuthorizeCustomRelay|TestSystemProxy' -count=1`，handler 通过（4.430 秒），含九种真实 custom 响应场景。`git diff --check -- backend/internal/handler/custom_proxy.go backend/internal/handler/fisher_proxy_test.go docs/openspec/changes/fisher-h3-video/.comet/backend-evidence.md` 通过。

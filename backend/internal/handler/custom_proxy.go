@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -141,12 +142,19 @@ func proxyCustomRelayRequestWithService(c *gin.Context, policy service.RuntimeRe
 func writeCustomRelayResponse(c *gin.Context, svc *service.Service, resp *http.Response, apiKey string, responseLimit int64, allowBinary bool) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
-	if c.Request.Method == http.MethodPost && strings.HasSuffix(c.GetHeader("X-Canvas-Upstream-URL"), "/v2/video_generation") {
+	target, _ := url.Parse(c.GetHeader("X-Canvas-Upstream-URL"))
+	videoCreate := c.Request.Method == http.MethodPost && target != nil && strings.HasSuffix(target.Path, "/v2/video_generation")
+	fisherCreate := videoCreate && c.GetHeader("X-Canvas-Upstream-Protocol") == "fisher-h3-video"
+	if videoCreate {
 		copyFisherTaskHeader(c, resp, apiKey)
 	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		writeCustomRelayError(c, svc, resp, apiKey, mediaType)
+		return
+	}
+	if fisherCreate && mediaType != "application/json" && !strings.HasSuffix(mediaType, "+json") {
+		fail(c, http.StatusBadGateway, errors.New(userFacingRelayError(svc, errors.New("Fisher-H3 创建响应不是 JSON；请查询已有任务并核对费用"))))
 		return
 	}
 	if mediaType == "text/event-stream" {
@@ -177,6 +185,10 @@ func writeCustomRelayResponse(c *gin.Context, svc *service.Service, resp *http.R
 		return
 	}
 	body = redactRelaySecret(body, apiKey)
+	if fisherCreate && fisherProxyTaskID(body, "") == "" {
+		fail(c, http.StatusBadGateway, errors.New(userFacingRelayError(svc, errors.New("Fisher-H3 创建响应缺少有效 task_id；请查询已有任务并核对费用"))))
+		return
+	}
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", body)
 }
 
