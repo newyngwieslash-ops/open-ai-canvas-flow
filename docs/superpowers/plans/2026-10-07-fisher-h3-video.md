@@ -2,6 +2,7 @@
 change: fisher-h3-video
 design-doc: docs/openspec/changes/fisher-h3-video/design.md
 base-ref: 639c53e3d9970a109e6e1542572fc9c022642548
+archived-with: 2026-10-07-fisher-h3-video
 ---
 
 # Fisher-H3 实施计划

@@ -2,6 +2,8 @@
 comet_change: fisher-h3-video
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-10-07-fisher-h3-video
+status: final
 ---
 
 # Design
