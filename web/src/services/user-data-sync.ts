@@ -948,11 +948,6 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
         acknowledgedAssets.set(source.id, source);
         verifiedAssets.add(source.id);
     }
-    if (conflictedAssetIds.size) {
-        // 被隔离素材之外的素材与画布都已推送完成；此处收尾报告，避免静默丢失用户数据。
-        const names = [...new Set(conflictedAssetTitles.values())].join("、");
-        throw new Error(`素材远端版本已变化，已停止覆盖：${names}。其余内容已保存，请重新打开素材库后处理这些素材`);
-    }
     const errors: unknown[] = [];
     for (const source of dirtyProjects) {
         const keysToUpload = collectLocalMediaKeys(source);
@@ -1071,6 +1066,12 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     }
     if (errors.length) throw errors[0];
     if (dirtyProjects.length) void appQueryClient.invalidateQueries({ queryKey: ["canvas-library"] });
+    if (conflictedAssetIds.size) {
+        // 收尾报告放在素材与画布推送完成之后：被隔离素材之外的内容已真实落库，
+        // 报错文案才与实际执行顺序一致，避免用户误以为画布改动已丢失。
+        const names = [...new Set(conflictedAssetTitles.values())].join("、");
+        throw new Error(`素材远端版本已变化，已停止覆盖：${names}。其余内容已保存，请重新打开素材库后处理这些素材`);
+    }
 }
 
 function assetRemoteVersionConflict() {

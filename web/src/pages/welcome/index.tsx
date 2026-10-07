@@ -59,11 +59,14 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
     const [playing, setPlaying] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
     const chapters = getWelcomeChapters(brandName);
+    // 站点配置的 SEO 标题优先（上游 v1.6.1 修复意图）；未配置时回退到展示品牌后缀标题。
+    const seoTitle = useAppearanceStore((state) => state.appearance.seoTitle);
+    const welcomeTitle = seoTitle || `${brandName} · 让一个故事从文字走向银幕`;
 
-    // 品牌标题独立成 effect，避免把品牌依赖塞进滚动/媒体监听 effect 导致监听反复重装。
+    // 标题独立成 effect，避免把品牌/SEO 依赖塞进滚动/媒体监听 effect 导致监听反复重装。
     useEffect(() => {
-        document.title = `${brandName} · 让一个故事从文字走向银幕`;
-    }, [brandName]);
+        document.title = welcomeTitle;
+    }, [welcomeTitle]);
     useEffect(() => {
         const media = window.matchMedia("(prefers-reduced-motion: reduce)");
         const onMotion = () => setReduced(media.matches);
