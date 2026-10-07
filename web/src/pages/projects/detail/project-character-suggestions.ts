@@ -203,6 +203,10 @@ export function buildCharacterSuggestionPrompt(input: { characterName: string; e
         "6. 每个人物 12 个字段必须齐全，字段键只能来自以下白名单：",
         fieldKeysJson,
         "   aliases 的 value 是字符串数组；其他字段 value 都是字符串。",
+        // 真实模型回归（deepseek-v4.1-flash，任务 db3f3a09）：schema 的 {"value":"..."} 对所有字段
+        // 演示了字符串占位，模型跟着示例把 fields.aliases.options[].value 输出成字符串而被严格解析
+        // 拒绝。数组与字符串的区分必须在示例里就地演示，不能只靠 prose 规则。
+        "   示例：fields.aliases 的 options[].value 必须是字符串数组（如 [\"玛尔虎\",\"老虎\"]）；其他字段 options[].value 是单个字符串（如 \"羌寨猎户首领\"）。",
         "7. fields 每项 status 取值：suggested（恰好一个选项）、unspecified（options 为空数组）、conflict（至少两个选项）。",
         "8. 剧本未写明的信息（身高、音色等）标 unspecified，不要编造；不同章节的阶段性外貌/服装差异用 conflict 保留多选项，不要合并成永久特征。",
         "",

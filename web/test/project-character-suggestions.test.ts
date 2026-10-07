@@ -588,6 +588,12 @@ describe("buildCharacterSuggestionPrompt 不可信数据边界", () => {
         });
         // 白名单必须逐字来自 character-script-suggestions 的 characterFieldKeys，不允许模块私拷贝。
         expect(prompt).toContain(JSON.stringify([...characterFieldKeys]));
+        // aliases 数组示例锁（真实模型回归，deepseek-v4.1-flash 任务 db3f3a09）：输出 schema 的
+        // {"value":"..."} 对全部字段（含 aliases）演示了字符串占位，模型按示例而非 prose 规则输出
+        // 字符串别名导致严格解析整轮拒绝。prompt 必须内嵌数组与字符串的双示例，示例字面量
+        // 在此逐字锁定（示例漂移即失败）。
+        expect(prompt).toContain('["玛尔虎","老虎"]');
+        expect(prompt).toContain("羌寨猎户首领");
     });
 });
 

@@ -147,6 +147,14 @@ git log 5f17fc92..HEAD --oneline                            # 提交序列
 - M20 查重扫描未传 signal（seq 丢弃响应兜底）。**未修复，待 triage**。
 - M21 `requestSave` onSave 内 validateFields 微秒级关窗窗口（既有模式，TypeError 非静默错写）。**既有模式，待 triage**。
 
+### 4.4 真实模型验收发现与修复（2026-10-07）
+
+- **发现**：真实模型验收（deepseek-v4.1-flash，任务 `db3f3a09a06eaf196e9316170869f275`，见 `.local/project-workbench-debug/open_ai_canvas.db`）返回中 `fields.aliases.options[].value` 为字符串 `"玛尔虎"` 而非字符串数组，严格解析按合同报「第 1 个人物不合法：aliases 必须是字符串数组」整轮拒绝；响应其余部分（逐字引用、fact/production basis、人物级 aliases 数组）全部合规。
+- **根因**：prompt 规则 6 prose 写明「aliases 的 value 是字符串数组」，但输出 schema 示例把所有字段（含 aliases）的 options[].value 演示为字符串占位 `{"value":"..."}`；模型跟随示例而非 prose 规则。
+- **修复**：仅改 `buildCharacterSuggestionPrompt`（`web/src/pages/projects/detail/project-character-suggestions.ts`，prompt 文本）——规则 6 后新增一行数组/字符串双示例：`fields.aliases 的 options[].value 必须是字符串数组（如 ["玛尔虎","老虎"]）；其他字段 options[].value 是单个字符串（如 "羌寨猎户首领"）`。解析/校验合同未放宽，无 lenient coercion，未改 session/UI/后端。
+- **防漂移**：`web/test/project-character-suggestions.test.ts` 漂移锁测试（「prompt 字段白名单与 characterFieldKeys 单一来源一致」）新增示例字面量断言（TDD：先 RED 后 GREEN）。
+- **验证**：专项 `bun test test/project-character-suggestions.test.ts` 187 pass / 0 fail；`bun run build`、`bun run lint` 退出码 0（仅预存 chunk >500kB 警告，M7）。修复后的 prompt 待真实模型重新验收（pending-test.mdx「真实模型合同验收」项已注明）。
+
 ## 5. 确认未改变的部分（附证据）
 
 | 确认项 | 证据 |
