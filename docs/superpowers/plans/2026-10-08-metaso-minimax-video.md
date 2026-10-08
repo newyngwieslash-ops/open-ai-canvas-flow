@@ -2,6 +2,7 @@
 change: metaso-minimax-video
 design-doc: docs/superpowers/specs/2026-10-08-metaso-minimax-video-design.md
 base-ref: 2bf738bcfe86f71fdfc017547181da4a49bbb7aa
+archived-with: 2026-10-08-metaso-minimax-video
 ---
 
 # 密塔 H3（Metaso MiniMax V2 中转）视频渠道实施计划
