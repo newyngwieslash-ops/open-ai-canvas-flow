@@ -63,7 +63,8 @@
 | `response.message` | `{"$coalesce":[{"$ref":"response.task.error.message"},{"$ref":"response.error.message"},{"$ref":"response.base_resp.status_msg"},{"$ref":"response.task.message"}]}` |
 | `response.videos` | `{"$ref":"response.task.content.url"}` |
 | `response.errorPaths[0]` | `"task.error.code"` |
-| `response.errorPaths[1]` | `"error.type"` |
+| `response.errorPaths[1]` | `"base_resp.status_code"` |
+| `response.errorPaths[2]` | `"error.code"` |
 | `response.resultEphemeral` | `true` |
 
 ## 响应与错误
@@ -756,7 +757,8 @@
           },
           "errorPaths": [
             "task.error.code",
-            "error.type"
+            "base_resp.status_code",
+            "error.code"
           ],
           "resultEphemeral": true
         }

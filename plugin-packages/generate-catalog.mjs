@@ -205,7 +205,7 @@ function add(spec) {
       taskId: coalesce(ref("response.task_id"), ref("taskId")),
       status: coalesce(ref("response.task.status"), "pending"),
       message: coalesce(ref("response.task.error.message"), ref("response.error.message"), ref("response.base_resp.status_msg"), ref("response.task.message")),
-      videos: ref("response.task.content.url"), errorPaths: ["task.error.code", "error.type"], resultEphemeral: true
+      videos: ref("response.task.content.url"), errorPaths: ["task.error.code", "base_resp.status_code", "error.code"], resultEphemeral: true
     }
   });
 }
