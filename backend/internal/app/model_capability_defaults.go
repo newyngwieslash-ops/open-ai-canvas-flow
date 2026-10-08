@@ -115,6 +115,17 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Duration = VideoDurationConfig{Selection: "range", Min: 4, Max: 60, Step: 1, Default: 5}
 		video.Ratios = []string{"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9", "adaptive", "auto"}
 		video.Resolutions, video.DefaultResolution = []string{"480P", "768P", "1080P"}, "768P"
+	case "metaso-minimax-video":
+		// 密塔与官方 minimax-video 同构：时长用 enum 逐值列出而非 range；Operations 只加
+		// reference_to_video（audio_to_video 依赖 Fisher 式驱动音频语义，密塔没有）。
+		video.Operations = append(video.Operations, "reference_to_video")
+		video.References.PromptMaxChars = 10000
+		video.References.MaxImages, video.References.MaxVideos, video.References.MaxAudios = 9, 3, 3
+		video.References.MaxVideoBytes, video.References.MaxAudioBytes = 50*1024*1024, 15*1024*1024
+		video.References.MaxVideoDuration, video.References.MaxAudioDuration = 15, 15
+		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, Default: 5}
+		video.Ratios = []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+		video.Resolutions, video.DefaultResolution = []string{"480P", "768P", "1080P", "2K"}, "768P"
 	case model.ChannelInterfaceVolcengineJiMengVideo:
 		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{5, 10}, Default: 5}
 		video.Resolutions = []string{"720p"}
