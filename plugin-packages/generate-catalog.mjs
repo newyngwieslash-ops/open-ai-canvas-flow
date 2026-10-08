@@ -163,6 +163,53 @@ function add(spec) {
   });
 }
 
+{
+  const metasoParams = videoParams
+    .filter(([name]) => !["generateAudio", "watermark"].includes(name))
+    .map(([name, type, required, mapping, description]) => [name, type, required || ["duration", "resolution"].includes(name), mapping, description]);
+  const metasoImageRole = coalesce(ref("media.role"), "first_frame");
+  const metasoAudioRole = coalesce(ref("media.role"), "reference_audio");
+  const metasoCountRole = (path, role, fallback) => len(filter(ref(path), "media", eq(coalesce(ref("media.role"), fallback), role)));
+  const metasoRatios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+  const metasoHasReferences = gt(addNumbers(len(ref("request.images")), len(ref("request.videos")), len(ref("request.audios"))), 0);
+  const metasoValidEvery = (path, condition) => eq(len(filter(ref(path), "media", condition)), len(ref(path)));
+  const metasoIncludes = (value, values) => ({ $in: [value, values] });
+  add({
+    id: "metaso-minimax-video", providerId: "metaso-minimax-video", name: "MiniMax-H3 (Metaso)", vendor: "Metaso", capability: "video",
+    baseUrl: "https://metaso.cn/api/minimax", auth: bearer, params: metasoParams, requiresPublicMediaUrls: true,
+    workflows: [{ id: "metaso-minimax-video", label: "MiniMax-H3 (Metaso)", providerId: "metaso-minimax-video", capability: "video", parameters: parameters(metasoParams), defaults: { model: "MiniMax-H3", resolution: "768P", duration: 5, aspectRatio: "16:9" } }],
+    notes: "密塔（metaso.cn）是 MiniMax V2 协议中转，创建/查询端点与官方 MiniMax 一致，差异仅在此 Base URL 与参数档位。模型名称精确为 MiniMax-H3，时长 4–15 秒整数，分辨率 480P/768P/1080P/2K（按大写原样透传，2K 为密塔开放档位），六档固定比例；纯文本（无任何参考素材）必须指定固定比例，参考素材存在时缺省 16:9。参考图最多 9 张且首帧至多 1 张（不支持尾帧），参考视频 3 条、参考音频 3 条。密塔不接收 audio_control、start_time_seconds、generate_audio 与 aigc_watermark，插件从源头不发送这些字段。创建只读取 task_id；超时、5xx、无效响应不自动重建，宿主保留 X-Task-Id 后查询。真实 Key 的付费生成尚待用户验收。",
+    validations: [
+      { assert: eq(ref("request.model"), "MiniMax-H3"), message: "密塔 H3 模型必须为 MiniMax-H3。" },
+      { assert: and(gt(len(trim(ref("request.prompt"))), 0), lte(len(ref("request.prompt")), 10000)), message: "密塔 H3 提示词不能为空且最多 10000 字符。" },
+      { assert: metasoIncludes(lower(ref("request.resolution")), ["480p", "768p", "1080p", "2k"]), message: "密塔 H3 分辨率仅支持 480P、768P、1080P、2K。" },
+      { assert: and(gte(ref("request.duration"), 4), lte(ref("request.duration"), 15)), message: "密塔 H3 时长为 4–15 秒整数。" },
+      { assert: metasoIncludes(coalesce(ref("request.aspectRatio"), conditional(metasoHasReferences, "16:9", "")), metasoRatios), message: "密塔 H3 需要固定比例；无参考素材时必须显式指定。" },
+      { assert: and(lte(metasoCountRole("request.images", "reference_image", "first_frame"), 9), lte(metasoCountRole("request.images", "first_frame", "first_frame"), 1)), message: "密塔 H3 最多 9 张参考图及 1 张首帧。" },
+      { assert: metasoValidEvery("request.images", metasoIncludes(metasoImageRole, ["reference_image", "first_frame"])), message: "密塔 H3 图片角色仅支持 reference_image 和 first_frame。" },
+      { assert: and(lte(len(ref("request.videos")), 3), metasoValidEvery("request.videos", eq(coalesce(ref("media.role"), "reference_video"), "reference_video"))), message: "密塔 H3 最多 3 条 reference_video。" },
+      { assert: and(lte(len(ref("request.audios")), 3), metasoValidEvery("request.audios", metasoIncludes(metasoAudioRole, ["reference_audio"]))), message: "密塔 H3 最多 3 条 reference_audio。" }
+    ],
+    create: jsonCreate("/v2/video_generation", {
+      model: ref("request.model"),
+      content: { $concatArrays: [
+        [{ type: "text", text: ref("request.prompt") }],
+        map(sorted(ref("request.images")), "media", { type: "image_url", image_url: { url: ref("media.value") }, role: metasoImageRole }),
+        map(sorted(ref("request.videos")), "media", { type: "video_url", video_url: { url: ref("media.value") }, role: "reference_video" }),
+        map(sorted(ref("request.audios")), "media", { type: "audio_url", audio_url: { url: ref("media.value") }, role: metasoAudioRole })
+      ] },
+      resolution: { $upper: ref("request.resolution") }, duration: ref("request.duration"), ratio: coalesce(ref("request.aspectRatio"), "16:9")
+    }),
+    poll: { method: "GET", path: "/v2/query/video_generation/{{taskId}}" },
+    response: {
+      taskId: coalesce(ref("response.task_id"), ref("taskId")),
+      status: coalesce(ref("response.task.status"), "pending"),
+      message: coalesce(ref("response.task.error.message"), ref("response.error.message"), ref("response.base_resp.status_msg"), ref("response.task.message")),
+      videos: ref("response.task.content.url"), errorPaths: ["task.error.code", "error.type"], resultEphemeral: true
+    }
+  });
+}
+
 add({
   id: "openai-chat-completions", providerId: "chat-completion", name: "OpenAI Chat Completions", vendor: "OpenAI", capability: "text",
   baseUrl: "https://api.openai.com", auth: bearer, params: textParams,
