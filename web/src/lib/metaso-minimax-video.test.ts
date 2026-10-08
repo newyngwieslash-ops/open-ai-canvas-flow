@@ -42,8 +42,9 @@ test("无 role 的图片缺省 first_frame，参考图允许 reference_image", (
         ...base,
         images: [{ id: "a", url: "https://media.example.com/x.jpg" }, { id: "b", url: "https://media.example.com/y.jpg", role: "reference_image" }],
     }) as Record<string, unknown>;
-    assert.equal(payload.content[1].role, "first_frame");
-    assert.equal(payload.content[2].role, "reference_image");
+    const content = payload.content as Array<{ role?: string }>;
+    assert.equal(content[1].role, "first_frame");
+    assert.equal(content[2].role, "reference_image");
 });
 
 test("档位归一与拒绝：480p 转大写、2K 原样、2160p/adaptive/3 秒/16 秒/超长提示词拒绝", () => {
