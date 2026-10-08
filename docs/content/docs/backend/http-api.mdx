@@ -11,6 +11,10 @@ description: 信封、错误码与 OpenAPI
 
 Fisher 创建响应中的有效 `X-Task-Id` 会保留给客户端和已有任务恢复流程，不接受追踪 `request_id` 或包含当前 Key 的编号。即使响应体损坏或缺少 task_id，也不能丢弃已受理编号或自动重新 POST；响应不足以确认创建结果时返回错误并保留编号供查询。跨域请求允许协议身份头并向浏览器暴露 `X-Task-Id`；这不改变业务 API 的统一信封合同。
 
+## 密塔 H3 视频中转
+
+`metaso-minimax-video` 是 MiniMax V2 协议中转插件：创建 `POST {baseUrl}/v2/video_generation`、查询 `GET /v2/query/video_generation/{taskId}`，Bearer API Key 鉴权，默认 Base URL 为 `https://metaso.cn/api/minimax`。参数档位：模型固定 `MiniMax-H3`；分辨率 480P/768P/1080P/2K（默认 768P，按大写原样透传，2K 为密塔开放档位）；时长 4–15 整数秒（默认 5）；比例 21:9/16:9/4:3/1:1/3:4/9:16（默认 16:9，无任何参考素材时必须显式指定）。参考素材以公网 URL 提交（`requiresPublicMediaUrls`），角色映射为 first_frame / reference_image / reference_video / reference_audio，首帧至多 1 张、参考图 9 张、参考视频与参考音频各 3 条。密塔不接收 `audio_control`、`start_time_seconds`、`generate_audio` 与 `aigc_watermark`，插件从源头不发送。创建只读取 `task_id`；查询响应按 `task.status` 归一，成片 URL 取自 `task.content.url` 并由宿主立即下载持久化（`resultEphemeral`）。错误消息按 `task.error.message` → `error.message` → `base_resp.status_msg` → `task.message` 兜底。
+
 ## 注册邮箱等价检查
 
 公开注册与邮箱绑定的唯一性检查将 `gmail.com` 和 `googlemail.com` 视为同一域，移除本地部分的点及 `+` 后缀。例如 `a.b+x@googlemail.com` 与 `ab@gmail.com` 不允许创建两个账号。其他域保留点和 `+`；现有域名白名单规则保持不变。
