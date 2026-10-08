@@ -402,6 +402,15 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.defaultResolution = "768P";
         video.operations.push("reference_to_video", "audio_to_video");
     }
+    if (protocol === "metaso-minimax-video") {
+        Object.assign(video.references, { promptMaxChars: 10000, maxImages: 9, maxVideos: 3, maxVideoBytes: 50 * 1024 * 1024, maxVideoDurationSeconds: 15, maxAudios: 3, maxAudioBytes: 15 * 1024 * 1024, maxAudioDurationSeconds: 15 });
+        video.duration = { selection: "enum", values: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 };
+        video.ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+        video.defaultRatio = "16:9";
+        video.resolutions = ["480P", "768P", "1080P", "2K"];
+        video.defaultResolution = "768P";
+        video.operations.push("reference_to_video");
+    }
     if (protocol === "minimax-video") {
         video.references.maxImages = 9;
         video.references.maxImageBytes = 30 * 1024 * 1024;
