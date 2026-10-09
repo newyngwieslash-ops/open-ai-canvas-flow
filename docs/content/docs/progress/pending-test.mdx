@@ -5,6 +5,15 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 上游 v1.6.3 同步（2026-10-09）
+
+- 已在集成分支 `sync/upstream-1.6.3` 以 `git merge upstream/main`（`85c2aa17`，v1.6.2 + v1.6.3 共 24 个提交）并入本地 main；上游本次将 Go module 由 `infinite-canvas/backend` 改名为 `yingce/backend`，本地 Fisher 与资产表现相关的 5 个已跟踪文件及未跟踪的 `cmd/seed-metaso-channel-model` 已同步改写 import。
+- 自动验证：`go build ./...` 通过；`go test ./...` 全量 0 失败（上游 v1.6.1 时的 2 个预存失败测试在本机本次已通过）；`bun run build` 通过；Fisher 33 项与画布 mention 18 项专项测试通过。
+- 冲突解决（4 文件，均以上游重构结构为底座重植本地 Fisher-H3 逻辑）：`canvas-config-composer.tsx`（上游 mention 编辑器重构 + Fisher frameOptions/audioOptions/videoOptions）、`canvas-node-generation.ts`（Fisher driveAudioId 与首尾帧按资源 ID 反查）、`canvas-video-settings-popover.tsx`（上游共享 `CanvasSettingsPopover` + metadata 透传）、`canvas-project-generation.ts`（videoSeconds 的 fisher 免 normalize 例外）。
+- 合并引入新依赖：后端无新增；前端无新增 npm 依赖。
+- [ ] 浏览器验收合并带入的功能面：创作首页与灵感库、图片节点转 3D 预演台、画布同步版本冲突合并提示、模型可用性趋势；并确认本地 Fisher-H3 / 密塔 H3 在新画布组件上行为不变（提示词组装器、视频设置弹窗、参考图与驱动音频选择）。
+- [ ] 合并后重启本地 server 与 Vite（旧进程跑旧代码），确认启动无迁移报错（本版本无数据库 schema 变更）。
+
 ## 密塔 H3 视频生成（2026-10-08）
 
 - 已接入 `metaso-minimax-video` 独立插件与“添加密塔 H3”渠道预设，Key 留空；档位、content[] 组装、响应映射由插件契约测试与前端专项测试覆盖，没有调用真实上游，没有浏览器验收。

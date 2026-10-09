@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"infinite-canvas/backend/internal/protocol"
+	"yingce/backend/internal/protocol"
 )
 
 const fisherH3Protocol = "fisher-h3-video"

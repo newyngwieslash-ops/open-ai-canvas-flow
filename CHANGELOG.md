@@ -9,6 +9,8 @@
 - 画布同步：版本冲突先核对并尝试合并，本地保存与云端状态分开展示；未登录时生成结果留在本地，登录后再上传。
 - 升级注意：本版本无数据库 schema 变更。
 
+> 上游融合说明：本版本经集成分支 `sync/upstream-1.6.3` 以 `git merge upstream/main`（`85c2aa17`，含 v1.6.2）并入本仓库；上游将 Go module 改名为 `yingce/backend`，本地 Fisher/资产相关 Go 文件已同步改写 import。4 个冲突文件以上游重构为底座重植本地 Fisher-H3 逻辑，详见 `docs/content/docs/progress/pending-test.mdx`。提交仅推送本仓库 origin。
+
 ## v1.6.2
 
 - 优化前后端模块实现，统一图片、视频、流式响应和画布节点处理边界。
