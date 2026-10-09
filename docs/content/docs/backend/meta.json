@@ -4,6 +4,7 @@
   "defaultOpen": true,
   "pages": [
     "local-development",
+    "storage-configuration",
     "canvas-agent-appearance",
     "http-api",
     "code-map",

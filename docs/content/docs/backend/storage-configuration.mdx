@@ -1,0 +1,84 @@
+---
+title: 对象存储配置指南
+description: 七牛 Kodo 等对象存储的配置方法，解决参考素材公网 URL 问题
+---
+
+# 对象存储配置指南
+
+## 为什么需要对象存储
+
+需要向模型供应商提交参考素材的生成渠道（如密塔 H3、Fisher-H3、官方 MiniMax、Seedance 等）声明了 `requiresPublicMediaUrls`：参考图片/视频/音频必须以**供应商服务器能直接下载的公网 URL** 提交。
+
+使用服务器本地文件存储时，资源签名地址基于"服务器访问地址"生成，而本地开发环境（如 `localhost:8178`）对云端供应商不可达。任务会在素材展开阶段失败，错误形如：
+
+```
+生成参考素材地址失败：服务器本地存储尚未配置服务器访问地址，请设置 CANVAS_PUBLIC_BASE_URL
+或在存储设置中配置公网访问地址（或改用 OSS 存储）
+```
+
+两条解决路径（二选一即可）：
+
+1. **配置对象存储**（本文档）：新上传的素材直接落公有云桶，URL 天然公网可达；
+2. **内网穿透**：保持本地存储，用 cloudflared 等把后端映射为公网 HTTPS 地址，并设置 `CANVAS_PUBLIC_BASE_URL`（见[本地开发](/docs/backend/local-development)）。
+
+项目内置四种存储 Provider（`backend/internal/app/settings.go`）：
+
+| Provider | 代码值 | 说明 |
+| --- | --- | --- |
+| 阿里云 OSS | `aliyun` | V1 签名 |
+| 腾讯云 COS | `tencent` | Region 生成 Endpoint |
+| 七牛云 Kodo | `qiniu` | S3 兼容源站签名，免 CDN 可用 |
+| S3 兼容 | `s3` | AWS S3 / Cloudflare R2 / MinIO 等 |
+
+## 七牛 Kodo 配置指引（本地开发推荐）
+
+### 第一步：七牛控制台准备
+
+1. 注册/登录[七牛开发者平台](https://portal.qiniu.com)（实名认证后送免费额度）。
+2. 创建存储空间（Bucket）：
+   - 名称随意（如 `yingce-dev`），**访问控制选"私有"**——系统用 S3 签名 URL 读取对象，私有桶才是正确姿势；
+   - **区域**选离你近的（如"华东-浙江"，区域代码 `z0` / `cn-east-1`），区域代码后面要填；
+   - **不需要绑定 CDN 域名**——系统会用七牛的 S3 兼容源站域名（`<bucket>.s3.<region>.qiniucs.com`）直接签发公网下载 URL，供应商可直接拉取。
+3. 右上角头像 → 密钥管理 → 复制 `AK`（AccessKey）与 `SK`（SecretKey）。
+
+### 第二步：管理后台填写
+
+以管理员身份进入管理后台 → 存储设置，选择 **"七牛云 Kodo"** 模式：
+
+| 表单字段 | 填什么 | 说明 |
+| --- | --- | --- |
+| Bucket | `yingce-dev` | 必填；`PutQiniuObject` 校验非空 |
+| Region | `z0`（或 `cn-east-1`），与建桶区域一致 | 留空时默认 `cn-east-1` |
+| 上传 Endpoint | `https://up-z0.qiniup.com`（华东） | **必须与桶区域匹配**：华北 `up-z1`、华南 `up-z2`、北美 `up-na0`、新加坡 `up-as0` |
+| AK / SK | 你的密钥 | 缺一报"七牛云 Kodo 访问密钥不可用" |
+| 绑定域名（cdnBaseUrl） | **留空** | 留空走 S3 兼容源站签名，这是免 CDN 的关键 |
+| CDN 访问鉴权 | **"未配置"** | 只有绑定 CDN 域名时才需要选"七牛私有下载签名" |
+| 必须走 CDN | 关（"允许回源"） | — |
+| 允许模型输入代理 | 关即可 | 仅私有源站兜底用；七牛源站公网可达，用不上 |
+| PathPrefix | 留空（默认） | 对象键自动按 `users/<userId>/<kind>/` 组织 |
+
+保存后点**"测试连接"**——系统会实际试写一个对象验证连通性。
+
+### 第三步：验证链路
+
+1. 不需要重启后端（存储设置走数据库直查），刷新设置页确认状态为"已启用"。
+2. **关键限制：provider 决策发生在上传时**（`resource_store.go`）。只有保存设置**之后新上传**的资源才落对象存储（`provider=qiniu`）；**已存在的本地资源（`provider=local`）不会自动迁移**，它们给供应商的仍是本机签名地址，图生视频依旧会失败。
+3. 因此验证方式：在"角色与资产"页**重新上传一张参考图**（或给资产上传新版本），绑定到镜头后再点"生成镜头视频"。
+4. 成功特征：任务进入生成中；`api_call_logs` 表出现对供应商域名的创建请求。
+
+### 老素材处理
+
+配置对象存储前已上传的本地资源不会自动迁移。两种处理方式：
+
+- 重新上传素材（走对象存储）；
+- 或者临时使用内网穿透 + `CANVAS_PUBLIC_BASE_URL`（对本机签名地址生效）。
+
+## 实现要点（运维排查参考）
+
+- **URL 生成路径**：`resource_provider` 为对象存储的资源走 `SignedOriginObjectURL`（`backend/internal/storage/objects.go`）——七牛经 `signedQiniuS3ObjectURL` 签发 `<bucket>.s3.<region>.qiniucs.com` 公网地址；本地资源恒走本机签名（`DeliveryLocal`），由 `CANVAS_PUBLIC_BASE_URL` 或存储设置的"公网访问地址"补全前缀。
+- **配置优先级**：用户级 OSS（设置页"我的对象存储"）优先于平台级（管理后台存储设置）；用户选择 `s3` provider 还需平台开启 `allowUserS3`（`activeResourceOSSSetting`）。
+- **上传 Endpoint 与下载域名分离**：Endpoint 只用于服务端写入；读取出口按 CDN 绑定域名（`cdnAuthMode`）→ 源站签名（七牛恒可用）的顺序决策（`assets.ResolveAccess`）。
+- **常见错误对照**：
+  - "七牛云 Kodo 访问密钥不可用"：AK/SK 缺失；
+  - "请配置视频模型能力参数"：渠道模型能力配置缺失（与存储无关，检查渠道模型）；
+  - 素材地址仍指向 localhost：资源是 `provider=local` 的旧数据，重新上传。
