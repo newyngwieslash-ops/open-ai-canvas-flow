@@ -16,6 +16,7 @@ import { generationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import { nodeGenerationPrompt } from "@/lib/canvas/generation-contract";
 import { generationFailureMetadata } from "@/lib/generation-error";
 import { runGenerationConsumer } from "@/services/generation-consumer-lifecycle";
+import { hasRemoteUserDataSyncSession } from "@/services/user-data-sync";
 import { attachNodeEffectKey } from "@/services/generation-task-materializer";
 import { consumeCanvasGenerationContinuation } from "./use-canvas-operation-history";
 
@@ -516,9 +517,13 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
             }).catch((error) => {
                 autoSavedTaskIdsRef.current.delete(saveKey);
                 if (error instanceof Error && error.name === "AbortError") return;
+                const detail = error instanceof Error ? error.message : "未知错误";
+                const content = hasRemoteUserDataSyncSession()
+                    ? `生成结果已保留，本地素材已保存，云端项目资产稍后重试：${detail}`
+                    : "生成结果已保留在本地素材库，登录后会继续同步到云端";
                 message.warning({
                     key: `canvas-asset-sync:${projectId}`,
-                    content: error instanceof Error ? `生成结果已保留，但项目资产同步失败：${error.message}` : "生成结果已保留，但项目资产同步失败",
+                    content,
                     duration: 4,
                 });
             });

@@ -13,7 +13,7 @@ import { getImageBlob, resolveImageUrl, setImageBlob } from "@/services/image-st
 import { generationArtifactStorageKey, loadOrStoreGenerationArtifact } from "@/services/generation-artifact-sink";
 import { createProviderNeutralGenerationTaskEffectStore } from "@/services/provider-neutral-generation-effects";
 import { getCachedResourceBlob } from "@/services/resource-blob-cache";
-import { loadAssetsForUse, saveRemoteUserDataNow } from "@/services/user-data-sync";
+import { hasRemoteUserDataSyncSession, loadAssetsForUse, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { normalizeAssetCategory } from "@/lib/asset-category";
 import { runGenerationConsumer } from "@/services/generation-consumer-lifecycle";
@@ -120,8 +120,10 @@ async function persistCanvasNodeAsset(options: EnsureCanvasNodeAssetOptions): Pr
         store.updateAsset(asset.id, { category: declaredCategory });
         asset = useAssetStore.getState().assets.find((item) => item.id === asset?.id) || asset;
     }
+    // 生成结果先以本地资产完成闭环；未建立云端同步会话时，后续登录同步会
+    // 继续上传素材和画布，不能把一个可恢复的本地成功报告成失败。
+    if (!hasRemoteUserDataSyncSession()) return { assetId: asset.id, created, linkedToProject: false };
     if (!options.domainProjectId) {
-        // 个人画布也必须在返回成功前把素材提交到服务端，不能只依赖延迟自动同步。
         await saveRemoteUserDataNow();
         throwIfAborted(options.signal);
         return { assetId: asset.id, created, linkedToProject: false };

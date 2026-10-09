@@ -59,7 +59,7 @@ import { CanvasPrevisTemplateModal } from "@/components/canvas/previs/canvas-pre
 import { CanvasFileDropOverlay } from "@/components/canvas/canvas-file-drop-overlay";
 import { CanvasUploadModal } from "@/components/canvas/canvas-upload-modal";
 import { CanvasPanoramaConfigModal } from "@/components/canvas/canvas-panorama-config-modal";
-import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
+import { CanvasViewport } from "@/components/canvas/canvas-viewport";
 import { Minimap } from "@/components/canvas/canvas-mini-map";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { handleListGenerate } from "./list-mode-generator";
@@ -91,6 +91,8 @@ import {
     replaceCanvasReferenceMentions,
     type CanvasResourceReference,
 } from "@/lib/canvas/canvas-resource-references";
+import { buildImageToPrevisAgentPrompt, buildImageToPrevisDisplayText } from "@/lib/canvas/image-to-previs-agent";
+import type { CloudAgentMessagePresentation } from "@/services/cloud-agent-conversations";
 import { CanvasConnectionCreateMenu, CanvasNodePanelOverlay } from "@/components/canvas/canvas-workspace-overlays";
 import { CanvasOverlayLayerContainer, CanvasOverlayLayerProvider } from "@/components/canvas/canvas-overlay-layer";
 import { CanvasLeaferGraphicsLayer } from "@/components/canvas/canvas-leafer-graphics-layer";
@@ -196,10 +198,10 @@ export default function CanvasPage() {
 
     if (!mounted) return <CanvasRefreshShell />;
 
-    return <InfiniteCanvasPage />;
+    return <CanvasViewportPage />;
 }
 
-function InfiniteCanvasPage() {
+function CanvasViewportPage() {
     // 命令式确认必须走 App.useApp().modal；静态 Modal.confirm 拿不到主题和 App 上下文。
     const { message, modal } = App.useApp();
     const queryClient = useQueryClient();
@@ -241,7 +243,7 @@ function InfiniteCanvasPage() {
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     // 每次发送带递增 id：重复发送同一节点时文本相同，仍需触发一次追加。
-    const [agentPrefillRequest, setAgentPrefillRequest] = useState<{ id: number; text: string } | null>(null);
+    const [agentPrefillRequest, setAgentPrefillRequest] = useState<(CloudAgentMessagePresentation & { id: number; text: string; autoSubmit?: boolean; requiresVision?: boolean }) | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [canvasAppearance, setCanvasAppearance] = useState<CanvasAppearance>(() => canvasAppearanceForTheme(colorTheme));
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>(DEFAULT_CANVAS_BACKGROUND_MODE);
@@ -423,6 +425,30 @@ function InfiniteCanvasPage() {
         openAgent();
         setContextMenu(null);
     }, [agentMentionReferences, openAgent]);
+
+    const sendImageToPrevisAgent = useCallback((node: CanvasNodeData) => {
+        if (node.type !== CanvasNodeType.Image) return;
+        const reference = agentMentionReferences.find((item) => item.nodeId === node.id && item.kind === "image");
+        if (!reference) {
+            message.warning("这张图片暂时没有可供 Agent 引用的画布资源");
+            return;
+        }
+        if (!selectedNodeIdsRef.current.has(node.id)) {
+            const selection = new Set([node.id]);
+            selectedNodeIdsRef.current = selection;
+            setSelectedNodeIds(selection);
+        }
+        setAgentPrefillRequest((current) => ({
+            id: (current?.id ?? 0) + 1,
+            text: buildImageToPrevisAgentPrompt(reference),
+            displayText: buildImageToPrevisDisplayText(),
+            canvasReferenceNodeId: reference.nodeId,
+            autoSubmit: true,
+            requiresVision: true,
+        }));
+        openAgent();
+        setContextMenu(null);
+    }, [agentMentionReferences, message, openAgent]);
     // 修复素材关联仍遵守当前画布版本，不能替用户确认覆盖云端的新内容。
     const confirmForceSaveCanvas = useCallback(() => {
         modal.confirm({
@@ -2609,7 +2635,7 @@ function InfiniteCanvasPage() {
 
                         <div className="relative flex min-h-0 min-w-0 flex-1">
                             <div className="relative min-w-0 flex-1 overflow-hidden">
-                                <InfiniteCanvas
+                                <CanvasViewport
                                     interactive={!versions.preview}
                                     containerRef={containerRef}
                                     viewport={viewport}
@@ -2725,7 +2751,7 @@ function InfiniteCanvasPage() {
                                             />
                                         </CanvasNodeGraphContext.Provider>
                                     </CanvasNodeActionContext.Provider>
-                                </InfiniteCanvas>
+                                </CanvasViewport>
 
                                 <CanvasActiveTaskPanel tasks={activeTasks} onCancelTask={cancelCanvasTask} topInset={focusMode ? "var(--space-3)" : "var(--canvas-topbar-offset)"} />
 
@@ -2978,6 +3004,7 @@ function InfiniteCanvasPage() {
                                 setLightingNodeId((current) => (current === node.id ? null : node.id));
                             }}
                             onPanorama={openPanoramaConfig}
+                            onPrevis={sendImageToPrevisAgent}
                             onViewImage={(node) => setPreviewNodeId(node.id)}
                             onExtractVideoFrames={openVideoFrameExtractor}
                             onExtractAudioFromVideo={(node) => void extractAudioFromVideo(node)}

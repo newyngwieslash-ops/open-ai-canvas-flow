@@ -309,9 +309,10 @@ async function connectCdp(cdpPort) {
             console.log(`      (click target not interactable: ${label})`);
             return false;
         }
-        const point = { x: box.x, y: box.y, button: "left" };
+        const point = { x: box.x, y: box.y, button: "left", pointerType: "mouse" };
         await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point, buttons: 0 });
         await send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, buttons: 1, clickCount: 1 });
+        await sleep(50);
         await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, buttons: 0, clickCount: 1 });
         return true;
     };
@@ -727,17 +728,17 @@ async function saveFailureCloseGuard(cdp, baseUrl) {
     const modalShown = await cdp.poll(`!!document.querySelector('.ant-modal-confirm') && (document.body.innerText || "").includes('留在预演台')`, "close confirm modal", 40000);
     assert(modalShown, "F5 close is guarded by a confirm dialog, not silent exit");
 
-    const stayClicked = await cdp.clickText("留在预演台");
-    if (!stayClicked) throw new Error("F: 留在预演台 button not clickable");
-    const modalGone = await cdp.poll(
-        `![...document.querySelectorAll('.ant-modal-confirm')].some((modal) => {
+    const modalDismissedExpression = `![...document.querySelectorAll('.ant-modal-confirm')].some((modal) => {
             const rect = modal.getBoundingClientRect();
             const style = getComputedStyle(modal);
             return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
-        })`,
-        "modal dismissed",
-        20000,
-    );
+        })`;
+    let modalGone = false;
+    for (let attempt = 0; attempt < 3 && !modalGone; attempt += 1) {
+        const stayClicked = await cdp.clickText("留在预演台");
+        if (!stayClicked) throw new Error("F: 留在预演台 button not clickable");
+        modalGone = await cdp.poll(modalDismissedExpression, "modal dismissed", attempt === 2 ? 8000 : 2500);
+    }
     assert(modalGone, "F6 confirm dialog dismissed after choosing 留在预演台");
 
     await sleep(1000);

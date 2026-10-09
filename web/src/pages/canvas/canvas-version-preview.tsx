@@ -2,7 +2,7 @@ import { EmptyState } from "@/components/ui/product/empty-state";
 import { Button, Spin } from "antd";
 import { ArrowLeft, Eye, History, Maximize, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
+import { CanvasViewport } from "@/components/canvas/canvas-viewport";
 import { CanvasNode } from "@/components/canvas/canvas-node";
 import { CanvasFrameNode } from "@/components/canvas/canvas-frame-node";
 import { ConnectionPath } from "@/components/canvas/canvas-connections";
@@ -40,7 +40,7 @@ export function CanvasVersionPreview({ preview, onReturn, onShowVersions }: { pr
                 if (active) setLocalMedia((current) => ({ ...current, [node.id]: url }));
             })
             .catch(() => {
-                if (active) setMediaError("本机媒体读取失败，可下载草稿后检查素材");
+                if (active) setMediaError("媒体暂时无法读取，请重新打开此版本重试");
             });
         return () => {
             active = false;
@@ -124,7 +124,7 @@ export function CanvasVersionPreview({ preview, onReturn, onShowVersions }: { pr
                     {/* No editor callbacks, drawing cache key, or action context may cross this boundary. */}
                     <CanvasNodeActionContext.Provider value={readOnlyActions}>
                         <CanvasNodeGraphContext.Provider value={graph}>
-                            <InfiniteCanvas
+                            <CanvasViewport
                                 containerRef={containerRef}
                                 viewport={viewport}
                                 appearance={project.appearance}
@@ -180,7 +180,7 @@ export function CanvasVersionPreview({ preview, onReturn, onShowVersions }: { pr
                                         />
                                     ),
                                 )}
-                            </InfiniteCanvas>
+                            </CanvasViewport>
                         </CanvasNodeGraphContext.Provider>
                     </CanvasNodeActionContext.Provider>
                     {!nodes.length ? (

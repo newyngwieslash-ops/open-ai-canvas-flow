@@ -84,6 +84,7 @@ export type CloudAgentChatMessage = {
     meta?: string;
     detail?: unknown;
     attachments?: CloudAgentChatAttachment[];
+    canvasReferenceNodeId?: string;
     interjection?: "sent" | "undelivered";
 };
 
@@ -381,6 +382,8 @@ export function AgentChatMessage({
     const formAnswer = item.formAnswer ?? (isUser ? parseCloudAgentFormAnswer(item.text) : undefined);
     const markdownComponents = useMemo(() => createAgentMessageMarkdownComponents(references, onFocusNode), [onFocusNode, references]);
     const agentMarkdownText = rewriteAgentNodeLinks(displayedText, references);
+    const canvasReference = item.canvasReferenceNodeId ? references.find((reference) => reference.nodeId === item.canvasReferenceNodeId) : undefined;
+    const userCanvasMarkdown = canvasReference ? item.text.replace("此图", createAgentNodeLink(canvasReference.nodeId, canvasReference)) : item.text;
     const errorTone = item.errorSeverity === "warning" ? "warning" : "error";
     const color = theme.node.text;
     if (item.reasoning) {
@@ -483,6 +486,10 @@ export function AgentChatMessage({
                 {item.role === "assistant" ? (
                     <AIMessageMarkdown className="text-left" isStreaming={isStreaming} streamingAnimation="none" components={markdownComponents}>
                         {agentMarkdownText}
+                    </AIMessageMarkdown>
+                ) : isUser && canvasReference ? (
+                    <AIMessageMarkdown className="text-left" components={markdownComponents}>
+                        {userCanvasMarkdown}
                     </AIMessageMarkdown>
                 ) : formAnswer ? (
                     <AgentFormAnswerCard answer={formAnswer} theme={theme} />
