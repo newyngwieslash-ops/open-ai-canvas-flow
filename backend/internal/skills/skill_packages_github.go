@@ -76,12 +76,12 @@ func fetchGitHubSkillArchive(ctx context.Context, spec githubSkillSpec) (skillPa
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return skillPackageArchive{}, "", "", "", fmt.Errorf("下载 GitHub 技能失败: HTTP %d", response.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxSkillPackageBytes+1))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxSkillDownloadBytes+1))
 	if err != nil {
 		return skillPackageArchive{}, "", "", "", err
 	}
-	if len(data) > maxSkillPackageBytes {
-		return skillPackageArchive{}, "", "", "", kernel.BadAuthRequest("GitHub 技能包超过 20MB")
+	if len(data) > maxSkillDownloadBytes {
+		return skillPackageArchive{}, "", "", "", kernel.BadAuthRequest("GitHub 仓库归档超过 100MB，请改用子目录安装")
 	}
 	archive, err := archiveFromZip(data, spec.Subdir)
 	if err != nil {

@@ -26,6 +26,9 @@ import (
 
 const (
 	maxSkillPackageBytes       = 20 << 20
+	// GitHub 安装先下载整仓库归档再按子目录过滤，examples/ 等无关素材不应把
+	// 技能本体挡在门外；中间态上限只防压缩炸弹，产品上限仍是过滤后的 20MB。
+	maxSkillDownloadBytes      = 100 << 20
 	maxSkillFileBytes          = 8 << 20
 	maxSkillPackageFiles       = 512
 	maxSkillPreviewBytes       = 512 << 10

@@ -5,6 +5,12 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 技能包 GitHub 安装大小限制调整
+
+- 已优化：GitHub 安装与 ZIP 解压的中间态护栏放宽到 100MB（防压缩炸弹），20MB 产品上限改为对 SKILL.md 所在根过滤后的技能本体生效；examples/ 等无关示例素材不再把技能挡在门外，ZIP 上传路径仍为 20MB，单文件 8MB 上限不变。
+- [x] 专项测试覆盖：examples 合计超 20MB 可安装、技能本体超 20MB 拒绝、路径穿越与多 SKILL.md 仍拒绝；`go test ./internal/skills/` 与 `go build ./...` 通过。
+- [ ] 用户浏览器验证 https://github.com/kevinchin12/storyboard-director 可以通过 GitHub 安装成功。
+
 ## Agent 画布权限与大事件审批
 
 - 已修复：权限查询使用 `canvas_projects`；大画布增量超过事件上限时改为完整快照刷新通知，避免审批执行事务回滚。

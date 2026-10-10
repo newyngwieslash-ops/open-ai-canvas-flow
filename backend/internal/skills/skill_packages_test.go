@@ -179,6 +179,35 @@ func TestArchiveFromZipRejectsTraversalAndMultipleSkills(t *testing.T) {
 	}
 }
 
+// GitHub 安装先下载整仓库归档再按 SKILL.md 所在根过滤：examples/ 等无关素材
+// 可以合计超过 20MB，但不计入技能本体的产品上限；单文件 8MB 上限不变。
+func TestArchiveFromZipIgnoresOversizedUnrelatedAssets(t *testing.T) {
+	big := strings.Repeat("x", 6*1024*1024)
+	archive, err := archiveFromZip(skillZip(t, map[string]string{
+		"skill/SKILL.md":            "---\nname: 分镜导演\ndescription: 工作流\n---\n",
+		"skill/references/style.md": "# Style",
+		"examples/a.png":            big,
+		"examples/b.png":            big,
+		"examples/c.png":            big,
+		"examples/d.png":            big,
+	}), "")
+	if err != nil {
+		t.Fatalf("unrelated oversized asset should be ignored: %v", err)
+	}
+	if len(archive.Files) != 2 || archive.TotalBytes >= maxSkillPackageBytes {
+		t.Fatalf("archive = files %d, total %d", len(archive.Files), archive.TotalBytes)
+	}
+
+	oversized := strings.Repeat("x", maxSkillPackageBytes+1024)
+	if _, err := archiveFromZip(skillZip(t, map[string]string{
+		"skill/SKILL.md":      "---\nname: 分镜导演\ndescription: 工作流\n---\n",
+		"skill/assets/a.md":   oversized,
+		"skill/assets/b.md":   oversized,
+	}), ""); err == nil {
+		t.Fatal("expected skill body over 20MB to be rejected")
+	}
+}
+
 func TestParseGitHubSkillURL(t *testing.T) {
 	spec, err := parseGitHubSkillURL("https://github.com/ddcat-ai/open-ai-canvas/tree/main/skills/canvas-context", "", "")
 	if err != nil {

@@ -154,8 +154,10 @@ func archiveFromZip(data []byte, subdir string) (skillPackageArchive, error) {
 			return skillPackageArchive{}, kernel.BadAuthRequest("技能包中单个文件不能超过 8MB")
 		}
 		total += int64(len(content))
-		if total > maxSkillPackageBytes {
-			return skillPackageArchive{}, kernel.BadAuthRequest("技能包解压后不能超过 20MB")
+		// 中间态护栏只防解压炸弹；examples/ 等无关素材会在根目录归一后剔除，
+		// 技能本体的 20MB 上限在 finalizeSkillArchive 中对过滤后的文件生效。
+		if total > maxSkillDownloadBytes {
+			return skillPackageArchive{}, kernel.BadAuthRequest("技能包解压后不能超过 100MB")
 		}
 		raw[entryPath] = content
 	}
@@ -270,6 +272,11 @@ func finalizeSkillArchive(files map[string][]byte, metadata skillPackageMetadata
 		return skillPackageArchive{}, kernel.BadAuthRequest("技能名称或简介超过长度限制")
 	}
 	hash, total := contentHashAndSize(files)
+	// 产品上限：对根目录归一与子目录过滤后的技能本体生效；GitHub 整仓库
+	// 归档中的示例素材不占额度。
+	if total > maxSkillPackageBytes {
+		return skillPackageArchive{}, kernel.BadAuthRequest("技能包内容不能超过 20MB")
+	}
 	return skillPackageArchive{Files: files, Metadata: metadata, ContentHash: hash, TotalBytes: total}, nil
 }
 
