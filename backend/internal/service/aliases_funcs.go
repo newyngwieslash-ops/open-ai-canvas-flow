@@ -49,6 +49,7 @@ var (
 	NormalizeOutboundHeaders                   = app.NormalizeOutboundHeaders
 	NotFound                                   = app.NotFound
 	OutboundHTTPClient                         = app.OutboundHTTPClient
+	OutboundHTTPClientWithProxy                = app.OutboundHTTPClientWithProxy
 	ParseOutboundHeadersJSON                   = app.ParseOutboundHeadersJSON
 	PaymentNotificationResponseFor             = app.PaymentNotificationResponseFor
 	PaymentNotificationResponseForWithRegistry = app.PaymentNotificationResponseForWithRegistry
@@ -61,6 +62,7 @@ var (
 	ValidateCapabilitySpec                     = app.ValidateCapabilitySpec
 	ValidateChannelModelPrice                  = app.ValidateChannelModelPrice
 	ValidateCustomRelayURL                     = app.ValidateCustomRelayURL
+	ValidateProxyURL                           = app.ValidateProxyURL
 	ValidateLogicalModelPrice                  = app.ValidateLogicalModelPrice
 	ValidateOutboundHost                       = app.ValidateOutboundHost
 	ValidateOutboundURL                        = app.ValidateOutboundURL

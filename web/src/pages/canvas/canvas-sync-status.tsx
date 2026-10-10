@@ -1,13 +1,13 @@
 import { App, Button, Popover } from "antd";
-import { CloudCheck, CloudOff, FileClock, LoaderCircle, RefreshCw } from "lucide-react";
+import { CloudCheck, CloudOff, FileClock, LoaderCircle, RefreshCw, UploadCloud } from "lucide-react";
 import { useState } from "react";
 import { flushCanvasStorePersistence } from "@/stores/canvas/use-canvas-store";
 import { useSyncProgressStore } from "@/stores/use-sync-progress-store";
-import { retryRemoteUserDataSync } from "@/services/user-data-sync";
+import { overwriteRemoteCanvasProject, retryRemoteUserDataSync } from "@/services/user-data-sync";
 import "./canvas-sync-status.css";
 
 export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { projectId: string; onLoadLatest: () => Promise<void>; onOpenVersions?: () => void }) {
-    const { message, modal } = App.useApp();
+    const { message } = App.useApp();
     const progress = useSyncProgressStore((state) => state.syncingProjects[projectId]);
     const [busy, setBusy] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
@@ -78,26 +78,20 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
         }
     };
 
-    const confirmLoadLatest = () => {
-        modal.confirm({
-            title: "加载云端最新版本？",
-            icon: <CloudOff className="canvas-sync-modal-icon" aria-hidden="true" />,
-            content: (
-                <div className="canvas-sync-confirm-copy">
-                    <p>这不是合并操作：当前编辑器内容会替换为云端版本。</p>
-                    <p>系统会先把本地修改保存为草稿，之后可从“版本记录”查看，不会直接丢失。</p>
-                </div>
-            ),
-            okText: "保留草稿并加载",
-            cancelText: "继续编辑",
-            okButtonProps: { danger: true },
-            onOk: () =>
-                run(async () => {
-                    await onLoadLatest();
-                    setStatusOpen(false);
-                    message.success("云端版本已加载，本地内容已保留为草稿");
-                }),
-        });
+    const loadLatest = () => {
+        void run(async () => {
+            await onLoadLatest();
+            setStatusOpen(false);
+            message.success("云端版本已加载，本地内容已保留为草稿");
+        }).catch(() => undefined);
+    };
+
+    const overwriteCloud = () => {
+        void run(async () => {
+            await overwriteRemoteCanvasProject(projectId);
+            setStatusOpen(false);
+            message.success("本地版本已覆盖云端");
+        }).catch(() => undefined);
     };
 
     return (
@@ -140,8 +134,8 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
                         </div>
                     ) : conflict ? (
                         <div className="canvas-sync-panel__callout">
-                            <strong>先保护本地，再决定版本</strong>
-                            <span>{progress?.draftCount ? `已保留 ${progress.draftCount} 份本地草稿。` : "加载云端版前会先保留本地草稿。"} 这是替换，不是合并。</span>
+                            <strong>请选择保留哪一版</strong>
+                            <span>{progress?.draftCount ? `已保留 ${progress.draftCount} 份本地草稿。` : "本地内容仍在编辑器中。"} 加载云端版会替换当前编辑内容；用本地版覆盖会替换云端内容。</span>
                         </div>
                     ) : cloudError ? (
                         <div className="canvas-sync-panel__callout">
@@ -184,9 +178,20 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
                                 立即重试本地保存
                             </Button>
                         ) : null}
-                        <Button block icon={<CloudOff className="size-3.5" />} disabled={busy || saving || localPending || localError} onClick={confirmLoadLatest}>
-                            加载云端版
-                        </Button>
+                        {conflict ? (
+                            <div className="canvas-sync-panel__conflict-actions">
+                                <Button block icon={<CloudOff className="size-3.5" />} disabled={busy || saving || localPending || localError} onClick={loadLatest}>
+                                    加载云端版
+                                </Button>
+                                <Button type="primary" block icon={<UploadCloud className="size-3.5" />} danger disabled={busy || saving || localPending || localError || Boolean(progress?.draftError)} onClick={overwriteCloud}>
+                                    用本地版覆盖云端
+                                </Button>
+                            </div>
+                        ) : (
+                            <Button block icon={<CloudOff className="size-3.5" />} disabled={busy || saving || localPending || localError} onClick={loadLatest}>
+                                加载云端版
+                            </Button>
+                        )}
                         <div className="canvas-sync-panel__secondary-actions">
                             {onOpenVersions ? (
                                 <Button

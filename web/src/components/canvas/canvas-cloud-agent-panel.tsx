@@ -52,6 +52,7 @@ import { getActiveUserScope } from "@/lib/user-scope";
 import { applyAgentCanvasPatches, refreshCanvasAfterAgent, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { createAgentCanvasSync } from "@/services/agent-canvas-sync";
 import { buildSkillMentionReferences, resolveSkillMentions } from "@/services/skill-runtime";
+import { DEFAULT_CANVAS_AGENT_SKILL_ID, ensureDefaultCanvasAgentSkill } from "@/services/skill-defaults";
 import { AGENT_SCENE_DEFS, AgentChatComposer, parseCloudAgentFormAnswer, AgentPlanBar, AgentQuestionBar, AgentSceneCapsules, type AgentSceneBucket, type CloudAgentChatMessage } from "./canvas-cloud-agent-chat-ui";
 import { CanvasAgentSkillLibraryModal } from "./canvas-agent-skill-library-modal";
 import { useSkillCuration, curationQuery } from "@/components/skills/skill-curation-browser";
@@ -485,21 +486,52 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
             .then(async (document) => {
                 if (!active) return;
                 const current = document.conversations.find((conversation) => conversation.id === document.activeId) || document.conversations[0];
+                let initialSkillIds = current?.skillIds || [];
+                if (!document.conversations.length) {
+                    try {
+                        const defaults = await ensureDefaultCanvasAgentSkill();
+                        if (!active) return;
+                        setSkills(defaults.skills);
+                        initialSkillIds = defaults.skills.some((skill) => skill.skillId === DEFAULT_CANVAS_AGENT_SKILL_ID && skill.isAdded)
+                            ? [DEFAULT_CANVAS_AGENT_SKILL_ID]
+                            : [];
+                    } catch (cause) {
+                        if (active) setMessages((currentMessages) => appendAgentError(currentMessages, "default-skill-error", cause, "默认短剧技能未能安装，已保留空技能选择"));
+                    }
+                }
                 setConversations(document.conversations);
                 if (current) {
                     setActiveConversationId(current.id);
                     setMessages(current.messages);
                     setRun(current.run);
                     setPermissionMode(current.permissionMode);
-                    setSelectedSkillIds(current.skillIds || []);
+                    setSelectedSkillIds(initialSkillIds);
                     if (current.model) setModel(current.model);
                     const pending = await loadCloudAgentPendingSubmission(canvasId, current.id);
                     if (!active) return;
                     pendingSubmission.current = pending;
                     if (pending?.request) setPrompt(pending.displayText || pending.request.prompt);
                 } else {
-                    setActiveConversationId(nanoid());
+                    const initialConversationId = nanoid();
+                    const now = new Date().toISOString();
+                    const initialConversation: CloudAgentConversation = {
+                        id: initialConversationId,
+                        title: "新对话",
+                        messages: [],
+                        run: null,
+                        model: selectedModel || undefined,
+                        permissionMode,
+                        skillIds: initialSkillIds,
+                        createdAt: now,
+                        updatedAt: now,
+                    };
+                    setActiveConversationId(initialConversationId);
+                    setConversations([initialConversation]);
+                    setSelectedSkillIds(initialSkillIds);
                     pendingSubmission.current = null;
+                    void saveCloudAgentConversations(canvasId, initialConversationId, [initialConversation]).catch((cause) => {
+                        if (active) setMessages((currentMessages) => appendAgentError(currentMessages, "initial-conversation-save-error", cause, "新对话初始化保存失败，请重试后再发送"));
+                    });
                 }
                 setPendingHydrated(true);
             })
@@ -516,7 +548,16 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
     }, [canvasId, userId]);
 
     useEffect(() => {
-        if (!historyHydrated || (!messages.length && !run)) return;
+        if (!historyHydrated) return;
+        if (!messages.length && !run) {
+            setConversations((current) => {
+                const existing = current.find((conversation) => conversation.id === activeConversationId);
+                if (!existing || existing.skillIds?.join("\0") === selectedSkillIds.join("\0")) return current;
+                const now = new Date().toISOString();
+                return current.map((conversation) => conversation.id === activeConversationId ? { ...conversation, skillIds: selectedSkillIds, updatedAt: now } : conversation);
+            });
+            return;
+        }
         const now = new Date().toISOString();
         setConversations((current) => {
             const existing = current.find((conversation) => conversation.id === activeConversationId);

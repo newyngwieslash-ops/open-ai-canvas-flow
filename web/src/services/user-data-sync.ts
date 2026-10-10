@@ -418,7 +418,9 @@ export function installRemoteUserDataAutoSync() {
         if (state.projects === previous.projects) return;
         const before = new Map(previous.projects.map((project) => [project.id, project]));
         const changed = state.projects.filter((project) => !sameCanvasContent(before.get(project.id), project));
-        if (!changed.length && state.projects.length === previous.projects.length) return;
+        // Viewport writes are local persistence only. They must never enqueue a
+        // cloud sync, even while the local persistence queue is being flushed.
+        if (!changed.length) return;
         if (remoteUserDataPhase === "ready") {
             for (const project of changed) {
                 if (sameCanvasContent(acknowledgedProjects.get(project.id), project)) continue;
@@ -719,13 +721,20 @@ export async function deleteCanvasProjectsWithRemoteSync(ids: string[]) {
     });
 }
 
-export async function saveRemoteUserDataNow(input?: string | readonly string[] | { force?: boolean; repairMissingResources?: boolean }) {
-    const projectId = typeof input === "string" || Array.isArray(input) ? (input as string | readonly string[]) : undefined;
-    const options = input && typeof input === "object" && !Array.isArray(input) ? (input as { force?: boolean; repairMissingResources?: boolean }) : {};
+export async function saveRemoteUserDataNow(input?: string | readonly string[] | { projectId?: string | readonly string[]; force?: boolean; repairMissingResources?: boolean }) {
+    const projectId = typeof input === "string" || Array.isArray(input)
+        ? (input as string | readonly string[])
+        : input && typeof input === "object" && !Array.isArray(input)
+          ? (input as { projectId?: string | readonly string[] }).projectId
+          : undefined;
+    const options = input && typeof input === "object" && !Array.isArray(input)
+        ? (input as { projectId?: string | readonly string[]; force?: boolean; repairMissingResources?: boolean })
+        : {};
     const epoch = sessionEpoch;
     if (!activeRemoteUserId) throw new Error("云端同步会话尚未建立，当前内容已保留在本地");
     requireRemoteUserDataBaseline();
     const assertNoConflict = () => {
+        if (options.force) return;
         const ids = projectId === undefined ? useCanvasStore.getState().projects.map((project) => project.id) : typeof projectId === "string" ? [projectId] : projectId;
         if (ids.some((id) => useSyncProgressStore.getState().syncingProjects[id]?.phase === "conflict")) {
             throw new ApiError("云端画布已有更新，请保留本地草稿并加载最新版本", { status: 409 });
@@ -772,7 +781,12 @@ export async function saveRemoteUserDataNow(input?: string | readonly string[] |
  * 修复媒体与素材的绑定，再按素材先于画布的顺序保存。
  * 素材修复可采用远端素材基线；画布始终携带原始 revision，不能绕过版本校验。
  */
-export async function forceOverwriteRemoteCanvasSync(): Promise<CanvasAssetRebindResult> {
+export async function overwriteRemoteCanvasProject(projectId: string) {
+    if (!projectId.trim()) throw new Error("缺少画布 ID，无法覆盖云端");
+    await saveRemoteUserDataNow({ projectId, force: true });
+}
+
+export async function forceOverwriteRemoteCanvasSync(projectId?: string): Promise<CanvasAssetRebindResult> {
     const epoch = sessionEpoch;
     if (!activeRemoteUserId) throw new Error("尚未建立云端同步会话，请登录后重试");
     requireRemoteUserDataBaseline();
@@ -780,11 +794,11 @@ export async function forceOverwriteRemoteCanvasSync(): Promise<CanvasAssetRebin
     const rebind = await withRemoteUserDataSyncExclusive(async () => {
         if (epoch !== sessionEpoch) throw new Error("账号已切换，已停止修复保存");
         requireRemoteUserDataBaseline();
-        await repairMissingCanvasVideoPreviews();
+        const selectedProjectIds = projectId === undefined ? undefined : new Set([projectId]);
+        await repairMissingCanvasVideoPreviews(selectedProjectIds);
         if (epoch !== sessionEpoch) throw new Error("账号已切换，已停止修复保存");
         const projects = useCanvasStore.getState().projects;
-        // 服务端素材记录是 guard 实际校验的事实；本地缓存可能落后，须先取回再判定绑定一致性。
-        const claimedIds = [...collectCanvasMediaAssetIds(projects)];
+        const claimedIds = [...collectCanvasMediaAssetIds(selectedProjectIds ? projects.filter((project) => selectedProjectIds.has(project.id)) : projects)];
         const remoteAssets: Asset[] = [];
         for (let offset = 0; offset < claimedIds.length; offset += 100) {
             const { assets } = await getRemoteAssetsByIds(claimedIds.slice(offset, offset + 100));
@@ -793,15 +807,15 @@ export async function forceOverwriteRemoteCanvasSync(): Promise<CanvasAssetRebin
         if (epoch !== sessionEpoch) throw new Error("账号已切换，已停止修复保存");
         const remoteById = new Map(remoteAssets.map((asset) => [asset.id, asset]));
         const merged = [...remoteAssets, ...useAssetStore.getState().assets.filter((asset) => !remoteById.has(asset.id))];
-        const result = rebindInconsistentCanvasAssets(parseAssetRecordList(merged));
+        const result = rebindInconsistentCanvasAssets(parseAssetRecordList(merged), selectedProjectIds);
         await Promise.all([flushCanvasStorePersistence(), flushAssetStorePersistence()]);
         return result;
     });
-    await saveRemoteUserDataNow({ force: true, repairMissingResources: true });
+    await saveRemoteUserDataNow({ projectId, force: true, repairMissingResources: true });
     return rebind;
 }
 
-async function drainRemoteUserDataChanges(options: { force?: boolean; repairMissingResources?: boolean } = {}) {
+async function drainRemoteUserDataChanges(options: { projectId?: string | readonly string[]; force?: boolean; repairMissingResources?: boolean } = {}) {
     const uploaded = new Map<string, string>();
     do {
         syncQueued = false;
@@ -809,20 +823,37 @@ async function drainRemoteUserDataChanges(options: { force?: boolean; repairMiss
     } while (syncQueued);
 }
 
-async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: { force?: boolean; repairMissingResources?: boolean } = {}) {
+async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: { projectId?: string | readonly string[]; force?: boolean; repairMissingResources?: boolean } = {}) {
     // 中央兜底：任何调用方只要把持久媒体写进画布，提交前都会先补齐素材记录与 assetId。
     // 页面级入口仍主动入库，以便立即反馈；这里负责阻止遗漏入口形成远端幽灵资源。
+    const projectsBeforeRepair = useCanvasStore.getState().projects;
+    const selectedProjectIds = options.projectId === undefined
+        ? undefined
+        : new Set(typeof options.projectId === "string" ? [options.projectId] : options.projectId);
+    const syncProjectIds = selectedProjectIds === undefined
+        ? undefined
+        : new Set([...selectedProjectIds].filter((id) => projectsBeforeRepair.some((project) => project.id === id)));
     const changedProjectIds = new Set(
-        useCanvasStore
-            .getState()
-            .projects.filter((project) => !sameCanvasContent(acknowledgedProjects.get(project.id), project))
+        projectsBeforeRepair
+            .filter((project) => (syncProjectIds === undefined || syncProjectIds.has(project.id)) && !sameCanvasContent(acknowledgedProjects.get(project.id), project))
             .map((project) => project.id),
     );
     repairMissingCanvasAssets(changedProjectIds, incrementalSession);
     const currentProjects = useCanvasStore.getState().projects;
     const currentAssets = useAssetStore.getState().assets;
-    const dirtyProjects = currentProjects.filter((project) => !sameCanvasContent(acknowledgedProjects.get(project.id), project) && useSyncProgressStore.getState().syncingProjects[project.id]?.phase !== "conflict");
-    const dirtyAssets = currentAssets.filter((asset) => !sameEntitySnapshot(acknowledgedAssets.get(asset.id), asset));
+    const dirtyProjects = currentProjects.filter((project) => {
+        const dirty = !sameCanvasContent(acknowledgedProjects.get(project.id), project);
+        const conflicted = useSyncProgressStore.getState().syncingProjects[project.id]?.phase === "conflict";
+        const selected = selectedProjectIds === undefined || selectedProjectIds.has(project.id);
+        return selected && dirty && (options.force || !conflicted);
+    });
+    const scopedAssetIds = options.force && syncProjectIds
+        ? new Set(collectCanvasMediaAssetIds(currentProjects.filter((project) => syncProjectIds.has(project.id))))
+        : undefined;
+    const dirtyAssets = currentAssets.filter((asset) => {
+        const dirty = !sameEntitySnapshot(acknowledgedAssets.get(asset.id), asset);
+        return dirty && (scopedAssetIds === undefined || scopedAssetIds.has(asset.id));
+    });
     if (!dirtyProjects.length && !dirtyAssets.length) return;
     const conflictedAssetIds = new Set<string>();
     const conflictedAssetTitles = new Map<string, string>();
@@ -1048,6 +1079,17 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
                             saved = true;
                             continue;
                         }
+                        if (options.force) {
+                            const remoteHash = await canvasContentHash(remote);
+                            const forced = { ...current, revision: remote.revision, remoteContentHash: remoteHash };
+                            acknowledgedProjects.set(source.id, { ...remote, viewport: current.viewport, remoteContentHash: remoteHash });
+                            verifiedProjects.add(source.id);
+                            useCanvasStore.setState((state) => ({ projects: state.projects.map((project) => (project.id === source.id ? forced : project)) }));
+                            await flushCanvasStorePersistence();
+                            candidate = forced;
+                            useSyncProgressStore.getState().setProjectProgress(source.id, { phase: "reconciling", message: "正在用本地版本覆盖云端" });
+                            continue;
+                        }
                         const baseline = acknowledgedProjects.get(source.id);
                         if (!baseline) throw error;
                         let rebased: CanvasProject;
@@ -1142,7 +1184,7 @@ function remoteAssetConflictsWithBaseline(baseline: Asset, remote: Asset) {
 
 function sanitizeCanvasProjectForRemoteSync<T>(project: T): T {
     if (!project || typeof project !== "object") return project;
-    const clone = { ...(project as Record<string, unknown>) };
+    const { viewport: _viewport, ...clone } = project as Record<string, unknown>;
     if (Array.isArray(clone.chatSessions)) {
         clone.chatSessions = clone.chatSessions.map((session) => {
             if (!session || typeof session !== "object") return session;

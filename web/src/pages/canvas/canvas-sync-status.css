@@ -114,6 +114,10 @@
     gap: 8px;
     padding: 0 17px 15px;
 }
+.canvas-sync-panel__conflict-actions {
+    display: grid;
+    gap: 8px;
+}
 .canvas-sync-panel__actions .ant-btn { border-radius: 9px; }
 .canvas-sync-panel__secondary-actions {
     display: flex;
