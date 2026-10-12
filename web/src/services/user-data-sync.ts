@@ -1111,15 +1111,10 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
                     verifiedAssets.add(source.id);
                     continue;
                 }
-                if (!options.force) {
-                    // 单个素材冲突只隔离该素材：继续校验其余素材，不在此中断整批同步。
-                    conflictedAssetIds.add(source.id);
-                    conflictedAssetTitles.set(source.id, source.title || source.id);
-                    continue;
-                }
-                // 强制覆盖是用户显式指令：采纳远端版本为新基线后继续用本地内容覆盖。
-                acknowledgedAssets.set(source.id, asset);
-                verifiedAssets.add(source.id);
+                // 单个素材冲突只隔离该素材：继续校验其余素材，不在此中断整批同步。
+                // v1.6.5 起画布同步不再有 force 入口，冲突统一交由用户在素材库处理。
+                conflictedAssetIds.add(source.id);
+                conflictedAssetTitles.set(source.id, source.title || source.id);
             } catch (error) {
                 if (error instanceof ApiError && error.status === 404) {
                     // 服务端不存在该素材：本地为新增，交由下方 upsert 创建。
