@@ -291,6 +291,11 @@ func applyCanvasOperations(payload map[string]json.RawMessage, operations []Canv
 				}
 				actual, exists := canvasPathValue(nodes[index], path)
 				if !canvasExpectedValueMatches(actual, exists, expected) {
+					// Agent writeback and browser task subscriptions can publish the
+					// same result. Accept convergence, but keep read-only guards strict.
+					if desired, written := op.Patch[path]; written && len(desired) > 0 && canvasExpectedValueMatches(actual, exists, desired) {
+						continue
+					}
 					return canvasOperationConflict("节点 %q 的字段 %q 已被其他写入修改", op.ID, path)
 				}
 			}
