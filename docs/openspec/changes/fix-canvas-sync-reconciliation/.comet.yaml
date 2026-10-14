@@ -1,6 +1,6 @@
 workflow: hotfix
 language: zh-CN
-phase: build
+phase: verify
 context_compression: off
 build_mode: direct
 build_pause: null
@@ -8,12 +8,12 @@ subagent_dispatch: null
 tdd_mode: direct
 review_mode: off
 isolation: current
-verify_mode: light
+verify_mode: full
 auto_transition: true
 base_ref: 6bcbc032f04deb574f4b74ed543e4de7b2fb760b
 design_doc: null
 plan: null
-verify_result: fail
+verify_result: pending
 verify_failures: 2
 verification_report: docs/superpowers/reports/2026-10-14-fix-canvas-sync-reconciliation-verify.md
 branch_status: pending
@@ -28,4 +28,4 @@ handoff_hash: null
 classic_profile: hotfix
 classic_migration: 1
 run_id: 3ad1d260-a8ae-40b7-9e45-38b989f67787
-check_epoch: 7
+check_epoch: 8
