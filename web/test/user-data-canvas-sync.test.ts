@@ -424,3 +424,46 @@ test("full snapshot recovery uses the original confirmed baseline for offline ed
     expect(requests[0].operations).toEqual([{ type: "set_field", field: "title", beforeValue: "initial", value: "local edit" }]);
     expect(useCanvasStore.getState().openProject("canvas")?.nodes).toHaveLength(2);
 });
+
+test.each(["open", "refresh", "save"])("legacy cache recovers an exact server receipt before %s without deleting remote additions", async (path) => {
+    const original = canvas();
+    useCanvasStore.getState().updateProject("canvas", { title: "offline title" });
+    await initializeRemoteUserDataSession(`canvas-sync-test-${sequence}`);
+    let remote = { ...original, revision: 2, nodes: [...original.nodes, { ...original.nodes[0], id: "agent-draft" }] };
+    const requests: CanvasOperationsRequest[] = [];
+    const reads: string[] = [];
+    apiClient.defaults.adapter = async (config) => {
+        reads.push(config.url!);
+        if (config.method === "patch") {
+            requests.push(JSON.parse(config.data) as CanvasOperationsRequest);
+            remote = { ...remote, title: "offline title", revision: 3 };
+        }
+        return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, msg: "ok", data: { project: structuredClone(config.url?.endsWith("/revisions/1") ? original : remote) } } };
+    };
+    if (path === "open") await loadCanvasProjectForEditing("canvas");
+    if (path === "refresh") await refreshCanvasAfterAgent("canvas");
+    await saveRemoteUserDataNow("canvas");
+    expect(reads).toContain("/canvas-projects/canvas/revisions/1");
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations).toEqual([{ type: "set_field", field: "title", beforeValue: "initial", value: "offline title" }]);
+    expect(useCanvasStore.getState().openProject("canvas")?.nodes).toHaveLength(2);
+});
+
+test.each(["wrong hash", "wrong revision", "wrong canvas", "missing", "forbidden", "offline", "field conflict"])("historical recovery preserves local edits for %s", async (scenario) => {
+    const original = canvas();
+    useCanvasStore.getState().updateProject("canvas", { title: "offline title" });
+    await initializeRemoteUserDataSession(`canvas-sync-test-${sequence}`);
+    const remote = { ...original, revision: 2, title: "other device title" };
+    const receipt = { ...original, ...(scenario === "wrong hash" ? { title: "incorrect" } : scenario === "wrong revision" ? { revision: 9 } : scenario === "wrong canvas" ? { id: "other" } : {}) };
+    let writes = 0;
+    apiClient.defaults.adapter = async (config) => {
+        if (config.method === "patch") writes++;
+        const historical = config.url?.endsWith("/revisions/1");
+        if (historical && ["missing", "forbidden", "offline"].includes(scenario)) throw new ApiError(scenario, { status: scenario === "missing" ? 404 : scenario === "forbidden" ? 403 : 503 });
+        return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, msg: "ok", data: { project: structuredClone(historical ? receipt : remote) } } };
+    };
+    await expect(loadCanvasProjectForEditing("canvas")).rejects.toThrow(scenario === "field conflict" ? "冲突" : scenario === "forbidden" || scenario === "offline" ? scenario : "基线");
+    expect(writes).toBe(0);
+    expect(useCanvasStore.getState().openProject("canvas")?.title).toBe("offline title");
+    expect(useCanvasStore.getState().openProject("canvas")?.revision).toBe(1);
+});

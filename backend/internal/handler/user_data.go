@@ -556,6 +556,25 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		okCanvasProject(c, project)
 	})
+	r.GET("/canvas-projects/:id/revisions/:revision", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		revision, err := strconv.ParseInt(c.Param("revision"), 10, 64)
+		if err != nil {
+			fail(c, http.StatusBadRequest, errors.New("画布历史版本无效"))
+			return
+		}
+		project, err := svc.UserCanvasProjectAtRevision(user.ID, c.Param("id"), revision)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
+		okCanvasProject(c, project)
+	})
 	r.PATCH("/canvas-projects/:id/operations", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

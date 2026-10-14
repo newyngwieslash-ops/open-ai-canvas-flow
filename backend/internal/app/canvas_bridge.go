@@ -235,6 +235,10 @@ func (s *Service) UserCanvasProject(userID string, id string) (json.RawMessage, 
 	return s.canvasDomain().UserCanvasProject(userID, id)
 }
 
+func (s *Service) UserCanvasProjectAtRevision(userID, id string, revision int64) (json.RawMessage, error) {
+	return s.canvasDomain().UserCanvasProjectAtRevision(userID, id, revision)
+}
+
 func (s *Service) UpsertUserCanvasProject(userID string, raw json.RawMessage) (UserDataSummary, error) {
 	return s.canvasDomain().UpsertUserCanvasProject(userID, raw)
 }

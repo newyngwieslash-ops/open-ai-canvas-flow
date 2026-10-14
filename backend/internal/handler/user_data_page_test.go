@@ -5,26 +5,60 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 	"yingce/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestCanvasRevisionRecoveryHTTP(t *testing.T) {
+	router, db, cookie := profileHandlerFixture(t)
+	svc := service.New(repository.New(db), t.TempDir())
+	t.Cleanup(func() { _ = svc.Close() })
+	RegisterUserDataRoutes(router.Group("/api"), svc)
+	for _, record := range []any{
+		&model.CanvasProject{ID: "history", UserID: "profile-user", Revision: 2, PayloadJSON: `{"nodes":[],"connections":[]}`},
+		&model.CanvasProject{ID: "foreign", UserID: "other", Revision: 2, PayloadJSON: `{"nodes":[],"connections":[]}`},
+		&model.CanvasMutationReceipt{ID: "receipt", UserID: "profile-user", CanvasID: "history", Revision: 1, MutationID: "original", ResultJSON: `{"document":{"id":"history","revision":1,"title":"original","nodes":[],"connections":[]}}`},
+	} {
+		if err := db.Create(record).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		path, auth string
+		status     int
+	}{
+		{"history/revisions/1", cookie, 200}, {"history/revisions/1", "", 401}, {"foreign/revisions/1", cookie, 404},
+		{"history/revisions/99", cookie, 404}, {"history/revisions/no", cookie, 400}, {"history/revisions/0", cookie, 400},
+	} {
+		rec := profileRequest(router, http.MethodGet, "/api/canvas-projects/"+tc.path, "", tc.auth)
+		if rec.Code != tc.status {
+			t.Fatalf("%s: status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+		if tc.status == 200 && (!strings.Contains(rec.Body.String(), `"title":"original"`) || rec.Header().Get("Cache-Control") != "private, no-store") {
+			t.Fatalf("unexpected historical response: %s %v", rec.Body.String(), rec.Header())
+		}
+	}
+}
 
 func TestUserDataIncrementalRoutesAreRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	RegisterUserDataRoutes(router.Group("/api"), &service.Service{})
 	wanted := map[string]bool{
-		"GET /api/canvas-projects":      false,
-		"GET /api/canvas-projects/:id":  false,
-		"POST /api/assets/batch":        false,
-		"POST /api/assets/batch-delete": false,
+		"GET /api/canvas-projects":                         false,
+		"GET /api/canvas-projects/:id":                     false,
+		"GET /api/canvas-projects/:id/revisions/:revision": false,
+		"POST /api/assets/batch":                           false,
+		"POST /api/assets/batch-delete":                    false,
 	}
 	for _, route := range router.Routes() {
 		key := route.Method + " " + route.Path

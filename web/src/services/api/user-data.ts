@@ -150,6 +150,10 @@ export function applyRemoteCanvasOperations(id: string, request: CanvasOperation
     return http.patch<{ project: RemoteUserDataSummary & { revision: number }; mutationId: string }>(`/canvas-projects/${encodeURIComponent(id)}/operations`, request);
 }
 
+export function getRemoteCanvasRevision(id: string, revision: number) {
+    return http.get<{ project: CanvasProject }>(`/canvas-projects/${encodeURIComponent(id)}/revisions/${revision}`);
+}
+
 export function deleteRemoteCanvasProject(id: string) {
     return http.delete<{ id: string }>(`/canvas-projects/${encodeURIComponent(id)}`);
 }

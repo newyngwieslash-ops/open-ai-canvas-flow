@@ -15,6 +15,86 @@ import (
 	"yingce/backend/internal/repository"
 )
 
+func TestCanvasRevisionRecoveryUsesOwnedExactReceiptWithoutWriting(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	_, err := svc.ApplyUserCanvasOperations("user", "canvas", CanvasOperationsRequest{MutationID: "create", Operations: []CanvasOperation{
+		{Type: "create_canvas", ID: "canvas", Patch: map[string]json.RawMessage{"title": json.RawMessage(`"original"`)}},
+		{Type: "create_node", Node: json.RawMessage(`{"id":"source","type":"text","metadata":{}}`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ApplyUserCanvasOperations("user", "canvas", CanvasOperationsRequest{MutationID: "edit", Operations: []CanvasOperation{
+		{Type: "set_field", Field: "title", Value: json.RawMessage(`"new title"`), BeforeValue: json.RawMessage(`"original"`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := svc.UserCanvasProject("user", "canvas")
+	old, err := svc.UserCanvasProjectAtRevision("user", "canvas", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		ID       string
+		Revision int64
+		Title    string
+	}
+	if err := json.Unmarshal(old, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.ID != "canvas" || document.Revision != 1 || document.Title != "original" {
+		t.Fatalf("wrong historical document: %s", old)
+	}
+	for _, tc := range []struct {
+		user, id string
+		revision int64
+		status   int
+	}{
+		{"other", "canvas", 1, 404}, {"user", "missing", 1, 404}, {"user", "canvas", 99, 404},
+		{"user", "canvas", 0, 400}, {"user", "canvas", -1, 400}, {"user", "canvas", 9007199254740992, 400},
+	} {
+		_, err := svc.UserCanvasProjectAtRevision(tc.user, tc.id, tc.revision)
+		var appError *kernel.AppError
+		if !errors.As(err, &appError) || appError.Status != tc.status {
+			t.Fatalf("%+v: error = %v", tc, err)
+		}
+	}
+	after, _ := svc.UserCanvasProject("user", "canvas")
+	if string(before) != string(after) {
+		t.Fatal("reading historical baseline changed current canvas")
+	}
+	if err := svc.DeleteUserCanvasProject("user", "canvas"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UserCanvasProjectAtRevision("user", "canvas", 1); err == nil {
+		t.Fatal("deleted canvas receipt was exposed")
+	}
+}
+
+func TestCanvasRevisionRecoveryRejectsIncompleteOrMismatchedReceipts(t *testing.T) {
+	for name, raw := range map[string]string{
+		"legacy summary": `{"id":"canvas","revision":1}`,
+		"wrong canvas":   `{"document":{"id":"other","revision":1,"nodes":[],"connections":[]}}`,
+		"wrong revision": `{"document":{"id":"canvas","revision":9,"nodes":[],"connections":[]}}`,
+		"incomplete":     `{"document":{"id":"canvas","revision":1}}`,
+		"invalid json":   `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newCanvasOperationTestService(t)
+			if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", Revision: 2, PayloadJSON: `{"nodes":[],"connections":[]}`}); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.repo.Create(&model.CanvasMutationReceipt{ID: "receipt", UserID: "user", CanvasID: "canvas", MutationID: "old", Revision: 1, ResultJSON: raw}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.UserCanvasProjectAtRevision("user", "canvas", 1); err == nil {
+				t.Fatal("invalid receipt accepted")
+			}
+		})
+	}
+}
+
 func TestApplyCanvasOperationsReplaysSameMutationAndRejectsDifferentPayload(t *testing.T) {
 	svc := newCanvasOperationTestService(t)
 	if err := svc.repo.Create(&model.CanvasProject{

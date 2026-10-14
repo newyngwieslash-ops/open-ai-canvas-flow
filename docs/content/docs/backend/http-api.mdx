@@ -261,6 +261,7 @@ Token 报价的 `estimated` 为 `true`，`quantity` 是预留 Token 数。参考
 | 接口 | 行为 |
 | --- | --- |
 | `GET /canvas-projects/:id` | 返回当前完整画布及权威 `revision`；响应包含基于数据库版本的弱 `ETag` 和 `Cache-Control: private, no-cache`。请求可用 `If-None-Match` 做条件读取，版本未变化时返回 `304`。 |
+| `GET /canvas-projects/:id/revisions/:revision` | 只读当前用户现存画布的指定版本，返回 `data.project`。当前版本直接读取画布，旧版本从完整操作回执读取。版本必须是正安全整数；无权访问、画布已删除或版本不存在返回 404，损坏回执返回 500。响应 `Cache-Control: private, no-store`；客户端必须验证 ID、revision 和旧内容哈希后才用作合并基线，不据此回滚或重放操作。 |
 | `PATCH /canvas-projects/:id/operations` | 接收 `{ mutationId, baseRevision?, operations[] }`，返回当前项目摘要和 `mutationId`。支持 `create_canvas`、`create_node`、`patch_node`、`remove_node`、`create_connection`、`update_connection`、`remove_connection`、`set_field`。 |
 | `DELETE /canvas-projects/:id` | 显式删除画布。删除后迟到的更新不会重新创建画布；只有新的 `create_canvas` 操作可以显式创建同 ID 画布。 |
 

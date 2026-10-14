@@ -1,6 +1,17 @@
 import { canonicalize } from "json-canonicalize";
 import { resourceFileUrl, resourceIdFromStorageKey } from "@/services/api/resources";
-import { deleteRemoteAssets, deleteRemoteCanvasProject, applyRemoteCanvasOperations, getRemoteAsset, getRemoteAssetsByIds, getRemoteCanvasProject, getRemoteUserDataSnapshot, listRemoteAssetsPage, upsertRemoteAsset } from "@/services/api/user-data";
+import {
+    deleteRemoteAssets,
+    deleteRemoteCanvasProject,
+    applyRemoteCanvasOperations,
+    getRemoteAsset,
+    getRemoteAssetsByIds,
+    getRemoteCanvasProject,
+    getRemoteCanvasRevision,
+    getRemoteUserDataSnapshot,
+    listRemoteAssetsPage,
+    upsertRemoteAsset,
+} from "@/services/api/user-data";
 import type { CanvasOperation, CanvasOperationsRequest } from "@/services/api/user-data";
 import { ApiError } from "@/services/api/request";
 import { canvasContentHash, sameCanvasContent } from "@/lib/canvas/canvas-content";
@@ -66,12 +77,26 @@ async function persistAcknowledgedCanvas(project: CanvasProject) {
 }
 
 async function confirmedCanvasBaseline(local: CanvasProject, remote?: CanvasProject) {
+    const epoch = sessionEpoch;
     const baseline = acknowledgedProjects.get(local.id);
     if (baseline && (verifiedProjects.has(local.id) || (baseline.revision === local.revision && baseline.remoteContentHash === (await canvasContentHash(baseline))))) return baseline;
     const candidates = [...(remote ? [remote] : []), ...(await readAcknowledgedCanvases(local.id))];
     for (const candidate of candidates) {
         if (candidate?.id === local.id && candidate.revision === local.revision && Array.isArray(candidate.nodes) && Array.isArray(candidate.connections) && local.remoteContentHash && local.remoteContentHash === (await canvasContentHash(candidate)))
             return candidate;
+    }
+    if (Number.isSafeInteger(local.revision) && local.revision! > 0 && local.remoteContentHash) {
+        try {
+            const candidate = await restoreRemoteTextNodeContents((await getRemoteCanvasRevision(local.id, local.revision!)).project);
+            if (epoch !== sessionEpoch) throw new Error("账号已切换，已停止恢复画布基线");
+            if (candidate?.id === local.id && candidate.revision === local.revision && Array.isArray(candidate.nodes) && Array.isArray(candidate.connections) && local.remoteContentHash === (await canvasContentHash(candidate))) {
+                if (epoch !== sessionEpoch) throw new Error("账号已切换，已停止恢复画布基线");
+                return { ...candidate, remoteContentHash: local.remoteContentHash };
+            }
+        } catch (error) {
+            // Missing historical data is not permission to use today's cloud state.
+            if (!(error instanceof ApiError) || error.status !== 404) throw error;
+        }
     }
     throw new Error(`画布“${local.title || local.id}”缺少已确认基线，无法自动合并；已保留本地编辑`);
 }

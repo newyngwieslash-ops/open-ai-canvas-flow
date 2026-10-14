@@ -230,6 +230,50 @@ func (s *Service) UserCanvasProject(userID string, id string) (json.RawMessage, 
 	return canvasProjectPayload(*project)
 }
 
+// Historical receipts are read-only merge bases, never a request to restore a canvas.
+func (s *Service) UserCanvasProjectAtRevision(userID, id string, revision int64) (json.RawMessage, error) {
+	if revision <= 0 || revision > 9007199254740991 {
+		return nil, kernel.BadAuthRequest("画布历史版本无效")
+	}
+	project, err := s.repo.CanvasProjectForUser(userID, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, kernel.NotFound("画布不存在或无权访问")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if project.Revision == revision {
+		return canvasProjectPayload(*project)
+	}
+	if revision > project.Revision {
+		return nil, kernel.NotFound("画布历史基线不存在")
+	}
+	receipt, err := s.repo.CanvasMutationReceiptAtRevision(userID, id, revision)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, kernel.NotFound("画布历史基线不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	var stored canvasMutationReceiptResult
+	if err := json.Unmarshal([]byte(receipt.ResultJSON), &stored); err != nil {
+		return nil, kernel.WrapAppError(http.StatusInternalServerError, "画布历史基线损坏", err)
+	}
+	var document struct {
+		ID          string
+		Revision    int64
+		Nodes       []json.RawMessage
+		Connections []json.RawMessage
+	}
+	if len(stored.Document) == 0 {
+		return nil, kernel.NotFound("画布历史回执不含完整基线")
+	}
+	if err := json.Unmarshal(stored.Document, &document); err != nil || document.ID != id || document.Revision != revision || document.Nodes == nil || document.Connections == nil {
+		return nil, kernel.NewAppError(http.StatusInternalServerError, "画布历史基线损坏")
+	}
+	return stored.Document, nil
+}
+
 func (s *Service) UpsertUserCanvasProject(userID string, raw json.RawMessage) (UserDataSummary, error) {
 	return s.upsertUserCanvasProjectWithHistory(userID, raw, "automatic")
 }

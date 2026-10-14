@@ -452,6 +452,31 @@ paths:
           description: 未登录
         "404":
           description: 画布不存在或不属于当前用户
+  /canvas-projects/{id}/revisions/{revision}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - in: path
+        name: revision
+        required: true
+        schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
+    get:
+      tags: [canvas]
+      summary: 读取当前用户现存画布的指定版本基线
+      description: 只读当前版本或该版本的完整操作回执，不回滚画布、不重新执行操作。客户端必须核对内容哈希后才能用于三方合并。
+      responses:
+        "200":
+          description: 信封 data.project 包含指定版本的完整画布；Cache-Control 为 private, no-store
+        "400":
+          description: 版本不是正安全整数
+        "401":
+          description: 未登录
+        "404":
+          description: 当前画布不存在、无权访问、指定版本不存在或回执缺少完整文档
+        "500":
+          description: 历史回执损坏，禁止作为合并基线
   /canvas-projects/{id}/operations:
     parameters:
       - in: path

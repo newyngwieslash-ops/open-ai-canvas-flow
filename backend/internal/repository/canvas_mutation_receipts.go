@@ -23,6 +23,13 @@ func (r *Repository) CanvasMutationReceiptForUser(userID, canvasID, mutationID s
 	return &receipt, err
 }
 
+func (r *Repository) CanvasMutationReceiptAtRevision(userID, canvasID string, revision int64) (*model.CanvasMutationReceipt, error) {
+	var receipt model.CanvasMutationReceipt
+	err := r.db.Where("user_id = ? AND canvas_id = ? AND revision = ?", userID, canvasID, revision).
+		Order("created_at DESC").First(&receipt).Error
+	return &receipt, err
+}
+
 func (r *Repository) TryCreateCanvasMutationReceipt(receipt *model.CanvasMutationReceipt) (bool, error) {
 	if receipt.CreatedAt.IsZero() {
 		receipt.CreatedAt = time.Now().UTC()
