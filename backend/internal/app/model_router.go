@@ -207,7 +207,7 @@ func (s *Service) ResolveLogicalModel(logicalModelID string, intent ModelRequest
 		}
 	}
 	if match := MatchCapability(cached.ProductSpec, intent); !match.Matched {
-		return nil, BadAuthRequest("所选模型不支持当前请求：" + strings.Join(match.Reasons, "；"))
+		return nil, modelCapabilityMismatchError(match)
 	}
 	eligible := s.eligibleLogicalRoutes(cached.Routes, intent, nil, cached.Model.PricePolicy == "channel")
 	if len(eligible) == 0 {

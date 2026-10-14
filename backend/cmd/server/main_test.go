@@ -7,6 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"yingce/backend/internal/database"
+	"yingce/backend/internal/repository"
+	"yingce/backend/internal/service"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,6 +33,27 @@ func TestFisherCORSCarriesProtocolAndTaskID(t *testing.T) {
 		if !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Allow-Headers")), "x-canvas-upstream-protocol") || !strings.Contains(strings.ToLower(response.Header().Get("Access-Control-Expose-Headers")), "x-task-id") {
 			t.Fatalf("browser cannot carry Fisher task contract: method=%s headers=%v", method, response.Header())
 		}
+	}
+}
+
+func TestEnsureBuiltinWorkbenchCatalogStartupWiring(t *testing.T) {
+	db, err := database.Open(database.Config{Driver: "sqlite", DSN: "file:workbench-startup?mode=memory&cache=shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.MigrateSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	svc := service.New(repository.New(db), t.TempDir())
+	if err := ensureBuiltinWorkbenchCatalog(svc); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := repository.New(db).WorkbenchTools("image", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("startup initializer did not publish image workbench tools")
 	}
 }
 

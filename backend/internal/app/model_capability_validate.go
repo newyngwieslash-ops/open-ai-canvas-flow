@@ -329,44 +329,44 @@ func validateVideoTask(profile *VideoCapabilityConfig, input canvasGenerationInp
 		return err
 	}
 	if len(input.ReferenceImages) > profile.References.MaxImages || len(input.ReferenceVideos) > profile.References.MaxVideos || len(input.ReferenceAudios) > profile.References.MaxAudios {
-		return BadAuthRequest("参考素材数量超过当前模型限制")
+		return newModelCapabilityArgumentError("referenceNodeIds", "item_count", BadAuthRequest("参考素材数量超过当前模型限制"))
 	}
 	if model.IsVolcengineArkVideoProtocol(model.ChannelInterfaceType(input.Config.InterfaceType)) && len(input.ReferenceAudios) > 0 && len(input.ReferenceImages) == 0 && len(input.ReferenceVideos) == 0 {
-		return BadAuthRequest("火山方舟全模态参考不支持纯音频或文本+音频，请同时添加参考图片或参考视频")
+		return newModelCapabilityArgumentError("referenceNodeIds", "invalid_combination", BadAuthRequest("火山方舟全模态参考不支持纯音频或文本+音频，请同时添加参考图片或参考视频"))
 	}
 	if len(input.ReferenceImages) < profile.References.MinImages {
-		return BadAuthRequest(fmt.Sprintf("当前视频模型至少需要 %d 张参考图", profile.References.MinImages))
+		return newModelCapabilityArgumentError("referenceNodeIds", "item_count", BadAuthRequest(fmt.Sprintf("当前视频模型至少需要 %d 张参考图", profile.References.MinImages)))
 	}
 	for _, media := range input.ReferenceImages {
 		if profile.References.MaxImageBytes > 0 && media.Bytes > profile.References.MaxImageBytes {
-			return BadAuthRequest("参考图片文件超过当前模型大小限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考图片文件超过当前模型大小限制"))
 		}
 	}
 	for _, media := range input.ReferenceVideos {
 		if profile.References.MaxVideoBytes > 0 && media.Bytes > profile.References.MaxVideoBytes {
-			return BadAuthRequest("参考视频文件超过当前模型大小限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考视频文件超过当前模型大小限制"))
 		}
 		if profile.References.MaxVideoDuration > 0 && media.DurationMs > int64(profile.References.MaxVideoDuration)*1000 {
-			return BadAuthRequest("参考视频时长超过当前模型限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考视频时长超过当前模型限制"))
 		}
 	}
 	for _, media := range input.ReferenceAudios {
 		if profile.References.MaxAudioBytes > 0 && media.Bytes > profile.References.MaxAudioBytes {
-			return BadAuthRequest("参考音频文件超过当前模型大小限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考音频文件超过当前模型大小限制"))
 		}
 		if profile.References.MaxAudioDuration > 0 && media.DurationMs > int64(profile.References.MaxAudioDuration)*1000 {
-			return BadAuthRequest("参考音频时长超过当前模型限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考音频时长超过当前模型限制"))
 		}
 	}
 	seconds, err := strconv.Atoi(strings.TrimSpace(input.Config.VideoSeconds))
 	if err != nil || !videoDurationAllowed(profile.Duration, seconds) {
-		return BadAuthRequest("视频时长不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("durationSeconds", "unsupported_value", BadAuthRequest("视频时长不在当前模型支持范围内"))
 	}
 	if input.Config.Size != "" && !videoRatioAllowed(profile.Ratios, input.Config.Size) {
-		return BadAuthRequest("画面比例不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("size", "unsupported_value", BadAuthRequest("画面比例不在当前模型支持范围内"))
 	}
 	if len(profile.Resolutions) > 0 && !isAutomaticVideoResolution(input.Config.VQuality) && videoResolutionNameRequest(profile, input.Config.VQuality) == "" {
-		return BadAuthRequest("输出分辨率不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("quality", "unsupported_value", BadAuthRequest("输出分辨率不在当前模型支持范围内"))
 	}
 	operation := metadataString(input.Metadata, "videoEditOperation")
 	if operation == "" {
@@ -377,7 +377,7 @@ func validateVideoTask(profile *VideoCapabilityConfig, input canvasGenerationInp
 		}
 	}
 	if !containsCapabilityString(profile.Operations, operation) {
-		return BadAuthRequest("当前视频模型不支持该生成模式")
+		return newModelCapabilityArgumentError("logicalModelId", "unsupported_value", BadAuthRequest("当前视频模型不支持该生成模式"))
 	}
 	return nil
 }
@@ -400,47 +400,46 @@ func validateImageTask(profile *ImageCapabilityConfig, input canvasGenerationInp
 		}
 	}
 	if len(input.ReferenceImages) > profile.References.MaxImages {
-		return BadAuthRequest(fmt.Sprintf("当前图片模型最多支持 %d 张参考图", profile.References.MaxImages))
+		return newModelCapabilityArgumentError("referenceNodeIds", "item_count", BadAuthRequest(fmt.Sprintf("当前图片模型最多支持 %d 张参考图", profile.References.MaxImages)))
 	}
 	for _, media := range input.ReferenceImages {
 		if profile.References.MaxImageBytes > 0 && media.Bytes > profile.References.MaxImageBytes {
-			return BadAuthRequest("参考图片文件超过当前模型大小限制")
+			return newModelCapabilityArgumentError("referenceNodeIds", "unsupported_value", BadAuthRequest("参考图片文件超过当前模型大小限制"))
 		}
 	}
 	if input.Mask != nil && !profile.References.MaskSupported {
-		return BadAuthRequest("当前图片模型不支持蒙版编辑")
+		return newModelCapabilityArgumentError("logicalModelId", "unsupported_value", BadAuthRequest("当前图片模型不支持蒙版编辑"))
 	}
 	quality := strings.TrimSpace(input.Config.Quality)
 	resolution := strings.TrimSpace(input.Config.ImageResolution)
 	if profile.Resolution.Supported && resolution != "" && !strings.EqualFold(resolution, "auto") && !strings.EqualFold(resolution, "any") && !containsCapabilityString(profile.Resolution.Values, resolution) {
-		return BadAuthRequest("图片分辨率不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("imageResolution", "unsupported_value", BadAuthRequest("图片分辨率不在当前模型支持范围内"))
 	}
 	selectionTier := quality
 	if profile.Resolution.Supported {
 		selectionTier = resolution
 	}
 	// 比例型线路会在任务输入边界把画布比例换算成 preset 像素值（OpenAI Images 只收
-	// WIDTHxHEIGHT）。换算结果必须继续通过同一套尺寸与分辨率校验：先把已声明的 preset
-	// 像素值还原成对应比例，否则执行前的 provider 预检会把刚换算好的值判成不支持的尺寸。
+	// WIDTHxHEIGHT）。换算结果必须继续通过同一套尺寸与分辨率校验。
 	resolvedRatio := imageSizeRatioForDeclaredPreset(profile, input.Config.Size, qualityForImageValidation(selectionTier, profile.Resolution.Default))
 	if profile.Size.Parameter != "none" && !profile.Size.AllowCustom && strings.TrimSpace(input.Config.Size) != "" &&
 		!containsCapabilityString(profile.Size.Values, input.Config.Size) && resolvedRatio == "" {
-		return BadAuthRequest("图片尺寸不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("size", "unsupported_value", BadAuthRequest("图片尺寸不在当前模型支持范围内"))
 	}
 	if profile.Parameters == nil && profile.Size.Parameter == "size" && profile.Size.AllowCustom && strings.HasPrefix(modelName, "gpt-image-2") && !containsCapabilityString(profile.Size.Values, input.Config.Size) {
 		if err := validateGPTImage2CustomSize(input.Config.Size); err != nil {
-			return BadAuthRequest(err.Error())
+			return newModelCapabilityArgumentError("size", "unsupported_value", err)
 		}
 	}
 	if profile.Quality.Supported && quality != "" && !strings.EqualFold(quality, "auto") && !strings.EqualFold(quality, "any") && !containsCapabilityString(profile.Quality.Values, quality) {
-		return BadAuthRequest("图片质量不在当前模型支持范围内")
+		return newModelCapabilityArgumentError("quality", "unsupported_value", BadAuthRequest("图片质量不在当前模型支持范围内"))
 	}
 	if err := validateImagePresetSelection(profile, qualityForImageValidation(selectionTier, firstNonEmpty(profile.Resolution.Default, profile.Quality.Default)), firstNonEmpty(resolvedRatio, input.Config.Size, profile.Size.Default)); err != nil {
 		return err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(input.Config.Count))
 	if err == nil && count > profile.MaxOutputs {
-		return BadAuthRequest(fmt.Sprintf("当前图片模型单次最多生成 %d 张", profile.MaxOutputs))
+		return newModelCapabilityArgumentError("count", "unsupported_value", BadAuthRequest(fmt.Sprintf("当前图片模型单次最多生成 %d 张", profile.MaxOutputs)))
 	}
 	return nil
 }
@@ -488,7 +487,21 @@ func validateImagePresetSelection(profile *ImageCapabilityConfig, quality, ratio
 			return nil
 		}
 	}
-	return BadAuthRequest("当前分辨率不支持所选图片宽高比")
+	return newModelCapabilityArgumentError("size", "unsupported_value", BadAuthRequest("当前分辨率不支持所选图片宽高比"))
+}
+
+func imageSizeValueForDeclaredPreset(profile *ImageCapabilityConfig, size string, quality string) string {
+	if profile == nil {
+		return ""
+	}
+	preset, ok := declaredImageSizePreset(profile.Size.Presets, size, quality, imagePresetDefaultTier(profile))
+	if !ok {
+		return ""
+	}
+	if profile.Size.Parameter == "size" {
+		return strings.TrimSpace(preset.Size)
+	}
+	return normalizeDeclaredImageRatio(preset.Ratio)
 }
 
 // imageSizeRatioForDeclaredPreset 把已声明的 preset 像素值还原成它对应的比例。比例型线路

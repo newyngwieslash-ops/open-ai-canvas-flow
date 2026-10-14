@@ -8,6 +8,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -151,9 +152,16 @@ func normalizeModelRequestOption(name string, value any) any {
 	}
 }
 
+type CapabilityIssue struct {
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
 type CapabilityMatch struct {
-	Matched bool     `json:"matched"`
-	Reasons []string `json:"reasons,omitempty"`
+	Matched bool              `json:"matched"`
+	Reasons []string          `json:"reasons,omitempty"`
+	Issues  []CapabilityIssue `json:"issues,omitempty"`
 }
 
 type cachedLogicalModel struct {
@@ -292,6 +300,11 @@ func decodeLogicalDefaults(raw string, spec CapabilitySpec) (map[string]any, err
 
 func MatchCapability(spec CapabilitySpec, intent ModelRequestIntent) CapabilityMatch {
 	reasons := make([]string, 0)
+	issues := make([]CapabilityIssue, 0)
+	addIssue := func(kind, name, reason string) {
+		reasons = append(reasons, reason)
+		issues = append(issues, CapabilityIssue{Kind: kind, Name: name, Reason: reason})
+	}
 	if spec.Capability == "image" && spec.ImageParameters != nil {
 		values := make(map[string]any, len(intent.Options))
 		for name, value := range intent.Options {
@@ -313,51 +326,65 @@ func MatchCapability(spec CapabilitySpec, intent ModelRequestIntent) CapabilityM
 			}
 		}
 		if _, err := resolveImageParameterValues(parameters, values); err != nil {
-			reasons = append(reasons, err.Error())
+			var modelErr *ModelError
+			if errors.As(err, &modelErr) && modelErr != nil {
+				field, _ := modelErr.Details["field"].(string)
+				message, _ := modelErr.Details["message"].(string)
+				if field != "" {
+					if message == "" {
+						message = modelErr.Error()
+					}
+					addIssue("image_parameter", field, message)
+				} else {
+					addIssue("image_parameter", "imageParameters", err.Error())
+				}
+			} else {
+				addIssue("image_parameter", "imageParameters", err.Error())
+			}
 		}
 	}
 	if normalizeCapability(intent.Capability) != normalizeCapability(spec.Capability) {
-		reasons = append(reasons, "能力类型不匹配")
+		addIssue("capability", "capability", "能力类型不匹配")
 	}
 	if operation := normalizeCapabilityValue(intent.Operation); operation != "" && len(spec.Operations) > 0 && !containsNormalized(spec.Operations, operation) {
-		reasons = append(reasons, "不支持操作 "+intent.Operation)
+		addIssue("operation", "operation", "不支持操作 "+intent.Operation)
 	}
 	for inputType, count := range intent.Inputs {
 		if count < 0 {
-			reasons = append(reasons, "输入数量不能小于 0")
+			addIssue("input", inputType, "输入数量不能小于 0")
 			continue
 		}
 		constraint, declared := spec.Inputs[inputType]
 		if !declared {
 			if count > 0 {
-				reasons = append(reasons, "不支持 "+capabilityInputLabel(inputType)+"输入")
+				addIssue("input", inputType, "不支持 "+capabilityInputLabel(inputType)+"输入")
 			}
 			continue
 		}
 		if count < constraint.Min || count > constraint.Max {
-			reasons = append(reasons, fmt.Sprintf("%s数量需在 %d-%d 之间", capabilityInputLabel(inputType), constraint.Min, constraint.Max))
+			addIssue("input", inputType, fmt.Sprintf("%s数量需在 %d-%d 之间", capabilityInputLabel(inputType), constraint.Min, constraint.Max))
 		}
 	}
 	for inputType, constraint := range spec.Inputs {
 		if intent.Inputs[inputType] < constraint.Min {
-			reasons = append(reasons, fmt.Sprintf("至少需要 %d 个%s", constraint.Min, capabilityInputLabel(inputType)))
+			addIssue("input", inputType, fmt.Sprintf("至少需要 %d 个%s", constraint.Min, capabilityInputLabel(inputType)))
 		}
 	}
 	for name, value := range intent.Options {
-		canonicalName := canonicalModelOptionName(spec.Capability, name)
-		if inactiveCapabilityOptionValue(canonicalName, value) {
+		canonical := canonicalModelOptionName(spec.Capability, name)
+		if inactiveCapabilityOptionValue(canonical, value) {
 			continue
 		}
-		constraint, declared := spec.Options[canonicalName]
+		constraint, declared := spec.Options[canonical]
 		if !declared {
-			reasons = append(reasons, "不支持参数 "+capabilityOptionLabel(name))
+			addIssue("option", canonical, "不支持参数 "+capabilityOptionLabel(name))
 			continue
 		}
 		if !matchOptionConstraint(name, constraint, value) {
-			reasons = append(reasons, "参数 "+capabilityOptionLabel(name)+"超出支持范围")
+			addIssue("option", canonical, "参数 "+capabilityOptionLabel(name)+"超出支持范围")
 		}
 	}
-	return CapabilityMatch{Matched: len(reasons) == 0, Reasons: reasons}
+	return CapabilityMatch{Matched: len(reasons) == 0, Reasons: reasons, Issues: issues}
 }
 
 // Image size intent and provider encoding share explicit preset mappings.

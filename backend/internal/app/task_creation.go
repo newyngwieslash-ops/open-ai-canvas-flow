@@ -533,8 +533,8 @@ func (s *Service) resolveSystemChannelModelSelection(input map[string]any, taskT
 		}
 		if value, ok := values["size"]; ok && capabilitySpec != nil && capabilityImageSizePresetMatches(*capabilitySpec, value, values) {
 			values = maps.Clone(values)
-			if ratio := imageSizeRatioForDeclaredPreset(capabilityConfig.Image, fmt.Sprint(value), fmt.Sprint(values["imageResolution"])); ratio != "" {
-				values["size"] = ratio
+			if encoded := imageSizeValueForDeclaredPreset(capabilityConfig.Image, fmt.Sprint(value), stringValue(values["imageResolution"])); encoded != "" {
+				values["size"] = encoded
 			}
 		}
 		resolved, parameterErr := resolveImageParameterValues(parameters, values)
@@ -578,7 +578,7 @@ func (s *Service) resolveSystemChannelModelSelection(input map[string]any, taskT
 			return input, InvalidModelSelection("指定的模型能力配置无效，请联系管理员")
 		}
 		if match := MatchCapability(*capabilitySpec, intent); !match.Matched {
-			return input, ModelCapabilityNotSupported("所选模型不支持当前请求：" + strings.Join(match.Reasons, "；"))
+			return input, modelCapabilityMismatchError(match)
 		}
 	}
 

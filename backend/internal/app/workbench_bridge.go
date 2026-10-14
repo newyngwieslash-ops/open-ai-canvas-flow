@@ -64,6 +64,10 @@ func (s *Service) workbenchDomain() *workbench.Service {
 	return workbench.New(s.repo, workbenchAdminGate{svc: s}, workbenchAdminGate{svc: s})
 }
 
+func (s *Service) EnsureBuiltinWorkbenchCatalog() error {
+	return s.workbenchDomain().EnsureBuiltinCatalog()
+}
+
 func (s *Service) PublicWorkbenchTools(kind string) ([]WorkbenchToolView, error) {
 	if kind == workbench.KindImage {
 		if err := s.RequireFeature(FeatureImageWorkbench); err != nil {
@@ -148,7 +152,7 @@ func (s *Service) WorkbenchTasks(userID, kind string, activeOnly bool, limit int
 func (s *Service) resolveWorkbenchProviderConfig(kind, modelName, logicalModelID, channelID string, parameters map[string]any, input map[string]any) (map[string]any, error) {
 	config := map[string]any{"mode": kind}
 	if kind == WorkbenchKindImage {
-		for _, key := range []string{"size", "quality", "count"} {
+		for _, key := range []string{"size", "quality", "imageResolution", "count"} {
 			if value, exists := parameters[key]; exists {
 				config[key] = providerConfigOptionValue(value)
 			}

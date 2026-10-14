@@ -4,6 +4,7 @@ import (
 	"yingce/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (r *Repository) WorkbenchTools(kind string, enabledOnly bool) ([]model.WorkbenchTool, error) {
@@ -31,6 +32,14 @@ func (r *Repository) CreateWorkbenchTool(item *model.WorkbenchTool) error {
 	return r.db.Create(item).Error
 }
 func (r *Repository) SaveWorkbenchTool(item *model.WorkbenchTool) error { return r.db.Save(item).Error }
+
+func (r *Repository) CreateWorkbenchToolIfMissing(item *model.WorkbenchTool) error {
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+}
+
+func (r *Repository) CreateWorkbenchPresetIfMissing(item *model.WorkbenchPreset) error {
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+}
 
 func (r *Repository) SaveWorkbenchToolWithPresets(item *model.WorkbenchTool, presets *[]model.WorkbenchPreset, create bool) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {

@@ -158,6 +158,15 @@ describe("plugin image parameters across model configuration and generation", ()
         expect(html).not.toContain('role="combobox"');
         expect(html).not.toContain("16:9");
     });
+    test("unconstrained resolution editor offers standard 1K/2K/4K choices", () => {
+        const field: ImageParameter = { name: "imageResolution", label: "分辨率", type: "string", default: "1k", pricing: true };
+        const html = renderToStaticMarkup(<ImageParameterSchemaEditor definitions={[field]} parameters={[field]} onChange={() => {}} />);
+        expect(html).toContain("1K");
+        expect(html).toContain("2K");
+        expect(html).toContain("4K");
+        expect(html).toContain("分辨率快捷选择");
+        expect(html).toContain("输入后按回车，或点击下方档位");
+    });
     test("resolution-only contract renders no invented quality or pixel-tier controls", () => {
         const { image, config } = fixture([parameters[0]]);
         const html = renderToStaticMarkup(<ImageParameterFields profile={image} config={config} onChange={() => {}} />);

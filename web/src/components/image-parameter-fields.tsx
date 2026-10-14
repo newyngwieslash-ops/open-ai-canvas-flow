@@ -2,7 +2,7 @@ import { Input, InputNumber, Switch } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { ImageSizePresetsEditor } from "./image-size-presets-editor";
 import { ImageSizePicker } from "./image-size-picker";
-import { imageSingleSizeTier, imageSizeConfigWithPresets, imageSizePresets } from "@/lib/image-size-presets";
+import { IMAGE_RESOLUTIONS, imageSingleSizeTier, imageSizeConfigWithPresets, imageSizePresets } from "@/lib/image-size-presets";
 import { Select } from "@/components/ui/base/select";
 import { imageHostControls, imageParameterAccepts, imageParameterRequest, parseImageParameters, projectImageParameters, updateImageParameterSize, type ImageParameter, type ImageParameterValue } from "@/lib/image-parameters";
 import type { ImageCapabilityConfig } from "@/lib/model-capabilities";
@@ -189,6 +189,22 @@ export function ImageParameterSchemaEditor({ definitions, parameters, disabled, 
             <p className="text-xs leading-relaxed text-foreground/55">选择此模型支持的参数和范围。生成界面同步显示启用项，标记“可计价”的参数可用于规格价格。</p>
             {parameters.map((field) => {
                 const definition = definitions.find((p) => p.name === field.name) || field;
+                const isResolution = field.name === "imageResolution" && field.type === "string";
+                const resolutionChoices = isResolution ? (definition.values?.length ? definition.values : IMAGE_RESOLUTIONS.filter((tier) => imageParameterAccepts(definition, tier))) : [];
+                const quickResolutionChoices = isResolution && (!definition.values?.length || definition.values.some((value) => IMAGE_RESOLUTIONS.includes(String(value).toLowerCase()))) ? resolutionChoices : [];
+                const updateValues = (items: string[]) => {
+                    const values = [
+                        ...new Set(
+                            items.map((item) => {
+                                const declared = definition.values?.find((v) => String(v) === item);
+                                if (declared !== undefined) return declared;
+                                return isResolution && !definition.values?.length && /^\d+(?:\.\d+)?k$/i.test(item.trim()) ? item.trim().toLowerCase() : item;
+                            }),
+                        ),
+                    ];
+                    const next = { ...field, values };
+                    update(field.name, { values, default: isResolution && !values.length ? undefined : imageParameterAccepts(next, field.default) ? field.default : values[0] });
+                };
                 return (
                     <section key={field.name} className="rounded-lg border border-border p-4 space-y-3">
                         <div className="flex items-center justify-between gap-3">
@@ -202,23 +218,46 @@ export function ImageParameterSchemaEditor({ definitions, parameters, disabled, 
                         {field.enabled !== false ? (
                             <div className="grid gap-3 sm:grid-cols-2">
                                 {definition.values?.length || field.type === "string" ? (
-                                    <label className="space-y-1.5 text-xs">
-                                        <span>支持值{!definition.values?.length ? "（留空允许自由输入）" : ""}</span>
-                                        <Select
-                                            className="w-full"
-                                            ariaLabel={`${field.label}支持值`}
-                                            mode={definition.values?.length ? "multiple" : "tags"}
-                                            disabled={disabled}
-                                            value={(field.values || []).map(String)}
-                                            options={(definition.values || []).map((v) => ({ label: String(v), value: String(v) }))}
-                                            tokenSeparators={[","]}
-                                            onChange={(items) => {
-                                                const values = items.map((item) => definition.values?.find((v) => String(v) === item) ?? item);
-                                                const next = { ...field, values };
-                                                update(field.name, { values, default: imageParameterAccepts(next, field.default) ? field.default : values[0] });
-                                            }}
-                                        />
-                                    </label>
+                                    <div className="space-y-1.5 text-xs">
+                                        <label className="block space-y-1.5">
+                                            <span>支持值{!definition.values?.length ? "（留空允许自由输入）" : ""}</span>
+                                            <Select
+                                                className="w-full"
+                                                ariaLabel={`${field.label}支持值`}
+                                                mode={definition.values?.length ? "multiple" : "tags"}
+                                                disabled={disabled}
+                                                value={(field.values || []).map(String)}
+                                                options={(isResolution ? resolutionChoices : definition.values || []).map((v) => ({
+                                                    label: isResolution && IMAGE_RESOLUTIONS.includes(String(v).toLowerCase()) ? String(v).toUpperCase() : String(v),
+                                                    value: String(v),
+                                                }))}
+                                                tokenSeparators={[",", "，"]}
+                                                placeholder={isResolution ? "输入后按回车，或点击下方档位" : undefined}
+                                                onChange={updateValues}
+                                            />
+                                        </label>
+                                        {quickResolutionChoices.length ? (
+                                            <div className="image-size-presets-editor">
+                                                <div className="image-size-default-options" role="group" aria-label="分辨率快捷选择">
+                                                    {quickResolutionChoices.map((tier) => {
+                                                        const selected = (field.values || []).includes(tier);
+                                                        return (
+                                                            <button
+                                                                type="button"
+                                                                key={String(tier)}
+                                                                disabled={disabled}
+                                                                aria-pressed={selected}
+                                                                onClick={() => updateValues((selected ? (field.values || []).filter((value) => value !== tier) : [...(field.values || []), tier]).map(String))}
+                                                            >
+                                                                {String(tier).toUpperCase()}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <p className="image-size-hint">点选模型支持的档位，再次点击可移除。{!definition.values?.length ? "其他档位可在上方输入后按回车添加。" : ""}</p>
+                                            </div>
+                                        ) : null}
+                                    </div>
                                 ) : null}
                                 {(field.type === "number" || field.type === "integer") && !definition.values?.length ? (
                                     <div className="grid grid-cols-2 gap-2">
@@ -316,7 +355,11 @@ export function ImageParameterSizeEditor({ profile, definition, disabled, onChan
                 </p>
             ) : null}
             {field.enabled !== false ? (
-                grouped || pixelSize ? (
+                grouped && !tiers.length ? (
+                    <p role="status" className="image-size-hint">
+                        请先在上方分辨率中选择支持的档位，再配置各档位的比例和尺寸。
+                    </p>
+                ) : grouped || pixelSize ? (
                     <ImageSizePresetsEditor
                         profile={editorProfile}
                         tiers={tiers}
