@@ -13,9 +13,9 @@ auto_transition: true
 base_ref: 6bcbc032f04deb574f4b74ed543e4de7b2fb760b
 design_doc: null
 plan: null
-verify_result: pending
-verify_failures: 0
-verification_report: null
+verify_result: fail
+verify_failures: 1
+verification_report: docs/superpowers/reports/2026-10-14-fix-canvas-sync-reconciliation-verify.md
 branch_status: pending
 created_at: 2026-10-14
 verified_at: null
@@ -28,4 +28,4 @@ handoff_hash: null
 classic_profile: hotfix
 classic_migration: 1
 run_id: 3ad1d260-a8ae-40b7-9e45-38b989f67787
-check_epoch: 1
+check_epoch: 5
