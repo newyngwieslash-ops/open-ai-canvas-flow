@@ -232,7 +232,7 @@ go test ./internal/app -run 'Plugin.*Brand|Brand.*Plugin' -count=1
 
 ### Task 9：实际插件包重建和解包检查（3.3）
 
-- [ ] Task 9：实际插件包重建和解包检查（3.3） <!-- comet-task:31abdfd9-3ac5-495c-b49e-53a27e5b0628 -->
+- [x] Task 9：实际插件包重建和解包检查（3.3） <!-- comet-task:31abdfd9-3ac5-495c-b49e-53a27e5b0628 -->
 
 **Files:** 更新受影响的 `plugin-packages/*.yingce-plugin`；无可复用打包入口时创建 `scripts/repack-branded-plugins.py`。新增打包脚本只接受项目内 package root，默认检查差异，显式 `--write` 才重建。
 
