@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { appearanceLogoURL, applyAppearanceMetadata, DEFAULT_PUBLIC_APPEARANCE, normalizePublicAppearance } from "../src/stores/use-appearance-store";
+import { appearanceLogoURL, applyAppearanceMetadata, brandStudioLabel, DEFAULT_PUBLIC_APPEARANCE, normalizePublicAppearance } from "../src/stores/use-appearance-store";
 import { moduleGroupSource } from "./helpers/module-group-source";
 
 type FakeElement = {
@@ -184,8 +184,94 @@ test("appearance management exposes a server-side reset to the built-in Yingce b
     expect(apiSource).toContain('http.delete<{ setting: AdminAppearance }>("/admin/settings/appearance")');
 });
 
-test("metadata uses the displayed wordmark while the stored appearance keeps the configured brand", () => {
-    const legacy = normalizePublicAppearance({});
+test("missing public appearance resolves the new default identity and stable machine slug", () => {
+    expect(DEFAULT_PUBLIC_APPEARANCE.brandName).toBe("源铭振跃");
+    for (const input of [undefined, null, {}, { brandName: "  ", seoTitle: " " }]) {
+        const appearance = normalizePublicAppearance(input);
+        expect(appearance.brandName).toBe("源铭振跃");
+        expect(appearance.brandSlug).toBe("open-ai-canvas");
+        expect(appearance.seoTitle).toBe("源铭振跃");
+        expect(appearance.seoDescription).toBe("源铭振跃，面向 AI 影视与短剧创作的工作台。");
+        expect(appearance.footerCopyright).toBe(`© ${new Date().getFullYear()} 源铭振跃. All rights reserved.`);
+        expect(brandStudioLabel(appearance)).toBe("AI 创作工作台");
+    }
+});
+
+test("default studio label uses a neutral subtitle while custom slugs keep their label", () => {
+    expect(brandStudioLabel(DEFAULT_PUBLIC_APPEARANCE)).toBe("AI 创作工作台");
+    expect(brandStudioLabel(normalizePublicAppearance({ brandName: "HIMA Studio", brandSlug: "hima-studio" }))).toBe("HIMA STUDIO");
+});
+
+test("only exact legacy SEO and copyright templates are treated as defaults", () => {
+    const appearance = normalizePublicAppearance({
+        brandName: "HIMA Studio", seoTitle: "影策",
+        seoDescription: "影策，面向 AI 影视与短剧创作的工作台。",
+        footerCopyright: "© 2020 影策. All rights reserved.",
+    });
+    expect(appearance.brandName).toBe("HIMA Studio");
+    expect(appearance.seoTitle).toBe("源铭振跃");
+    expect(appearance.seoDescription).toBe("源铭振跃，面向 AI 影视与短剧创作的工作台。");
+    expect(appearance.footerCopyright).toBe("© 2020 源铭振跃. All rights reserved.");
+    expect(normalizePublicAppearance({ footerCopyright: "© 2020 影策. All rights reserved. 定制声明" }).footerCopyright).toBe("© 2020 影策. All rights reserved. 定制声明");
+});
+
+test("legacy default fields normalize once without mutating the response or unrelated settings", () => {
+    const input = {
+        brandName: " 影策 ",
+        seoTitle: "影策",
+        seoDescription: "影策，面向 AI 影视与短剧创作的工作台。",
+        footerCopyright: "© 2024 影策. All rights reserved.",
+        brandSlug: "open-ai-canvas",
+        seoKeywords: "影策,自定义关键词",
+        authHeroTitle: "影策的自由文案",
+        logoUrl: "/custom-logo.svg",
+        darkLogoUrl: "/custom-dark.svg",
+        authVideoConfigured: true,
+        authVideoUrl: "/custom-video.mp4",
+        authVideoPosterUrl: "/custom-poster.jpg",
+        icpFilingEnabled: true,
+        icpFilingNumber: "自定义备案",
+        configured: true,
+        revision: "saved-identity",
+    };
+    const snapshot = { ...input };
+    const appearance = normalizePublicAppearance(input);
+    expect(appearance).toMatchObject({
+        ...input,
+        brandName: "源铭振跃",
+        seoTitle: "源铭振跃",
+        seoDescription: "源铭振跃，面向 AI 影视与短剧创作的工作台。",
+        footerCopyright: "© 2024 源铭振跃. All rights reserved.",
+    });
+    expect(normalizePublicAppearance(appearance)).toEqual(appearance);
+    expect(input).toEqual(snapshot);
+});
+
+test("custom identity and free SEO or copyright copy are preserved", () => {
+    const custom = normalizePublicAppearance({
+        brandName: "HIMA Studio",
+        brandSlug: "hima-studio",
+        seoTitle: "定制标题",
+        seoDescription: "影策，面向我们的独立项目。",
+        footerCopyright: "© 2024 影策工作室. All rights reserved.",
+    });
+    expect(custom.brandName).toBe("HIMA Studio");
+    expect(custom.seoTitle).toBe("定制标题");
+    expect(custom.seoDescription).toBe("影策，面向我们的独立项目。");
+    expect(custom.footerCopyright).toBe("© 2024 影策工作室. All rights reserved.");
+    expect(brandStudioLabel(custom)).toBe("HIMA STUDIO");
+    expect(normalizePublicAppearance({ brandName: "影策工作室" }).seoTitle).toBe("影策工作室");
+    expect(normalizePublicAppearance({ brandName: "影策", seoTitle: "影策 - 定制长标题", seoDescription: "" })).toMatchObject({
+        brandName: "源铭振跃", seoTitle: "影策 - 定制长标题", seoDescription: "",
+    });
+});
+
+test("metadata consumes normalized identity and preserves custom titles", () => {
+    const legacy = normalizePublicAppearance({
+        brandName: "影策", seoTitle: "影策",
+        seoDescription: "影策，面向 AI 影视与短剧创作的工作台。",
+        footerCopyright: "© 2026 影策. All rights reserved.",
+    });
     const { documentMock, registered } = createMetadataDocument();
     applyAppearanceMetadata(legacy, documentMock as unknown as Document);
 
@@ -193,9 +279,11 @@ test("metadata uses the displayed wordmark while the stored appearance keeps the
     expect(registered.get("property=og:title")?.content).toBe("源铭振跃");
     expect(registered.get("name=twitter:title")?.content).toBe("源铭振跃");
     expect(registered.get("property=og:site_name")?.content).toBe("源铭振跃");
-    // 版权页脚与原始配置不改：展示映射只作用于浏览器标签与分享卡。
-    expect(legacy.brandName).toBe(DEFAULT_PUBLIC_APPEARANCE.brandName);
-    expect(legacy.footerCopyright).toContain("影策");
+    expect(registered.get("name=description")?.content).toBe("源铭振跃，面向 AI 影视与短剧创作的工作台。");
+    expect(registered.get("property=og:description")?.content).toBe("源铭振跃，面向 AI 影视与短剧创作的工作台。");
+    expect(registered.get("name=twitter:description")?.content).toBe("源铭振跃，面向 AI 影视与短剧创作的工作台。");
+    expect(legacy.brandName).toBe("源铭振跃");
+    expect(legacy.footerCopyright).toBe("© 2026 源铭振跃. All rights reserved.");
 
     const custom = normalizePublicAppearance({ brandName: "HIMA Studio", brandSlug: "hima-studio", seoTitle: "HIMA Studio - AI 影视工作台" });
     const customDocument = createMetadataDocument();

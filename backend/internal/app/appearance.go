@@ -41,7 +41,7 @@ const (
 )
 
 const (
-	defaultAppearanceBrandName = "影策"
+	defaultAppearanceBrandName = "源铭振跃"
 	defaultAppearanceBrandSlug = "open-ai-canvas"
 	defaultAppearanceSkinID    = "classic"
 	defaultAppearanceLogoURL   = "/logo.svg"

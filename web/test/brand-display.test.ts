@@ -25,6 +25,12 @@ describe("UI brand display mapping", () => {
         expect(displayBrandTitle("", "HIMA Studio")).toBe("HIMA Studio");
     });
 
+    test("recognizes the exact legacy default title after the site name is normalized", () => {
+        expect(displayBrandTitle("影策", "源铭振跃")).toBe("源铭振跃");
+        expect(displayBrandTitle(" 影策 ", "HIMA Studio")).toBe("源铭振跃");
+        expect(displayBrandTitle("源铭振跃", "源铭振跃")).toBe("源铭振跃");
+    });
+
     test("does not rewrite custom SEO titles in bulk", () => {
         expect(displayBrandTitle("影策 - 定制长标题", "影策")).toBe("影策 - 定制长标题");
         expect(displayBrandTitle("HIMA Studio - AI 影视工作台", "HIMA Studio")).toBe("HIMA Studio - AI 影视工作台");

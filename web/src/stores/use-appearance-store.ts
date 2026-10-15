@@ -4,13 +4,13 @@ import { DEFAULT_UPDATE_ANNOUNCEMENT, normalizeUpdateAnnouncement } from "@/lib/
 
 import type { PublicAppearance } from "@/services/api/appearance";
 import { applySkinTheme, DEFAULT_CLASSIC_SKIN, normalizeSkinDefinition } from "@/lib/skin-themes";
-import { displayBrandName, displayBrandTitle } from "@/lib/brand-display";
+import { displayBrandName, displayBrandTitle, SOURCE_UI_BRAND, UI_BRAND_NAME } from "@/lib/brand-display";
 
 export const DEFAULT_PUBLIC_APPEARANCE: PublicAppearance = {
     updates: DEFAULT_UPDATE_ANNOUNCEMENT,
     canvas: DEFAULT_CANVAS_APPEARANCE,
     schemaVersion: 10,
-    brandName: "影策",
+    brandName: UI_BRAND_NAME,
     brandSlug: "open-ai-canvas",
     authHeroTitle: "让一个故事，\n从文字走向银幕。",
     authHeroDescription: "",
@@ -22,10 +22,10 @@ export const DEFAULT_PUBLIC_APPEARANCE: PublicAppearance = {
     authVideoAutoplay: true,
     skinId: "classic",
     activeSkin: DEFAULT_CLASSIC_SKIN,
-    seoTitle: "影策",
-    seoDescription: "影策，面向 AI 影视与短剧创作的工作台。",
+    seoTitle: UI_BRAND_NAME,
+    seoDescription: `${UI_BRAND_NAME}，面向 AI 影视与短剧创作的工作台。`,
     seoKeywords: "",
-    footerCopyright: `© ${new Date().getFullYear()} 影策. All rights reserved.`,
+    footerCopyright: `© ${new Date().getFullYear()} ${UI_BRAND_NAME}. All rights reserved.`,
     icpFilingEnabled: false,
     icpFilingNumber: "",
     redeemPurchaseUrl: "",
@@ -50,7 +50,7 @@ export const useAppearanceStore = create<AppearanceStore>((set) => ({
 }));
 
 export function normalizePublicAppearance(value?: Partial<PublicAppearance> | null): PublicAppearance {
-    const brandName = String(value?.brandName || "").trim();
+    const brandName = displayBrandName(String(value?.brandName || "").trim());
     const brandSlug = normalizeBrandSlug(value?.brandSlug);
     const authHeroTitle = normalizeAppearanceCopy(value?.authHeroTitle, DEFAULT_PUBLIC_APPEARANCE.authHeroTitle);
     const authHeroDescription = normalizeAppearanceCopy(value?.authHeroDescription, DEFAULT_PUBLIC_APPEARANCE.authHeroDescription, true);
@@ -58,10 +58,11 @@ export function normalizePublicAppearance(value?: Partial<PublicAppearance> | nu
     const logoUrl = safeAppearanceURL(value?.logoUrl, DEFAULT_PUBLIC_APPEARANCE.logoUrl);
     const darkLogoUrl = safeAppearanceURL(value?.darkLogoUrl, logoUrl);
     const resolvedBrandName = brandName || DEFAULT_PUBLIC_APPEARANCE.brandName;
-    const seoTitle = normalizeAppearanceCopy(value?.seoTitle, resolvedBrandName);
+    const seoTitle = displayBrandTitle(normalizeAppearanceCopy(value?.seoTitle, resolvedBrandName), resolvedBrandName);
     const seoDescription = normalizeAppearanceCopy(value?.seoDescription, `${resolvedBrandName}，面向 AI 影视与短剧创作的工作台。`, true);
     const seoKeywords = normalizeAppearanceCopy(value?.seoKeywords, "", true);
-    const footerCopyright = normalizeAppearanceCopy(value?.footerCopyright, `© ${new Date().getFullYear()} ${resolvedBrandName}. All rights reserved.`);
+    const footerCopyright = normalizeAppearanceCopy(value?.footerCopyright, `© ${new Date().getFullYear()} ${resolvedBrandName}. All rights reserved.`)
+        .replace(/^(© \d{4} )影策(\. All rights reserved\.)$/, `$1${UI_BRAND_NAME}$2`);
     const icpFilingNumber = normalizeAppearanceCopy(value?.icpFilingNumber, "", true);
     const redeemPurchaseUrl = typeof value?.redeemPurchaseUrl === "string" ? safeAppearanceURL(value.redeemPurchaseUrl, "") : "";
     return {
@@ -83,7 +84,7 @@ export function normalizePublicAppearance(value?: Partial<PublicAppearance> | nu
         skinId: normalizeSkinDefinition(value?.activeSkin).id,
         activeSkin: normalizeSkinDefinition(value?.activeSkin),
         seoTitle,
-        seoDescription,
+        seoDescription: seoDescription === `${SOURCE_UI_BRAND}，面向 AI 影视与短剧创作的工作台。` ? DEFAULT_PUBLIC_APPEARANCE.seoDescription : seoDescription,
         seoKeywords,
         footerCopyright,
         icpFilingEnabled: Boolean(value?.icpFilingEnabled && icpFilingNumber),
@@ -114,7 +115,7 @@ export function commitPublicAppearance(value?: Partial<PublicAppearance> | null)
 
 export function applyAppearanceMetadata(appearance: PublicAppearance, targetDocument: Document | undefined = typeof document === "undefined" ? undefined : document) {
     if (!targetDocument) return;
-    // 浏览器标签与分享卡元数据使用 UI 展示名；appearance 配置、版权页脚与协议标题保持原值。
+    // 沿用共享身份规则，兼容直接传入旧默认值的调用方。
     const name = displayBrandName(appearance.brandName);
     const title = displayBrandTitle(appearance.seoTitle, appearance.brandName);
     targetDocument.title = title;
@@ -168,7 +169,7 @@ export function appearanceLogoURL(appearance: PublicAppearance, theme: "light" |
 }
 
 export function brandStudioLabel(appearance: PublicAppearance) {
-    if (appearance.brandName === DEFAULT_PUBLIC_APPEARANCE.brandName && appearance.brandSlug === DEFAULT_PUBLIC_APPEARANCE.brandSlug) return "YINGCE STUDIO";
+    if (appearance.brandName === DEFAULT_PUBLIC_APPEARANCE.brandName && appearance.brandSlug === DEFAULT_PUBLIC_APPEARANCE.brandSlug) return "AI 创作工作台";
     return appearance.brandSlug.replace(/-+/g, " ").toLocaleUpperCase();
 }
 
