@@ -34,6 +34,10 @@
 
 - [画布浮动控件设计沉淀](design/canvas-floating-controls.mdx)：顶部操作区、底部 Dock、小地图和右下角工作模式切换的浮动面板、定位与响应式约束。
 
+- [RunningHub 开放 API 调研](design/runninghub-api-research.md)：v1 工作流 / v2 标准模型直调的端点、认证、上传、轮询与坑点（来源为官方代码交叉印证，文档站待复核）。
+
+- [RunningHub 视频生成实施指引](plans/runninghub-video-integration.md)：阶段 A 零代码启用工作流视频生成（配置、字段映射、画布使用、排障），阶段 B 接 v2 标准模型直调的分步实施。
+
 - [用户诊断包设计](design/user-diagnostic-bundle.mdx)：面向普通用户的一键日志导出、前后端链路关联、脱敏、权限与排障方案。
 
 - [AI 审美批改画布插件方案](design/ai-art-critique-solution.md)：云端视觉分析、并行 Reviewer、问题定位、AI 修改提示词与前端 SVG 标注的职责边界和交互设计。
