@@ -41,7 +41,7 @@ base-ref: efc5126d8b5d9fed6fac62fe8d9417028d214ef8
 
 **Interfaces:** 审计命令 `python scripts/audit-product-brand.py --root . --json` 输出发现数组；内部 `audit_root(root: pathlib.Path) -> list[dict]` 返回同一结构。每项包含 path、entry（归档时）、line、text、category、reason；category 为 product、exception 或 non_brand。未经批准的 product 发现使进程非零退出；`--self-test` 不扫描或修改真实项目。
 
-- [ ] 先用临时目录构造普通源文件、名称含旧品牌的文件、ZIP 文本条目及非品牌“摄影策略”，检查前三类会报告、最后一类单独分类；添加精确例外条目的最小自检。测试内使用标准库 `TemporaryDirectory`、`ZipFile` 和 `assert`。
+- [x] 先用临时目录构造普通源文件、名称含旧品牌的文件、ZIP 文本条目及非品牌“摄影策略”，检查前三类会报告、最后一类单独分类；添加精确例外条目的最小自检。测试内使用标准库 `TemporaryDirectory`、`ZipFile` 和 `assert`。
 
 ```python
 with tempfile.TemporaryDirectory() as root:
@@ -58,9 +58,9 @@ with tempfile.TemporaryDirectory() as root:
     assert not any(item['path'] == 'ordinary.txt' and item['category'] == 'product' for item in findings)
 ```
 
-- [ ] 用 `git ls-files --cached --others --exclude-standard` 建立输入集；排除 Git/依赖/构建/本地缓存和明确的用户参考输入，不给产品目录整目录豁免。按 UTF-8 读取文本，ZIP 按条目读取；记录所有 105 包及非文本条目，不宣称二进制文本扫描覆盖了图片像素。
-- [ ] 给旧值回归、迁移识别和历史证据添加精确到文件与命中内容的例外；同文件的其他命中仍报告。保存基线、未检查素材和真实引用。
-- [ ] 运行以下命令。self-test 应通过；实施前审计应报告旧品牌而非假通过。提交扫描与基线说明，不提交本地快照。
+- [x] 用 `git ls-files --cached --others --exclude-standard` 建立输入集；排除 Git/依赖/构建/本地缓存和明确的用户参考输入，不给产品目录整目录豁免。按 UTF-8 读取文本，ZIP 按条目读取；记录所有 105 包及非文本条目，不宣称二进制文本扫描覆盖了图片像素。
+- [x] 给旧值回归、迁移识别和历史证据添加精确到文件与命中内容的例外；同文件的其他命中仍报告。保存基线、未检查素材和真实引用。
+- [x] 运行以下命令。self-test 应通过；实施前审计应报告旧品牌而非假通过。提交扫描与基线说明，不提交本地快照。
 
 ```powershell
 python scripts/audit-product-brand.py --self-test
