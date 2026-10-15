@@ -113,7 +113,7 @@ bun test test/brand-display.test.ts test/appearance-bootstrap.test.ts test/appea
 
 **Interfaces:** 复用 `readAppearance`、`UpdateAppearance`、`normalizeCanvasAppearance`、`resolveEmailSender`。邮件公开继承标记与实际发送用同一个判定，必要时在 email.go 中定义 `isInheritedEmailSender(name string) bool`，只消除这两个调用点的真实重复。
 
-- [ ] 在现有外观 fixture 中加入存量配置测试；用 `db.Create(&model.SystemSetting{Key: appearanceSettingKey, ValueJSON: ...})` 写隔离测试库，验证公开/管理结果均为新名，数据库原 JSON 在 GET 后不变，再经合法保存重读。
+- [x] 在现有外观 fixture 中加入存量配置测试；用 `db.Create(&model.SystemSetting{Key: appearanceSettingKey, ValueJSON: ...})` 写隔离测试库，验证公开/管理结果均为新名，数据库原 JSON 在 GET 后不变，再经合法保存重读。
 
 ```go
 func TestAppearanceMigratesLegacyBrand(t *testing.T) {
@@ -129,8 +129,8 @@ func TestAppearanceMigratesLegacyBrand(t *testing.T) {
 }
 ```
 
-- [ ] 扩展同一 fixture 覆盖其他品牌/Agent、旧名派生默认值、无关完整字段、连续规范化、保存和服务重新构造读取。默认模板只按明确字段精确识别；不替换自由正文，不使用全库 replace。
-- [ ] 在 email.go 增加共享继承判定，并给空名、旧默认名、新默认名和自定义名分别断言；旧默认发件名在自定义站点上仍继承站点名。默认协议沿 `defaultAgreementTitle` 使用站点身份，自定义条款保持。
+- [x] 扩展同一 fixture 覆盖其他品牌/Agent、旧名派生默认值、无关完整字段、连续规范化、保存和服务重新构造读取。默认模板只按明确字段精确识别；不替换自由正文，不使用全库 replace。
+- [x] 在 email.go 增加共享继承判定，并给空名、旧默认名、新默认名和自定义名分别断言；旧默认发件名在自定义站点上仍继承站点名。默认协议沿 `defaultAgreementTitle` 使用站点身份，自定义条款保持。
 
 ```go
 func isInheritedEmailSender(name string) bool {
@@ -148,7 +148,7 @@ func TestSenderNameLegacyInheritance(t *testing.T) {
 }
 ```
 
-- [ ] 用隔离发送器复核注册/找回密码邮件，不发送真实邮件；运行以下命令。提交共享逻辑与回归。
+- [x] 用隔离发送器复核注册/找回密码邮件，不发送真实邮件；运行以下命令。提交共享逻辑与回归。
 
 ```powershell
 Set-Location backend
