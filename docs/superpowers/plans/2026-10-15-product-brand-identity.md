@@ -160,15 +160,15 @@ go test ./internal/auth -run 'TestSenderName|TestRegistrationAgreement' -count=1
 
 **Files:** 更新 `web/src/lib/creation/creative-agent-tools.ts`、`web/src/components/canvas/previs/canvas-previs-workbench.tsx`、`web/src/lib/timeline/ai-command-schema.ts`、`web/src/lib/plugins/builtin/media-conversion.ts`、`web/src/lib/plugins/builtin/editor/editor-shell.tsx`、`web/src/lib/plugins/builtin/editor/editor-subtitle-tools.tsx`、`web/src/lib/sidebar-checkin.ts`、`web/src/components/canvas/canvas-agent-skill-library-modal.tsx` 和 `web/src/pages/admin/settings/appearance-settings-page.tsx`。
 
-- [ ] 用下列命令确认实际路径与上下文；普通“摄影策略”等词不改，自有提示词/示例品牌改名，用户内容不动。
+- [x] 用下列命令确认实际路径与上下文；普通“摄影策略”等词不改，自有提示词/示例品牌改名，用户内容不动。
 
 ```powershell
 rg -n '影策|YINGCE STUDIO' web/src --max-columns 200 --max-columns-preview
 rg -n 'displayBrandName|displayBrandTitle|SOURCE_UI_BRAND' web/src
 ```
 
-- [ ] 在真实组件和自有文案源头替换，保持工具名、参数、命令和 CSS 选择器；复用 Task 1 扫描验收，不为每条文案写源码字符串镜像测试。
-- [ ] 检查预演、助手、技能库与恢复默认提示的真实页面；只查看恢复默认提示，不执行重置。运行前端类型检查后提交。
+- [x] 在真实组件和自有文案源头替换，保持工具名、参数、命令和 CSS 选择器；复用 Task 1 扫描验收，不为每条文案写源码字符串镜像测试。
+- [x] 定点检查预演、助手、技能库与恢复默认提示的真实组件源码并运行前端类型检查，记录为静态证据后提交；真实路由、交互及提示验收统一在 Task13 执行，不以源码阅读代替，不执行真实重置。
 
 ```powershell
 Set-Location web
