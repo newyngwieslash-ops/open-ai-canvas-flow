@@ -216,7 +216,7 @@ go test ./internal/skills -count=1
 
 ### Task 8：已安装官方内容更新与用户保护（3.2）
 
-- [ ] Task 8：已安装官方内容更新与用户保护（3.2） <!-- comet-task:c79f31ab-e29e-4fbb-9cdb-931ea9fc827d -->
+- [x] Task 8：已安装官方内容更新与用户保护（3.2） <!-- comet-task:c79f31ab-e29e-4fbb-9cdb-931ea9fc827d -->
 
 **Files:** 复用 `backend/internal/skills/skills_builtin.go`、`backend/internal/repository/skills.go` 和 `backend/internal/app/protocol_plugins.go`；在相应已有测试中扩展更新场景，若没有合适插件 fixture 则创建 `backend/internal/app/protocol_plugins_brand_test.go`。
 
