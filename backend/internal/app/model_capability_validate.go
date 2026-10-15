@@ -483,7 +483,7 @@ func validateImagePresetSelection(profile *ImageCapabilityConfig, quality, ratio
 		return nil
 	}
 	for _, preset := range profile.Size.Presets {
-		if preset.Tier == tier && preset.Ratio == ratio {
+		if preset.Tier == tier && normalizeDeclaredImageRatio(preset.Ratio) == normalizeDeclaredImageRatio(ratio) {
 			return nil
 		}
 	}

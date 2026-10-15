@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/protocol"
 )
 
 func TestImageSizePresetsValidationAndRoundTrip(t *testing.T) {
@@ -94,6 +95,25 @@ func TestResolveImageTaskSizeUsesRouteEncodingForDeclaredAlias(t *testing.T) {
 	}
 	if got := resolveImageTaskSize(profile, string(model.ChannelInterfaceOpenAIImage), "32:18", "1k"); got != "1824x1024" {
 		t.Fatalf("pixel route got %q, want declared pixel size 1824x1024", got)
+	}
+}
+
+func TestImagePresetValidationAcceptsEquivalentRatios(t *testing.T) {
+	profile := &ImageCapabilityConfig{
+		Parameters: []protocol.ImageParameter{},
+		Size: ImageSizeConfig{Parameter: "aspect_ratio", DefaultTier: "1k", Presets: []ImageSizePreset{
+			{Tier: "1k", Ratio: "21:9", Size: "2048x878", Width: 2048, Height: 878},
+		}},
+	}
+	for _, ratio := range []string{"21:9", "7:3", "42:18"} {
+		if err := validateImagePresetSelection(profile, "", ratio); err != nil {
+			t.Fatalf("equivalent ratio %s rejected: %v", ratio, err)
+		}
+	}
+	for _, ratio := range []string{"16:9", "3:7"} {
+		if err := validateImagePresetSelection(profile, "", ratio); err == nil {
+			t.Fatalf("undeclared ratio %s accepted", ratio)
+		}
 	}
 }
 
