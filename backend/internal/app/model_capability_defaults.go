@@ -41,6 +41,8 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 			values = append(values, preset.Size)
 		}
 		image.Size = ImageSizeConfig{Parameter: "size", Values: values, Default: "2048x2048", AllowCustom: true, Presets: presets}
+		// Seedream 5.0 官方档位为 1K / 1.5K / 2K，不含 4K；1.5K 用于独立计价。
+		image.Resolution = ImageResolutionConfig{Supported: true, Values: []string{"1k", "1.5k", "2k"}, Default: "2k"}
 		image.Quality = ImageQualityConfig{Supported: false, Values: []string{}, Default: "auto"}
 		// 透明背景需要带 alpha 的单张参考图，通过插件命名空间显式配置。
 		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
@@ -216,7 +218,7 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Ratios = []string{"16:9", "9:16", "1:1"}
 		video.Resolutions = []string{"1080p"}
 		video.DefaultResolution = "1080p"
-	case model.ChannelInterfaceMiniMaxVideo:
+	case model.ChannelInterfaceMiniMaxVideo, model.ChannelInterfaceType("metaso-h3"):
 		video.Operations = append(video.Operations, "reference_to_video")
 		video.References.MaxImages = 9
 		video.References.MaxImageBytes = 30 * 1024 * 1024
@@ -226,7 +228,7 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.References.MaxAudios = 3
 		video.References.MaxAudioBytes = 15 * 1024 * 1024
 		video.References.MaxAudioDuration = 15
-		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, Default: 5}
+		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}, Default: 5}
 		video.Ratios = []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
 		video.DefaultRatio = "16:9"
 		video.Resolutions = []string{"768P", "2K"}

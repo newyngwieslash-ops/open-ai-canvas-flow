@@ -190,6 +190,18 @@ export function normalizeModelCapabilityConfig(config: ModelCapabilityConfig): M
 export function normalizeLegacyImageResolutionConfig(protocol: ModelProtocol | undefined, image: ImageCapabilityConfig): ImageCapabilityConfig {
     if (image.parameters) return projectImageParameters(image, image.parameters);
     image = { ...image, resolutionUsesQuality: protocol === "gemini-image" };
+    // Seedream 5.0 的档位是 1K / 1.5K / 2K，既不由 quality 承载，也不含 4K。
+    if (protocol === "km-kemei-seedream") {
+        return {
+            ...image,
+            resolution: {
+                supported: true,
+                values: ["1k", "1.5k", "2k"],
+                default: image.resolution?.supported && ["1k", "1.5k", "2k"].includes(image.resolution.default) ? image.resolution.default : "2k",
+            },
+            quality: { supported: false, values: [], default: "auto" },
+        };
+    }
     if (image.resolution.supported || !image.quality.supported) return image;
     const allowed = protocol === "grok-image" ? new Set(["1k", "2k"]) : protocol === "agnes-image" ? new Set(["1k", "2k", "4k"]) : undefined;
     if (!allowed) return image;
@@ -258,6 +270,8 @@ export function defaultImageCapabilityConfig(protocol?: ModelProtocol, model = "
         const presets = kemeiSeedreamPresets();
         image.references = { ...image.references, maxImages: 10, maskSupported: false };
         image.size = { parameter: "size", values: presets.map((preset) => preset.size), default: "2048x2048", allowCustom: true, presets };
+        // Seedream 5.0 官方档位为 1K / 1.5K / 2K（不含 4K），1.5K 用于独立计价。
+        image.resolution = { supported: true, values: ["1k", "1.5k", "2k"], default: "2k" };
         image.quality = { supported: false, values: [], default: "auto" };
         // 透明输出要求一张含 alpha 的参考图，宿主通用开关不能保证此条件。
         // 此能力通过插件命名空间的 background + output_format 显式配置。
@@ -472,7 +486,7 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.defaultResolution = "768P";
         video.operations.push("reference_to_video");
     }
-    if (protocol === "minimax-video") {
+    if (protocol === "minimax-video" || protocol === "metaso-h3") {
         video.references.maxImages = 9;
         video.references.maxImageBytes = 30 * 1024 * 1024;
         video.references.maxVideos = 3;
@@ -481,7 +495,7 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.references.maxAudios = 3;
         video.references.maxAudioBytes = 15 * 1024 * 1024;
         video.references.maxAudioDurationSeconds = 15;
-        video.duration = { selection: "enum", values: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], default: 5 };
+        video.duration = { selection: "enum", values: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], default: 5 };
         video.ratios = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
         video.resolutions = ["768P", "2K"];
         video.defaultResolution = "768P";

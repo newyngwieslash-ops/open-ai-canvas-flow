@@ -72,7 +72,7 @@ function normalizeMiniMaxResolution(value: string) {
 
 function normalizeMiniMaxDuration(value: string) {
     const seconds = Math.floor(Number(value) || 5);
-    return Math.max(4, Math.min(15, seconds));
+    return Math.max(4, Math.min(30, seconds));
 }
 
 function normalizeMiniMaxRatio(value: string, frameMode: boolean) {
