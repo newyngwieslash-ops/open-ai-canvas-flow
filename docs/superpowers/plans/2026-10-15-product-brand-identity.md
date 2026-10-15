@@ -73,16 +73,16 @@ python scripts/audit-product-brand.py --root . --json
 
 **Interfaces:** 消费现有公开 `{data:{appearance}}`、管理 `{setting}` 接口。保持 `/public/appearance`、`/admin/settings/appearance` 与既有更新 payload 不变。
 
-- [ ] 只读检查运行实例；3000 端口公开 API 已返回旧品牌，8080 直连不可用不意味着需要重启。仅输出品牌、SEO、版权、Agent 字段。
+- [x] 只读检查运行实例；3000 端口公开 API 已返回旧品牌，8080 直连不可用不意味着需要重启。仅输出品牌、SEO、版权、Agent 字段。
 
 ```powershell
 $response = Invoke-RestMethod 'http://127.0.0.1:3000/api/public/appearance'
 $response.data.appearance | Select-Object brandName,brandSlug,seoTitle,seoDescription,footerCopyright
 ```
 
-- [ ] 用现有受权会话只读查看外观、Agent、邮件和注册设置；无权限则记录具体未覆盖项，不创建账号、不提取 Cookie 或假定已通过。记录自定义字段和配置归属。
-- [ ] 若需要显式保存旧全局设置，先完整备份；使用现有受保护 PATCH 并保留所有字段，不执行 DELETE 恢复默认。保存失败保留原值及错误，不手工改库。
-- [ ] 对照工作区基线和 Git diff，确认先前 UI、上传图及工具目录仍在；提交脱敏盘点说明。
+- [x] 用现有受权会话只读查看外观、Agent、邮件和注册设置；无权限则记录具体未覆盖项，不创建账号、不提取 Cookie 或假定已通过。记录自定义字段和配置归属。
+- [x] 若需要显式保存旧全局设置，先完整备份；使用现有受保护 PATCH 并保留所有字段，不执行 DELETE 恢复默认。保存失败保留原值及错误，不手工改库。
+- [x] 对照工作区基线和 Git diff，确认先前 UI、上传图及工具目录仍在；提交脱敏盘点说明。
 
 ### Task 3：站点默认与前端读取（2.1）
 
