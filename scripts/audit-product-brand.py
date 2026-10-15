@@ -26,7 +26,11 @@ EXCEPTIONS = {
     ("docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/brand-inventory.md", "基线旧品牌检索词：`影策`、`YINGCE STUDIO`、`Open AI Canvas`。"): "historical audit evidence",
 }
 BRAND = re.compile(r"影策|yingce|open[ _-]ai[ _-]canvas", re.IGNORECASE)
-TECHNICAL = re.compile(r"https?://[^\s<>\"'`]+|yingce/backend(?:/[\w/.-]+)?|\.yingce-plugin|yingce-agent|YINGCE_[A-Z0-9_]+")
+TECHNICAL = re.compile(
+    r"https?://[^\s<>\"'`]+|yingce/backend(?:/[\w/.-]+)?|\.yingce-plugin|yingce-agent|YINGCE_[A-Z0-9_]+"
+    r"|(?<![\w.-])(?:yingce\.plugin/(?:v1|v2|package-v1)|yingce-system|yingce-short-drama-workflow)(?![\w./-])"
+    r"|\b(?:brandSlug|BrandSlug|brand_slug|defaultAppearanceBrandSlug)[\"']?\s*[:=/]\s*[\"']?open-ai-canvas(?![\w.-])"
+)
 EXCLUDED_PARTS = {
     ".git", ".local", ".taste-skill", ".superpowers", ".agents", ".codex",
     ".claude", ".comet", "node_modules", "vendor", "dist", "build", ".next",
@@ -147,6 +151,14 @@ def self_test():
             "mixed.txt": "https://github.com/ddcat-ai/open-ai-canvas 影策团队\n",
             "manifest.json": '\n' + json.dumps({"author": "影策团队"}) + '\n',
             "literal.json": json.dumps({"example": r"\u5f71\u7b56"}),
+            "stable.txt": '\n'.join((
+                'yingce.plugin/v1', 'yingce.plugin/v2', 'yingce.plugin/package-v1',
+                'yingce-system', 'yingce-short-drama-workflow',
+                'brandSlug: "open-ai-canvas"', '"brandSlug": "open-ai-canvas"',
+                'defaultAppearanceBrandSlug = "open-ai-canvas"',
+                'yingce.plugin/v1 影策团队', 'brandSlug: "open-ai-canvas", label: "影策团队"',
+                'yingce.plugin/v10', 'yingce-system-display',
+            )),
             "backend/builtin/摄影策略/SKILL.md": "摄影策略\n",
             "binary.png": b"\x89PNG\x00\xff",
             ".local/cache/copy.txt": "影策",
@@ -182,6 +194,12 @@ def self_test():
         for path, entry in (("manifest.json", None), ("sample.yingce-plugin", "manifest.json")):
             assert any(x["path"] == path and x["entry"] == entry and x["line"] == 2 and x["category"] == "product" for x in findings), "escaped JSON brand must retain source location: " + path
         assert not any(x["path"] == "literal.json" and x["category"] == "product" for x in findings), "literal backslash-u must not be treated as a semantic brand"
+        for line in range(1, 9):
+            assert {x["category"] for x in findings if x["path"] == "stable.txt" and x["line"] == line} == {"exception"}, "stable identity must be a technical exception: line " + str(line)
+        for line in (9, 10):
+            assert {x["category"] for x in findings if x["path"] == "stable.txt" and x["line"] == line} == {"exception", "product"}, "stable identity must not hide adjacent display text"
+        for line in (11, 12):
+            assert any(x["path"] == "stable.txt" and x["line"] == line and x["category"] == "product" for x in findings), "technical identity exception must match the exact token"
         assert any(x["path"] == "ordinary.txt" and x["line"] == 1 and x["category"] == "non_brand" for x in findings), "photography language must be classified separately"
         assert not any(x["path"] == "ordinary.txt" and x["line"] == 1 and x["category"] == "product" for x in findings)
         assert any(x["path"] == "ordinary.txt" and x["line"] == 2 and x["category"] == "product" for x in findings), "photography text must not hide a brand on the same line"

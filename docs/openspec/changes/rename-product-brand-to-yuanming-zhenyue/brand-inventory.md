@@ -71,9 +71,10 @@ python scripts/audit-product-brand.py --root . --json
 - 返回发现数组；字段为 `path`、`entry`、`line`、`text`、`category`、`reason`。行号从 1 开始；0 表示路径、二进制或包覆盖记录，普通文件的 entry 为 null。保留原始文本；JSON 字符串的 Unicode 转义仅用于匹配，定位仍指向原物理行与包条目。
 - product 表示仍需审查的旧名候选或读取失败，存在即退出 1；exception 区分精确旧值回归、默认值识别、历史证据、稳定技术 token / 实际引用，以及未检查二进制和包覆盖记录；non_brand 单列普通摄影用语。一个物理行可因不同理由产生多条发现，记录数不是唯一命中行数。
 - 例外表使用精确文件和完整行内容，同文件其他行继续报告；技术 token 按命中区间分类，同一行其他品牌继续报告。未逐项确认的测试、历史文档和协议标识保守列为 product，不能据此批量替换。
-- 本次扫描结果及全部包覆盖、非文本对象和引用记录保存在任务报告的完整 JSON 中：`.superpowers/sdd/2026-10-15-product-brand-identity/task-1-report.md`。该报告与本地保护快照不纳入提交。
+- 技术例外精确覆盖 `yingce.plugin/v1`、`yingce.plugin/v2`、`yingce.plugin/package-v1`、`yingce-system`、`yingce-short-drama-workflow` 和 `brandSlug/open-ai-canvas` 等明确字段值；相似但不同的 token 与同一行其他可见品牌仍报告。
+- 完整扫描数组（全部包覆盖、非文本对象和引用）保存在 `.local/cache/product-brand-task1-baseline.json`；证据摘要为 `.superpowers/sdd/2026-10-15-product-brand-identity/task-1-report.md`。二者与本地保护快照不纳入提交。
 
-本次最终扫描统计：4,823 条记录，涉及 1,967 个路径；product 1,785、exception 3,028、non_brand 10。105 个包全部读取，包含 318 个文本条目、35 个非文本条目；全输入共 546 个未检查非文本对象，读取错误 0。105 个包均有保守 product 候选（包含尚待确认的英文协议标识，不等于全部存在可见中文旧名）。12 个保护文件的 SHA-256 全部保持一致。基线退出 1 为预期结果，不代表扫描器失败。
+本次最终扫描统计：4,824 条记录，涉及 1,967 个路径；product 1,272、exception 3,542、non_brand 10。105 个包全部读取，包含 318 个文本条目、35 个非文本条目；全输入共 546 个未检查非文本对象，读取错误 0。100 个包仍有保守 product 候选（包含未分类旧值，不等于全部存在可见中文旧名）。12 个保护文件的 SHA-256 全部保持一致。基线退出 1 为预期结果，不代表扫描器失败。
 
 ### 待人工关注
 
