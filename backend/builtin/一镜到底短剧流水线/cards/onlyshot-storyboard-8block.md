@@ -43,7 +43,7 @@ evidence: E4
 
 - 用户要生成某镜首帧/分镜图，需要组装 prompt。
 - 生成结果出现「人形穿帮」「画面平」「字幕重复」。
-- 影策 Agent 帮用户写即梦/Seedance 分镜 prompt 时套用此模板。
+- 源铭振跃 Agent 帮用户写即梦/Seedance 分镜 prompt 时套用此模板。
 
 ## E — 可执行步骤 (Execution)
 

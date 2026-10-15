@@ -44,7 +44,7 @@ evidence: E4
 
 - 一素材多平台投放（千川/Reels/TikTok/YouTube）。
 - 竖屏版主体被裁的修复。
-- 影策 Agent 生成多规格素材时的构图约束。
+- 源铭振跃 Agent 生成多规格素材时的构图约束。
 
 ## E — 可执行步骤 (Execution)
 

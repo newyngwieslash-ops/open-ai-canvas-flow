@@ -44,7 +44,7 @@ evidence: E4
 
 - 用户上传素材后要写生成提示词。
 - 生成结果「没用上我传的图」的归因诊断。
-- 影策 Agent 组装即梦/Seedance 多模态任务的 prompt 组装环节。
+- 源铭振跃 Agent 组装即梦/Seedance 多模态任务的 prompt 组装环节。
 
 ## E — 可执行步骤 (Execution)
 

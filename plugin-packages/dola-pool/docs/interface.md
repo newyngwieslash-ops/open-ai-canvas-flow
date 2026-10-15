@@ -40,7 +40,7 @@ Dola-pool 的任务按 API Key 隔离；创建与查询必须使用同一把 Key
   "id": "dola-pool",
   "name": "Dola-pool Seedance Video",
   "version": "1.0.0",
-  "author": "Dola-pool / 影策",
+  "author": "Dola-pool / 源铭振跃",
   "description": "Dola-pool Seedance 视频生成任务协议。",
   "permissions": [
     "generation.run",

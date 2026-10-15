@@ -1,6 +1,6 @@
 # 支付FM 接口协议说明
 
-遵循 `yingce.payment/v1` 标准，自动转换影策系统订单至支付FM `/startOrder` 接口，并在收到通知时按 MD5 规则完成异步验签。
+遵循 `yingce.payment/v1` 标准，自动转换源铭振跃系统订单至支付FM `/startOrder` 接口，并在收到通知时按 MD5 规则完成异步验签。
 
 <!-- YINGCE_MANIFEST_CONTRACT_START -->
 ## Manifest 完整接口定义

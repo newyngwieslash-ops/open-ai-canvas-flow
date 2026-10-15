@@ -43,7 +43,7 @@ evidence: E4
 
 - generation failed 类失败确诊为内容审核后。
 - 写反派戏、冲突戏、面部特写镜头的 prompt 时预防性替换。
-- 影策 Agent 组装分镜 prompt 后的跑前自检项。
+- 源铭振跃 Agent 组装分镜 prompt 后的跑前自检项。
 
 ## E — 可执行步骤 (Execution)
 

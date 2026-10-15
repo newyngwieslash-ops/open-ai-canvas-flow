@@ -93,7 +93,7 @@
   "id": "google-gemini-veo",
   "name": "Google Gemini Veo",
   "version": "2.0.0",
-  "author": "Google / 影策",
+  "author": "Google / 源铭振跃",
   "description": "Google Gemini Veo 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
   "permissions": [

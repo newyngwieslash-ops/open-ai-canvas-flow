@@ -24,7 +24,7 @@ metadata:
 
 ## 何时调用
 
-当从写段子到登台演出的全流程时调用（本包由 12 张方法论卡汇编而成，整理自）。核心能力：脱口秀技艺：段子结构/打磨/上台与冷场。关键触发：“tries too hard”、“I have bits but no set.”、“No open-mic near me.”、“I bombed / the room died.”、“what should I write about”、“I have a setup but no punch.”。工位边界：本包负责创作方法论层；提示词语法与模型参数走影策官方市场技能，两者接力不抢戏。
+当从写段子到登台演出的全流程时调用（本包由 12 张方法论卡汇编而成，整理自）。核心能力：脱口秀技艺：段子结构/打磨/上台与冷场。关键触发：“tries too hard”、“I have bits but no set.”、“No open-mic near me.”、“I bombed / the room died.”、“what should I write about”、“I have a setup but no punch.”。工位边界：本包负责创作方法论层；提示词语法与模型参数走源铭振跃官方市场技能，两者接力不抢戏。
 
 ## 本包交付什么
 

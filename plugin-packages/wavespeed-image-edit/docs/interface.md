@@ -92,7 +92,7 @@ WaveSpeed 异步任务响应结构：
   "id": "wavespeed-image-edit",
   "name": "WaveSpeed Image Edit",
   "version": "1.0.0",
-  "author": "WaveSpeed / 影策",
+  "author": "WaveSpeed / 源铭振跃",
   "description": "WaveSpeed 图片编辑协议插件：GPT Image 2.5 / Seedream 5.0 Pro / Nano Banana 的 Image to Image 编辑与图层分解、去背景。",
   "permissions": [
     "generation.run",

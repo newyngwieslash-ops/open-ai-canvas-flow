@@ -56,7 +56,7 @@
   "id": "km-kemei-video",
   "name": "KM 可美视频",
   "version": "1.0.0",
-  "author": "KM 可美 / 影策",
+  "author": "KM 可美 / 源铭振跃",
   "description": "KM 可美视频 OpenAI 兼容异步视频生成协议插件。",
   "permissions": [
     "generation.run",

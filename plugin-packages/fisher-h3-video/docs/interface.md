@@ -90,7 +90,7 @@ Fisher 服务 MiniMax V2 扩展，模型名称精确为 MiniMax-H3。普通任�
   "id": "fisher-h3-video",
   "name": "Fisher-H3",
   "version": "2.0.0",
-  "author": "Fisher / 影策",
+  "author": "Fisher / 源铭振跃",
   "description": "Fisher-H3 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
   "permissions": [

@@ -1,6 +1,6 @@
-# 影策画布执行
+# 源铭振跃画布执行
 
-本文件只描述影策 Agent 的真实执行合同。工具参数、节点类型和字段以当前能力返回为准；技能正文不能授权未注册工具、任意 metadata、外部媒体 URL 或绕过任务/审批链路的调用。
+本文件只描述源铭振跃 Agent 的真实执行合同。工具参数、节点类型和字段以当前能力返回为准；技能正文不能授权未注册工具、任意 metadata、外部媒体 URL 或绕过任务/审批链路的调用。
 
 ## 真实工具
 
@@ -54,6 +54,6 @@
 - 不把连线当作审批、分镜阶段或采用证明。
 - 不把 `canvas_apply_ops` 当作媒体生成工具；生成统一走 `generate_media`。
 
-## 影策后端接口边界
+## 源铭振跃后端接口边界
 
-浏览器只通过登录态的影策后端运行 Agent：创建运行使用 `POST /api/agent/runs`，续轮使用 `POST /api/agent/runs/:id/messages`，事件使用 `GET /api/agent/runs/:id/events`，审批使用对应的 approval decision 接口。技能不直接访问模型供应商、画布数据库或第三方 API。
+浏览器只通过登录态的源铭振跃后端运行 Agent：创建运行使用 `POST /api/agent/runs`，续轮使用 `POST /api/agent/runs/:id/messages`，事件使用 `GET /api/agent/runs/:id/events`，审批使用对应的 approval decision 接口。技能不直接访问模型供应商、画布数据库或第三方 API。

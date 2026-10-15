@@ -94,7 +94,7 @@
   "id": "runninghub-workflow",
   "name": "RunningHub Workflow",
   "version": "2.0.0",
-  "author": "RunningHub / 影策",
+  "author": "RunningHub / 源铭振跃",
   "description": "RunningHub Workflow 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
   "permissions": [

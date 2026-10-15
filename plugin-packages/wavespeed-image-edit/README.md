@@ -1,6 +1,6 @@
 # WaveSpeed Image Edit
 
-WaveSpeed 图片编辑协议插件（异步任务式）：把 WaveSpeed 平台的图片编辑模型以 provider 形式接入影策画布，现有画布与已接入渠道可直接调用。
+WaveSpeed 图片编辑协议插件（异步任务式）：把 WaveSpeed 平台的图片编辑模型以 provider 形式接入源铭振跃画布，现有画布与已接入渠道可直接调用。
 
 ## 接入的模型端点（编辑类）
 

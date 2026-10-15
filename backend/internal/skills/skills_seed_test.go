@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"testing/fstest"
 
 	"yingce/backend/internal/model"
 	"yingce/backend/internal/repository"
@@ -97,4 +98,51 @@ func TestBuiltinSkillPackageMetadataParser(t *testing.T) {
 	if _, err := parseBuiltinSkillMetadata([]byte("# no frontmatter")); err == nil {
 		t.Fatal("expected missing frontmatter error")
 	}
+}
+
+func TestBuiltinAuthorFallbackPreservesExplicitAuthor(t *testing.T) {
+	for _, tc := range []struct{ author, want string }{
+		{"", "源铭振跃"},
+		{"OpenAI", "OpenAI"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			files := fstest.MapFS{
+				"中文目录/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: 测试\ndescription: 描述\nmetadata:\n  skillId: stable-skill\n  author: " + tc.author + "\n---\n正文\n")},
+			}
+			packages, err := loadBuiltinSkillPackagesFromFS(files, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(packages) != 1 {
+				t.Fatalf("loaded %d packages, want 1", len(packages))
+			}
+			skill := packages[0].skill
+			if skill.AuthorName != tc.want || skill.OwnerID != "yingce-system" || skill.ID != "stable-skill" {
+				t.Fatalf("author=%q owner=%q id=%q", skill.AuthorName, skill.OwnerID, skill.ID)
+			}
+		})
+	}
+}
+
+func TestBuiltinShortDramaReadableDirectoryKeepsStableIdentity(t *testing.T) {
+	packages, err := loadBuiltinSkillPackages(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range packages {
+		if item.skill.MarkdownURL != "源铭振跃短剧制作工作流/SKILL.md" {
+			continue
+		}
+		if item.skill.ID != "yingce-short-drama-workflow" || item.skill.OwnerID != "yingce-system" {
+			t.Fatalf("renamed package changed stable identity: id=%q owner=%q", item.skill.ID, item.skill.OwnerID)
+		}
+		if item.skill.Name != "源铭振跃短剧制作工作流" || item.skill.AuthorName != "源铭振跃" {
+			t.Fatalf("loaded name=%q author=%q", item.skill.Name, item.skill.AuthorName)
+		}
+		if len(item.archive.Files["references/canvas-execution.md"]) == 0 {
+			t.Fatal("renamed embedded package lost its execution reference")
+		}
+		return
+	}
+	t.Fatal("renamed short-drama directory was not loaded from embedded files")
 }

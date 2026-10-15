@@ -85,7 +85,7 @@ Agnes 官方图像端点，同步返回。文生图与图生图共用 /v1/images
   "id": "agnes-image",
   "name": "Agnes Image",
   "version": "2.1.0",
-  "author": "Agnes AI / 影策",
+  "author": "Agnes AI / 源铭振跃",
   "description": "Agnes Image 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
   "permissions": [
