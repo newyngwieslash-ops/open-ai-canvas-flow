@@ -27,7 +27,8 @@ EXCEPTIONS = {
 }
 BRAND = re.compile(r"影策|yingce|open[ _-]ai[ _-]canvas", re.IGNORECASE)
 TECHNICAL = re.compile(
-    r"https?://[^\s<>\"'`]+|yingce/backend(?:/[\w/.-]+)?|\.yingce-plugin|yingce-agent|YINGCE_[A-Z0-9_]+"
+    r"https?://[^\s<>\"'`]+|\.yingce-plugin(?![\w.-])"
+    r"|(?<![\w.-])(?:yingce/backend(?:/[\w/.-]+)?|yingce-agent|YINGCE_[A-Z0-9_]+)(?![\w.-])"
     r"|(?<![\w.-])(?:yingce\.plugin/(?:v1|v2|package-v1)|yingce-system|yingce-short-drama-workflow)(?![\w./-])"
     r"|\b(?:brandSlug|BrandSlug|brand_slug|defaultAppearanceBrandSlug)[\"']?\s*[:=/]\s*[\"']?open-ai-canvas(?![\w.-])"
 )
@@ -58,18 +59,22 @@ def audit_root(root: pathlib.Path) -> list[dict]:
         return any((root / parent).is_symlink() or (root / parent / ".git").exists()
                    for parent in (relative, *tuple(relative.parents)[:-1]))
 
-    # This repository ignores much of docs/. Current maintenance docs still count.
-    # Include all on-disk docs; historical exceptions remain exact line matches.
-    if (root / "docs").is_dir() and not excluded("docs"):
-        for directory, directories, files in os.walk(root / "docs", followlinks=False):
-            directories[:] = sorted(name for name in directories
-                                    if not excluded((pathlib.Path(directory) / name).relative_to(root).as_posix()))
-            paths.update((pathlib.Path(directory) / name).relative_to(root).as_posix() for name in files)
     findings = []
 
     def record(path, entry, line, text, category, reason):
         findings.append(dict(path=path, entry=entry, line=line, text=text, category=category, reason=reason))
 
+    def walk_error(error):
+        record(pathlib.Path(error.filename).relative_to(root).as_posix(), None, 0,
+               str(error), "product", "audit error; coverage incomplete")
+
+    # This repository ignores much of docs/. Current maintenance docs still count.
+    # Include all on-disk docs; historical exceptions remain exact line matches.
+    if (root / "docs").is_dir() and not excluded("docs"):
+        for directory, directories, files in os.walk(root / "docs", followlinks=False, onerror=walk_error):
+            directories[:] = sorted(name for name in directories
+                                    if not excluded((pathlib.Path(directory) / name).relative_to(root).as_posix()))
+            paths.update((pathlib.Path(directory) / name).relative_to(root).as_posix() for name in files)
     def scan_text(path, entry, number, text, decoded=None):
         searched = text if decoded is None else decoded
         emitted = set()
@@ -96,12 +101,12 @@ def audit_root(root: pathlib.Path) -> list[dict]:
             return False
         def decode_string(match):
             try:
-                return json.loads(match.group())
+                return json.dumps(json.loads(match.group()), ensure_ascii=False)
             except ValueError:
                 return match.group()
 
         for number, line in enumerate(text.splitlines(), 1):
-            # Decode JSON strings only; retain the physical source line in output.
+            # Decode JSON strings but retain quotes so URL exceptions stop at field boundaries.
             # Double-escaped backslashes remain literal, unlike unicode_escape.
             decoded = re.sub(r'"(?:[^"\\]|\\.)*"', decode_string, line) if "\\u" in line else line
             scan_text(path, entry, number, line, decoded)
@@ -150,7 +155,16 @@ def self_test():
             "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/brand-inventory.md": "基线旧品牌检索词：`影策`、`YINGCE STUDIO`、`Open AI Canvas`。\n影策新产品介绍\n",
             "mixed.txt": "https://github.com/ddcat-ai/open-ai-canvas 影策团队\n",
             "manifest.json": '\n' + json.dumps({"author": "影策团队"}) + '\n',
+            "compact.json": json.dumps({"url": "https://example.org", "author": "影策团队"}, separators=(",", ":")),
             "literal.json": json.dumps({"example": r"\u5f71\u7b56"}),
+            "technical.txt": '\n'.join((
+                'yingce-agent', 'sample.yingce-plugin', '.yingce-plugin',
+                'yingce/backend', 'yingce/backend/bin', 'YINGCE_AGENT_URL',
+                'prefixyingce-agent', 'yingce-agent-display', 'yingce-agentDisplay',
+                '.yingce-plugin-display', '.yingce-pluginExtra',
+                'prefixyingce/backend', 'yingce/backend-display',
+                'prefixYINGCE_AGENT_URL', 'YINGCE_AGENT_URL-display', 'YINGCE_AGENT_URLdisplay',
+            )),
             "stable.txt": '\n'.join((
                 'yingce.plugin/v1', 'yingce.plugin/v2', 'yingce.plugin/package-v1',
                 'yingce-system', 'yingce-short-drama-workflow',
@@ -182,6 +196,7 @@ def self_test():
             package.writestr("影策.json", '{"title": "影策"}')
             package.writestr("logo.png", b"\x89PNG\x00\xff")
             package.writestr("manifest.json", '\n' + json.dumps({"author": "影策团队"}) + '\n')
+            package.writestr("compact.json", fixtures["compact.json"])
         with zipfile.ZipFile(root / "clean.yingce-plugin", "w") as package:
             package.writestr("README.md", "中性说明")
         findings = audit_root(root)
@@ -194,12 +209,18 @@ def self_test():
         for path, entry in (("manifest.json", None), ("sample.yingce-plugin", "manifest.json")):
             assert any(x["path"] == path and x["entry"] == entry and x["line"] == 2 and x["category"] == "product" for x in findings), "escaped JSON brand must retain source location: " + path
         assert not any(x["path"] == "literal.json" and x["category"] == "product" for x in findings), "literal backslash-u must not be treated as a semantic brand"
+        for path, entry in (("compact.json", None), ("sample.yingce-plugin", "compact.json")):
+            assert any(x["path"] == path and x["entry"] == entry and x["line"] == 1 and x["category"] == "product" and x["text"] == fixtures["compact.json"] for x in findings), "compact JSON URL must not hide escaped author: " + path
         for line in range(1, 9):
             assert {x["category"] for x in findings if x["path"] == "stable.txt" and x["line"] == line} == {"exception"}, "stable identity must be a technical exception: line " + str(line)
         for line in (9, 10):
             assert {x["category"] for x in findings if x["path"] == "stable.txt" and x["line"] == line} == {"exception", "product"}, "stable identity must not hide adjacent display text"
         for line in (11, 12):
             assert any(x["path"] == "stable.txt" and x["line"] == line and x["category"] == "product" for x in findings), "technical identity exception must match the exact token"
+        for line in range(1, 7):
+            assert {x["category"] for x in findings if x["path"] == "technical.txt" and x["line"] == line} == {"exception"}, "complete technical tokens must remain exceptions: line " + str(line)
+        for line in range(7, 17):
+            assert any(x["path"] == "technical.txt" and x["line"] == line and x["category"] == "product" for x in findings), "technical exception must not hide prefixed/suffixed display values: line " + str(line)
         assert any(x["path"] == "ordinary.txt" and x["line"] == 1 and x["category"] == "non_brand" for x in findings), "photography language must be classified separately"
         assert not any(x["path"] == "ordinary.txt" and x["line"] == 1 and x["category"] == "product" for x in findings)
         assert any(x["path"] == "ordinary.txt" and x["line"] == 2 and x["category"] == "product" for x in findings), "photography text must not hide a brand on the same line"
@@ -227,6 +248,20 @@ def self_test():
         subprocess.run(["git", "init", "-q", directory], check=True)
         completed = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), "--root", directory, "--json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert completed.returncode == 0 and json.loads(completed.stdout) == [], "clean audit must pass"
+        root = pathlib.Path(directory).resolve()
+        (root / ".gitignore").write_text("docs/\n", encoding="utf-8")
+        (root / "docs").mkdir()
+        (root / "docs" / "hidden.md").write_text("影策", encoding="utf-8")
+        # Inject an OS denial: portable even when the test account can bypass ACLs.
+        completed = subprocess.run([sys.executable, "-c", "\n".join((
+            "import pathlib, runpy, sys",
+            "from unittest.mock import patch",
+            "script, root = sys.argv[1:]",
+            "sys.argv = [script, '--root', root, '--json']",
+            "with patch('os.scandir', side_effect=PermissionError(13, 'fixture: docs enumeration denied', str(pathlib.Path(root) / 'docs'))):",
+            "    runpy.run_path(script, run_name='__main__')",
+        )), str(pathlib.Path(__file__).resolve()), str(root)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert completed.returncode == 1 and any(x["path"] == "docs" and x["category"] == "product" and x["reason"] == "audit error; coverage incomplete" for x in json.loads(completed.stdout)), "ignored docs enumeration error must fail CLI with a coverage finding"
     print("self-test: PASS (source, names, ZIP, exact exceptions, docs, exclusions, non-text, repeatability)")
 
 
