@@ -1,17 +1,13 @@
 import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, ConfigProvider, Tabs } from "antd";
-import { ArrowDown, ArrowRight, ArrowUpRight, Code2, Menu, Pause, Play, X } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 
 import { BrandLogo } from "@/components/brand/brand-logo";
-import { IconButton } from "@/components/ui/base/buttons";
-import { getAntThemeConfig } from "@/lib/app-theme";
 import { displayBrandName } from "@/lib/brand-display";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
 
 import { WelcomeContributorsCard } from "./contributors-card";
-import { getWelcomeChapters, getWelcomeLook, showcases, welcomeLooks, type WelcomeLook } from "./story";
+import { getWelcomeChapters, getWelcomeExchanges, getWelcomeLook, lookStills, showcases, welcomeLooks, type WelcomeLook } from "./story";
 import "./welcome.css";
-import { Select } from "@/components/ui/base/select";
 
 const StoryReel = lazy(() => import("./story-reel"));
 const github = "https://github.com/ddcat-ai/open-ai-canvas";
@@ -39,11 +35,13 @@ export default function WelcomePage() {
         restorePickerFocus.current = true;
         setLook(next);
     };
-    return (
-        <ConfigProvider theme={getAntThemeConfig(true, appearance.activeSkin)}>
-            <WelcomeExperience key={look.id} look={look} brandName={displayBrandName(appearance.brandName)} onLookChange={changeLook} />
-        </ConfigProvider>
-    );
+    return <WelcomeExperience key={look.id} look={look} brandName={displayBrandName(appearance.brandName)} onLookChange={changeLook} />;
+}
+
+function splitTitle(title: string) {
+    const parts = title.split("，");
+    if (parts.length < 2) return [title];
+    return [parts[0] + "，", parts.slice(1).join("，")];
 }
 
 function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLook; brandName: string; onLookChange: (id: string) => void }) {
@@ -55,15 +53,23 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
     const [failed, setFailed] = useState(false);
     const [ready, setReady] = useState(false);
     const [menu, setMenu] = useState(false);
-    const [showcase, setShowcase] = useState(1);
+    const [showcase, setShowcase] = useState(0);
     const [playing, setPlaying] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
     const chapters = getWelcomeChapters(brandName);
-    // 站点配置的 SEO 标题优先（上游 v1.6.1 修复意图）；未配置时回退到展示品牌后缀标题。
+    const exchanges = getWelcomeExchanges(look);
+    const stills = lookStills(look);
     const seoTitle = useAppearanceStore((state) => state.appearance.seoTitle);
     const welcomeTitle = seoTitle || `${brandName} · 让一个故事从文字走向银幕`;
+    const active = showcases[showcase];
+    const staticScene = reduced || failed;
+    const mosaic = stills.slice(0, 5);
+    const closeStills = stills.slice(0, 3);
+    const footage = welcomeLooks.find((item) => item.video)?.video;
+    const activeChapter = chapters[chapter];
+    const titleLines = chapter === 0 ? [activeChapter.title] : splitTitle(activeChapter.title);
+    const TitleTag = chapter === 0 ? "h1" : "h2";
 
-    // 标题独立成 effect，避免把品牌/SEO 依赖塞进滚动/媒体监听 effect 导致监听反复重装。
     useEffect(() => {
         document.title = welcomeTitle;
     }, [welcomeTitle]);
@@ -102,70 +108,177 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
         window.scrollTo({ top: storyRef.current.offsetTop + height * (index === 5 ? 0.97 : index / 6 + (index ? 0.04 : 0)), behavior: reduced ? "instant" : "smooth" });
         setMenu(false);
     };
-    const staticScene = reduced || failed;
-    const active = showcases[showcase];
 
     return (
         <div className="welcome-page">
             <a className="welcome-skip" href="#workbench">前往工作台介绍</a>
-            <header className="welcome-header">
-                <a className="welcome-brand" href="/welcome" aria-label={`${brandName}首页`}>
-                    <BrandLogo theme="dark" className="welcome-brand-logo" alt="" fallback={<span className="welcome-brand-logo is-fallback" />} />
-                    {brandName}
-                </a>
-                <nav className={menu ? "welcome-nav is-open" : "welcome-nav"} aria-label="首页导航">
-                    <a href="#workbench" onClick={() => setMenu(false)}>工作台</a>
-                    <a href="#contributors" onClick={() => setMenu(false)}>贡献者</a>
-                    <a href={github} target="_blank" rel="noreferrer">GitHub<ArrowUpRight size={13} /></a>
-                </nav>
-                <Button className="welcome-header-cta" type="primary" href="/create" icon={<ArrowUpRight size={16} />} iconPlacement="end">开始创作</Button>
-                <IconButton className="welcome-icon mobile-menu" variant="ghost" size="lg" icon={menu ? X : Menu} aria-label={menu ? "关闭菜单" : "打开菜单"} aria-expanded={menu} onClick={() => setMenu(!menu)} />
-            </header>
-            <aside className="welcome-look-picker" aria-label="首页素材版本">
-                <Select id="welcome-look-select" aria-label="素材版本" value={look.id} options={welcomeLooks.map((item) => ({ label: item.label, value: item.id }))} onChange={onLookChange} popupMatchSelectWidth={false} />
-                {look.credit && <a href={`/welcome/credits.html#${look.id}`} target="_blank" rel="noreferrer" title={look.credit}>演示素材 · CC BY<ArrowUpRight size={12} /></a>}
-            </aside>
-
-            <main>
-                <section ref={storyRef} id="story" className="welcome-story" aria-label={`${brandName}创作之旅`}>
-                    <div className={`welcome-stage chapter-${chapter}${staticScene ? " is-static" : ""}`}>
-                        <div className={`welcome-poster${ready && !staticScene ? " is-ready" : ""}`} aria-hidden="true"><img src={look.frames[staticScene ? chapter * 2 : 0]} alt="" fetchPriority="high" /></div>
-                        {!staticScene && <SceneBoundary onError={() => setFailed(true)}><Suspense fallback={null}><StoryReel look={look} progress={progressRef} paused={paused} onReady={() => setReady(true)} onError={() => setFailed(true)} /></Suspense></SceneBoundary>}
-                        <div className="welcome-stage-shade" aria-hidden="true" />
-                        {chapters.map((item, index) => (
-                            <section key={item.id} className={`welcome-chapter ${index === 0 ? "welcome-opening" : ""} ${index === chapter ? "is-active" : ""}`} aria-hidden={index !== chapter}>
-                                {index === 0 ? <h1>{item.title}</h1> : <h2>{item.title.split("，").map((part, partIndex, parts) => <span key={part}>{part}{partIndex < parts.length - 1 ? "，" : ""}</span>)}</h2>}
-                                {"subtitle" in item && <><p className="welcome-subtitle">{item.subtitle}</p>{look.video && <Button type="text" className="welcome-film-link" onClick={() => setPlaying(true)} tabIndex={chapter === 0 ? 0 : -1} icon={<span className="welcome-play-mark"><Play size={17} fill="currentColor" /></span>}>观看片段</Button>}</>}
-                            </section>
-                        ))}
-                        <div className="welcome-stage-bottom">
-                            <IconButton className="welcome-next" variant="ghost" size="lg" icon={ArrowDown} aria-label={chapter === 5 ? "进入创作现场" : "下一幕"} onClick={() => chapter < 5 ? jumpTo(chapter + 1) : document.getElementById("workbench")?.scrollIntoView({ behavior: reduced ? "instant" : "smooth" })} />
-                            <nav className="welcome-chapter-nav" aria-label="故事章节">{chapters.map((item, index) => <button key={item.id} className={chapter === index ? "is-current" : ""} aria-label={item.label} title={item.label} aria-current={chapter === index ? "step" : undefined} onClick={() => jumpTo(index)}><span /></button>)}</nav>
-                            <IconButton className="welcome-icon" variant="ghost" icon={paused || staticScene ? Play : Pause} title={paused || staticScene ? "播放动画" : "暂停动画"} aria-label={paused || staticScene ? "播放动画" : "暂停动画"} aria-pressed={paused || staticScene} disabled={staticScene} onClick={() => setPaused(!paused)} />
+            <section ref={storyRef} id="story" className="welcome-story" aria-label={`${brandName}创作之旅`}>
+                <div className={`welcome-stage chapter-${chapter}${staticScene ? " is-static" : ""}`}>
+                    <header className="welcome-header">
+                        <a className="welcome-brand" href="/welcome" aria-label={`${brandName}首页`}>
+                            <BrandLogo theme="dark" className="welcome-brand-logo" alt="" fallback={<span className="welcome-brand-logo is-fallback" />} />
+                            {brandName}
+                        </a>
+                        <nav className={menu ? "welcome-nav is-open" : "welcome-nav"} aria-label="首页导航">
+                            <a href="#workbench" onClick={() => setMenu(false)}>工作台</a>
+                            <a href="#contributors" onClick={() => setMenu(false)}>演职员表</a>
+                            <a href={github} target="_blank" rel="noreferrer">GitHub</a>
+                        </nav>
+                        <a className="welcome-action" href="/create">开始创作</a>
+                        <button className="welcome-menu" type="button" aria-label={menu ? "关闭菜单" : "打开菜单"} aria-expanded={menu} onClick={() => setMenu(!menu)}>{menu ? "关闭" : "菜单"}</button>
+                    </header>
+                    <div className="welcome-masthead">
+                        <div className={`welcome-poster${ready && !staticScene ? " is-ready" : ""}`} aria-hidden="true">
+                            <img src={look.frames[staticScene ? Math.min(chapter * 2, look.frames.length - 1) : 0]} alt="" width={1600} height={900} fetchPriority="high" />
                         </div>
+                        {staticScene ? (
+                            <div className="welcome-mosaic" aria-hidden="true">
+                                <img className="is-span-photo" src={mosaic[0]} alt="" width={1200} height={800} />
+                                <span className="is-tile is-ink" />
+                                <img src={mosaic[1] ?? mosaic[0]} alt="" width={800} height={600} />
+                                <img src={mosaic[2] ?? mosaic[0]} alt="" width={800} height={600} />
+                                <span className="is-tile is-accent is-span-color" />
+                                <img src={mosaic[3] ?? mosaic[0]} alt="" width={800} height={600} />
+                                <span className="is-tile is-field" />
+                                <img src={mosaic[4] ?? mosaic[1] ?? mosaic[0]} alt="" width={800} height={600} />
+                                <span className="is-tile is-ink" />
+                            </div>
+                        ) : (
+                            <SceneBoundary onError={() => setFailed(true)}>
+                                <Suspense fallback={null}>
+                                    <StoryReel look={look} progress={progressRef} paused={paused} onReady={() => setReady(true)} onError={() => setFailed(true)} />
+                                </Suspense>
+                            </SceneBoundary>
+                        )}
                     </div>
-                </section>
+                    <div className="welcome-copy">
+                        <aside className="welcome-rail">
+                            <div className="welcome-looks" role="group" aria-label="素材版本">
+                                {welcomeLooks.map((item) => (
+                                    <button key={item.id} id={item.id === look.id ? "welcome-look-select" : undefined} type="button" className={item.id === look.id ? "is-current" : ""} onClick={() => onLookChange(item.id)}>
+                                        {item.label}
+                                    </button>
+                                ))}
+                                {look.credit && <a href={`/welcome/credits.html#${look.id}`} target="_blank" rel="noreferrer">{look.credit}</a>}
+                            </div>
+                            <nav className="welcome-chapter-nav" aria-label="故事章节">
+                                {chapters.map((item, index) => (
+                                    <button key={item.id} type="button" className={chapter === index ? "is-current" : ""} aria-current={chapter === index ? "step" : undefined} onClick={() => jumpTo(index)}>{item.label}</button>
+                                ))}
+                            </nav>
+                            <button type="button" className="welcome-pause" disabled={staticScene} aria-pressed={paused || staticScene} onClick={() => setPaused(!paused)}>{paused || staticScene ? "播放画面" : "暂停画面"}</button>
+                        </aside>
+                        <section key={activeChapter.id} className="welcome-chapter is-active">
+                            <TitleTag className="welcome-lines">
+                                {titleLines.map((line) => <span key={line} className="line"><span>{line}</span></span>)}
+                            </TitleTag>
+                            {chapter === 0 && activeChapter.subtitle && <p className="welcome-standfirst">{activeChapter.subtitle}</p>}
+                            {chapter === 0 && footage && <button type="button" className="welcome-film-link" onClick={() => setPlaying(true)}>观看片段</button>}
+                            {chapter === 0 && <a className="welcome-action welcome-action-foot" href="/create">开始创作</a>}
+                        </section>
+                        <button type="button" className="welcome-next" onClick={() => chapter < 5 ? jumpTo(chapter + 1) : document.getElementById("workbench")?.scrollIntoView({ behavior: reduced ? "instant" : "smooth" })}>
+                            {chapter === 5 ? "进入创作现场" : "下一幕"}
+                        </button>
+                    </div>
+                </div>
+            </section>
 
-                <section id="workbench" className="welcome-workbench">
-                    <div className="welcome-section-heading"><h2>让想象，有处落笔。</h2></div>
-                    <div className="welcome-workbench-bar"><Tabs activeKey={String(showcase)} aria-label="工作台预览" items={showcases.map((item, index) => ({ key: String(index), label: item.name }))} onChange={(key) => setShowcase(Number(key))} /><Button type="link" href={active.href} icon={<ArrowUpRight size={16} />} iconPlacement="end">进入{active.name}</Button></div>
-                    <div id="workbench-preview" role="tabpanel" className="welcome-workbench-preview"><img src={active.image} alt={`${brandName}${active.name}界面`} loading="lazy" /></div>                    <div className="welcome-workbench-caption"><p>{active.detail}</p></div>
-                </section>
+            <section id="workbench" className="welcome-showcase">
+                <div className="welcome-index" role="tablist" aria-label="工作台预览">
+                    {showcases.map((item, index) => (
+                        <button key={item.name} type="button" role="tab" aria-selected={showcase === index} className={showcase === index ? "is-current" : ""} onClick={() => setShowcase(index)}>{item.name}</button>
+                    ))}
+                </div>
+                <div className="welcome-sheet-stage">
+                    <article className="welcome-sheet" data-ui>
+                        <img src={active.image} alt={`${brandName}${active.name}界面`} width={1600} height={900} loading="lazy" />
+                        <p>{active.detail}</p>
+                        <a href={active.href}>进入{active.name}<ArrowUpRight size={16} /></a>
+                    </article>
+                </div>
+            </section>
 
-                <section className="welcome-ending"><h2>你的故事，<br />现在开始。</h2>
-                <WelcomeContributorsCard /></section>
-            </main>
-            <footer className="welcome-footer"><a href="/welcome">{brandName}</a><span>开源 AI 影视创作工作台</span><a href={`${github}/blob/main/LICENSE`} target="_blank" rel="noreferrer">Open Source · MIT License<ArrowUpRight size={12} /></a></footer>
-            {look.credit && <div className="welcome-media-credit"><a href={`/welcome/credits.html#${look.id}`} target="_blank" rel="noreferrer">{look.credit} · 署名与许可<ArrowUpRight size={12} /></a></div>}
-            {playing && look.video && <FilmDialog look={look} onClose={() => setPlaying(false)} videoRef={videoRef} />}
+            <section className="welcome-method">
+                <h2>你给它什么</h2>
+                {exchanges.map((item, index) => (
+                    <article key={item.lead} className={index === 2 ? "is-final" : undefined}>
+                        <p className="welcome-lead">{item.lead}</p>
+                        <label className="welcome-call" data-ui>
+                            <span>场记</span>
+                            <textarea readOnly rows={2} value={item.call} />
+                        </label>
+                        <figure className="welcome-reply" data-ui>
+                            <img src={item.frame} alt="" width={1200} height={800} loading="lazy" />
+                            <figcaption>{item.reply}</figcaption>
+                        </figure>
+                    </article>
+                ))}
+            </section>
+
+            <WelcomeContributorsCard />
+
+            <section className="welcome-close">
+                <div className="welcome-close-stills">
+                    {(closeStills.length === 3 ? closeStills : [stills[0], stills[0], stills[0]]).map((src, index) => (
+                        footage && index === 1 ? (
+                            <video key={src} src={footage} poster={src} muted loop playsInline autoPlay preload="metadata" />
+                        ) : (
+                            <img key={`${src}-${index}`} src={src} alt="" width={1200} height={800} loading="lazy" />
+                        )
+                    ))}
+                </div>
+                <div className="welcome-close-field">
+                    <p className="welcome-close-copy">你的故事，<br />现在就可以<br /><a href="/create">开始创作</a>。</p>
+                    <p className="welcome-close-note">开源工作台，MIT 许可。从一句话或一张画布进入。</p>
+                    {look.credit && <p className="welcome-close-note"><a href={`/welcome/credits.html#${look.id}`} target="_blank" rel="noreferrer">{look.credit} · 署名与许可</a></p>}
+                </div>
+            </section>
+
+            <footer className="welcome-footer">
+                <div className="welcome-footer-cols">
+                    <div>
+                        <p>工作台</p>
+                        <a href="/canvas">自由画布</a>
+                        <a href="/create">即时创作</a>
+                        <a href="/projects">项目工作台</a>
+                    </div>
+                    <div>
+                        <p>本页</p>
+                        <a href="#workbench">创作现场</a>
+                        <a href="#contributors">演职员表</a>
+                        <a href="/create">开始创作</a>
+                    </div>
+                    <div>
+                        <p>源码</p>
+                        <a href={github} target="_blank" rel="noreferrer">GitHub</a>
+                        <a href={`${github}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a>
+                    </div>
+                    <div>
+                        <p>画面</p>
+                        <a href="/welcome/credits.html" target="_blank" rel="noreferrer">演示素材署名</a>
+                        <span>开源 AI 影视创作工作台</span>
+                    </div>
+                </div>
+                <p className="welcome-wordmark">{brandName}</p>
+                <p className="welcome-legal">Open Source · MIT License</p>
+            </footer>
+            {playing && footage && <FilmDialog look={look} src={footage} onClose={() => setPlaying(false)} videoRef={videoRef} />}
         </div>
     );
 }
 
-function FilmDialog({ look, onClose, videoRef }: { look: WelcomeLook; onClose: () => void; videoRef: React.RefObject<HTMLVideoElement | null> }) {
+function FilmDialog({ look, src, onClose, videoRef }: { look: WelcomeLook; src: string; onClose: () => void; videoRef: React.RefObject<HTMLVideoElement | null> }) {
     const dialogRef = useRef<HTMLDialogElement>(null);
     useEffect(() => { const dialog = dialogRef.current; dialog?.showModal(); return () => dialog?.close(); }, []);
-    return <dialog ref={dialogRef} className="welcome-film-dialog" aria-label={`${look.title}影片片段`} onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><div><IconButton autoFocus className="welcome-icon" variant="ghost" size="lg" icon={X} aria-label="关闭影片" onClick={onClose} /><video ref={videoRef} src={look.video} poster={look.frames[0]} controls autoPlay muted playsInline /><p>{look.credit ?? look.title}</p></div></dialog>;
+    return (
+        <dialog ref={dialogRef} className="welcome-film-dialog" aria-label={`${look.title}影片片段`} onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+            <div>
+                <button type="button" className="welcome-dialog-close" autoFocus aria-label="关闭影片" onClick={onClose}>关闭</button>
+                <video ref={videoRef} src={src} poster={look.frames[0]} controls autoPlay muted playsInline />
+                <p>{look.credit ?? look.title}</p>
+            </div>
+        </dialog>
+    );
 }
 
 class SceneBoundary extends Component<{ children: ReactNode; onError: () => void }, { failed: boolean }> {

@@ -57,3 +57,16 @@ export const showcases = [
     { name: "即时创作", image: "/welcome/workbench-create.webp", description: "从一句话开始。", detail: "选择模型与参考素材，在对话中逐步完成图片和视频。", href: "/create" },
     { name: "项目工作台", image: "/welcome/workbench-project.webp", description: "让长故事有条理。", detail: "围绕章节、人物与分镜组织制作，随时回到正在推进的故事。", href: "/projects" },
 ] as const;
+
+export function lookStills(look: WelcomeLook) {
+    return [...new Set(look.frames)];
+}
+
+export function getWelcomeExchanges(look: WelcomeLook) {
+    const stills = lookStills(look);
+    return [
+        { lead: "先写下一句。", call: look.screenplay[0], reply: look.screenplay[9], frame: stills[0] },
+        { lead: "再把人叫到场上。", call: look.title, reply: look.screenplay[7], frame: stills[Math.min(2, stills.length - 1)] },
+        { lead: "然后把句子拆成镜头。", call: look.screenplay[3], reply: look.screenplay[11], frame: showcases[0].image },
+    ];
+}
