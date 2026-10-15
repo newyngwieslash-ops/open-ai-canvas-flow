@@ -164,7 +164,11 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 
 `GET /auth/linuxdo/start` 可携带 `acceptedTerms=true`，只有该精确值表示同意。服务端将标志写入一次性的 OAuth state；回调仅在新建 Linux.do 用户时要求该 state 已同意，不从回调参数重新取值。已有 Linux.do 用户可从登录页继续登录，无需传此参数；同意协议不绕过注册关闭策略。
 
-协议名称与正文由管理员在 `PATCH /admin/settings/registration` 配置，公开读取面是 `GET /auth/settings` 的 `agreementTitle`、`agreementContent`。`agreementTitle` 未配置时按当前外观品牌名生成“<品牌名>服务协议”，因此外观改名后注册页文案同步；接口返回的标题不含书名号，由注册页补《》。`agreementContent` 支持多段文本，按空行分段渲染，留空时注册页提示“服务协议内容待补充”。
+协议名称与正文由管理员在 `PATCH /admin/settings/registration` 配置，公开读取面是 `GET /auth/settings` 的 `agreementTitle`、`agreementContent`。`agreementTitle` 未配置时按当前外观品牌名生成“<品牌名>服务协议”，当前默认是“源铭振跃服务协议”；公开接口返回的标题不含书名号，由注册页补《》。`agreementContent` 支持多段文本，按空行分段渲染，留空时注册页提示“服务协议内容待补充”。
+
+存量标题去除首尾空白和书名号后，只有精确旧默认“影策服务协议”随当前站点品牌生成标题；公开读取、管理员 `GET /admin/settings/registration` 和保存使用同一识别规则。GET 仅投影，不写库；保存时将识别到的旧默认标题持久化为当前站点的默认标题。自定义标题（包括含旧名的创作者条款）和协议正文不做品牌替换；自定义标题的书名号仍由公开展示层整理。
+
+邮件 `fromName` 为空或精确等于新旧产品默认名“源铭振跃”/“影策”时，继承当前站点品牌；管理员邮件设置返回的 `fromNameInherited` 与实际发送使用同一判断。其他自定义署名保持原值，读取不写回配置。此规则不改变邮件地址、凭据或协议正文。
 
 读取注册配置失败（如 JSON 损坏）时，`RegistrationAgreement` 返回空标题而不是品牌名兜底标题，注册页据此隐藏协议入口并提示可重新读取，避免展示后台并不存在的协议名称；此时错误提示统一回落为“请先同意服务协议”。
 
@@ -176,6 +180,8 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 外观设置新增 `updates: { enabled, currentVersion, releases }`，由管理员通过 `PATCH /admin/settings/appearance` 保存；关闭开关保留草稿，但 `GET /public/appearance` 返回关闭状态与空公告列表，前端恢复内置更新日志。开启时公开版本与内容块，当前版本须对应公告版本。媒体上传、管理员预览、公开引用读取及限制详见 [自定义更新公告](/docs/backend/update-announcements)。JSON 请求上限为 512KB；无数据表迁移。
 
 `GET /public/appearance` 和管理员 `GET /admin/settings/appearance` 返回 `canvas`；管理员通过 `PATCH /admin/settings/appearance` 随外观配置统一保存。字段为 `agentName`（1–24 字）、`launcherLabel`（0–24 字）、`panelTitle`（1–40 字）、`welcomeTitle`（1–100 字）、`welcomeDescription`（0–200 字）、`inputPlaceholder`（1–160 字）、`avatarType`（`orb|live2d`）、`avatarHeight`（120–360 整数）、`live2dResourceId`、`live2dEntry`。入口由服务端核验覆盖；Live2D 无有效资源时拒绝启用。名称以数据形式投影到每轮 Agent 执行上下文，不提供自由系统提示词配置，也不改变工具权限。
+
+当前默认品牌和 Agent 名称为“源铭振跃”。旧默认品牌、SEO、版权及 Agent 的精确识别、自定义配置保留边界见 [画布 Agent 外观与 Live2D](/docs/backend/canvas-agent-appearance)。公开与管理 GET 不写库，Canvas 身份投影不执行严格保存校验；保存继续校验完整配置并向上返回失败。品牌识别不提升 `schemaVersion`（仍为 10），不新增字段或改变 API 路径。
 
 - `POST /admin/settings/appearance/live2d`：管理员 multipart `file` 上传，受上传频率和配额限制。成功信封的 `data.model` 为 `{ resourceId, entry }`，上传不会发布。ZIP 限 128 MiB、256 条目、解压合计 384 MiB、单文件 128 MiB；只接收 model3/MOC3/PNG/JSON，拒绝路径穿越、脚本和外部资源。
 - `GET /admin/settings/appearance/live2d/:id/*file`：管理员预览，校验资源归属；其他管理员仅能查看当前外观已引用模型。
