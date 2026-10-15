@@ -116,6 +116,34 @@ func TestCloudAgentGenerationDiagnosticsSeparateOutputAndTask(t *testing.T) {
 	}
 }
 
+func TestCloudAgentDraftOutputDoesNotDiagnoseInputReference(t *testing.T) {
+	s, _, _ := agentMediaFixture(t)
+	doc := map[string]any{"nodes": []map[string]any{
+		{"id": "draft", "type": "image", "metadata": map[string]any{"status": "idle", "referenceNodeIds": []string{"reference"}}},
+		{"id": "reference", "type": "image", "metadata": map[string]any{"status": "success", "storageKey": "resource:ref-one"}},
+	}}
+	view, err := cloudAgentCanvasState(s.repo, "user", "agent-canvas", doc, 0, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range view.(map[string]any)["nodes"].([]any) {
+		item := node.(map[string]any)
+		output := item["outputReference"].(map[string]any)
+		if item["id"] == "reference" {
+			if output["ready"] != true {
+				t.Fatalf("ready input reference rejected: %+v", output)
+			}
+			continue
+		}
+		if output["ready"] != false || !strings.Contains(stringValue(output["issue"]), "此节点自身的媒体产物") {
+			t.Fatalf("draft output issue is ambiguous: %+v", output)
+		}
+		if item["generation"].(map[string]any)["taskStatus"] != "not_submitted" {
+			t.Fatal("empty draft must remain unsubmitted")
+		}
+	}
+}
+
 func TestCloudAgentMediaAdmissionReportsTaskBinding(t *testing.T) {
 	s, db, args := agentMediaFixture(t)
 	canvas, _ := s.repo.CanvasProjectForUser("user", "agent-canvas")

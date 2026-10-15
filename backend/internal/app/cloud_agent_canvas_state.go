@@ -355,7 +355,7 @@ func cloudAgentCanvasStateSelected(repo *repository.Repository, userID, canvasID
 			outputReference := map[string]any{"ready": err == nil}
 			item["outputReference"] = outputReference
 			if err != nil {
-				outputReference["issue"] = cloudAgentSafeToolError(err)
+				outputReference["issue"] = "此节点自身的媒体产物不可引用：" + cloudAgentSafeToolError(err)
 			} else {
 				// Provider references contain a storage key for task submission.
 				// The model only needs the verified public characteristics; never
