@@ -168,6 +168,104 @@ func TestAppearanceEmptyStoredCanvasUsesCurrentDefault(t *testing.T) {
 	}
 }
 
+func TestAppearanceInvalidStoredCanvasPreservesIdentityAndRecovery(t *testing.T) {
+	for _, action := range []string{"read", "update", "reset"} {
+		t.Run(action, func(t *testing.T) {
+			svc, db, dataDir, admin := newAppearanceTestService(t)
+			value := defaultAppearanceSetting()
+			value.BrandName, value.BrandSlug = "星河工作室", "star-studio"
+			value.AuthHeroTitle, value.AuthHeroDescription = "自定义标题", "影策自由文案"
+			value.SEOTitle, value.SEODescription, value.FooterCopyright = "星河创作", "站点介绍", "星河版权所有"
+			value.LogoFrameEnabled, value.AuthVideoAutoplay = false, false
+			value.Canvas.AgentName, value.Canvas.WelcomeTitle = "影策", "影策和{agentName}"
+			value.Canvas.AvatarHeight = 361
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.SystemSetting{Key: appearanceSettingKey, ValueJSON: string(raw)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			var stored model.SystemSetting
+			switch action {
+			case "read":
+				brand, slug := svc.appearanceIdentity()
+				if brand != "星河工作室" || slug != "star-studio" {
+					t.Errorf("invalid canvas changed identity: %q / %q", brand, slug)
+				}
+				if title, _ := svc.authDomain().RegistrationAgreement(); title != "星河工作室服务协议" {
+					t.Errorf("invalid canvas changed auth identity: %q", title)
+				}
+				got, err := svc.AdminAppearance(admin)
+				if err != nil {
+					t.Errorf("admin read rejected parseable canvas: %v", err)
+				} else {
+					want := value
+					want.Canvas.AgentName = "源铭振跃"
+					if !reflect.DeepEqual(got.AppearanceSetting, want) {
+						t.Errorf("read changed unrelated fields: %+v", got.AppearanceSetting)
+					}
+					public, err := svc.Appearance()
+					if err != nil || public == nil || !reflect.DeepEqual(*public, got.Public) {
+						t.Errorf("public read differs from admin: %+v, %v", public, err)
+					}
+				}
+				if err := db.First(&stored, "key = ?", appearanceSettingKey).Error; err != nil {
+					t.Fatal(err)
+				}
+				if stored.ValueJSON != string(raw) {
+					t.Fatal("GET changed stored appearance JSON")
+				}
+			case "update":
+				if _, err := svc.UpdateAppearance(admin, value); err == nil {
+					t.Fatal("save accepted invalid canvas height")
+				}
+				if err := db.First(&stored, "key = ?", appearanceSettingKey).Error; err != nil {
+					t.Fatal(err)
+				}
+				if stored.ValueJSON != string(raw) {
+					t.Fatal("rejected save changed stored appearance JSON")
+				}
+				value.Canvas.AvatarHeight = 280
+				saved, err := svc.UpdateAppearance(admin, value)
+				if err != nil {
+					t.Fatalf("valid update could not repair old canvas: %v", err)
+				}
+				value.Canvas.AgentName = "源铭振跃"
+				if !reflect.DeepEqual(saved.AppearanceSetting, value) {
+					t.Error("repair changed unrelated settings")
+				}
+				if err := db.First(&stored, "key = ?", appearanceSettingKey).Error; err != nil {
+					t.Fatal(err)
+				}
+				var persisted AppearanceSetting
+				if err := json.Unmarshal([]byte(stored.ValueJSON), &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(persisted, value) {
+					t.Error("repair did not persist complete settings")
+				}
+				reloaded, err := New(repository.New(db), dataDir).AdminAppearance(admin)
+				if err != nil || reloaded == nil || !reflect.DeepEqual(reloaded.AppearanceSetting, value) {
+					t.Fatalf("repair did not survive new service: %+v, %v", reloaded, err)
+				}
+			case "reset":
+				reset, err := svc.ResetAppearance(admin)
+				if err != nil {
+					t.Fatalf("isolated reset could not recover old canvas: %v", err)
+				}
+				if reset.Configured || !reflect.DeepEqual(reset.AppearanceSetting, defaultAppearanceSetting()) {
+					t.Fatalf("reset did not restore defaults: %+v", reset)
+				}
+				var count int64
+				if err := db.Model(&model.SystemSetting{}).Where("key = ?", appearanceSettingKey).Count(&count).Error; err != nil || count != 0 {
+					t.Fatalf("reset left setting: count=%d, error=%v", count, err)
+				}
+			}
+		})
+	}
+}
+
 func TestBuiltInAppearanceSkinAuthPalettesFollowMode(t *testing.T) {
 	for _, skin := range defaultAppearanceSkinThemes() {
 		if skin.Tokens.Light.AuthBackground == skin.Tokens.Dark.AuthBackground || skin.Tokens.Light.AuthCard == skin.Tokens.Dark.AuthCard {

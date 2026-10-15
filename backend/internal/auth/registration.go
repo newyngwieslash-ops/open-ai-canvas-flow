@@ -67,6 +67,7 @@ func (s *Service) UpdateRegistrationSetting(actor *model.User, req RegistrationS
 	if req.AgreementContent != nil {
 		nextValue.AgreementContent = strings.TrimSpace(*req.AgreementContent)
 	}
+	nextValue.AgreementTitle = s.normalizeRegistrationAgreementTitle(nextValue.AgreementTitle)
 	encoded, err := json.Marshal(nextValue)
 	if err != nil {
 		return nil, err
@@ -105,7 +106,7 @@ func (s *Service) RegistrationAgreement() (string, string) {
 		return "", ""
 	}
 	title := strings.Trim(strings.TrimSpace(value.AgreementTitle), "《》")
-	if title == "" || title == "影策服务协议" {
+	if title == "" {
 		title = s.defaultAgreementTitle()
 	}
 	return title, value.AgreementContent
@@ -131,7 +132,15 @@ func (s *Service) readRegistrationSetting() (*model.SystemSetting, registrationS
 	if strings.TrimSpace(setting.ValueJSON) == "" || json.Unmarshal([]byte(setting.ValueJSON), &value) != nil {
 		return nil, registrationSettingValue{}, errors.New("用户注册配置格式无效")
 	}
+	value.AgreementTitle = s.normalizeRegistrationAgreementTitle(value.AgreementTitle)
 	return setting, value, nil
+}
+
+func (s *Service) normalizeRegistrationAgreementTitle(title string) string {
+	if strings.Trim(strings.TrimSpace(title), "《》") == "影策服务协议" {
+		return s.defaultAgreementTitle()
+	}
+	return title
 }
 
 func publicRegistrationSetting(setting *model.SystemSetting, value registrationSettingValue) *PublicRegistrationSetting {

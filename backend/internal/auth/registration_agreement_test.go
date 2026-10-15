@@ -72,6 +72,90 @@ func TestRegistrationAgreementFollowsBrandNameWhenUnset(t *testing.T) {
 	}
 }
 
+func TestRegistrationAgreementAdminLegacyRoundTrip(t *testing.T) {
+	for _, tc := range []struct{ title, want string }{
+		{"影策服务协议", "星河工作室服务协议"},
+		{"《影策服务协议》", "星河工作室服务协议"},
+		{"", ""},
+		{"《影策创作者条款》", "《影策创作者条款》"},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			db := newAgreementTestDB(t)
+			svc := New(repository.New(db), brandHost{name: "星河工作室"}, nil)
+			admin := &model.User{ID: "admin", Role: model.UserRoleAdmin, Status: model.UserStatusActive}
+			const content = "影策正文\n保留所有条款"
+			raw, err := json.Marshal(registrationSettingValue{Enabled: false, AgreementTitle: tc.title, AgreementContent: content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.SystemSetting{Key: registrationSettingKey, ValueJSON: string(raw)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			got, err := svc.AdminRegistrationSetting(admin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AgreementTitle != tc.want || got.AgreementContent != content || got.Enabled {
+				t.Errorf("admin GET = %+v, want title %q and original content/toggle", got, tc.want)
+			}
+			var stored model.SystemSetting
+			if err := db.First(&stored, "key = ?", registrationSettingKey).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.ValueJSON != string(raw) {
+				t.Fatal("admin GET changed registration JSON")
+			}
+			for _, req := range []RegistrationSettingRequest{
+				{Enabled: true},
+				{Enabled: false, AgreementTitle: strPtr(tc.title)},
+			} {
+				saved, err := svc.UpdateRegistrationSetting(admin, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if saved.AgreementTitle != tc.want || saved.AgreementContent != content || saved.Enabled != req.Enabled {
+					t.Errorf("save = %+v, want title %q and preserved content", saved, tc.want)
+				}
+				if err := db.First(&stored, "key = ?", registrationSettingKey).Error; err != nil {
+					t.Fatal(err)
+				}
+				var persisted registrationSettingValue
+				if err := json.Unmarshal([]byte(stored.ValueJSON), &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if persisted.AgreementTitle != tc.want || persisted.AgreementContent != content || persisted.Enabled != req.Enabled {
+					t.Errorf("persisted = %+v", persisted)
+				}
+				svc = New(repository.New(db), brandHost{name: "星河工作室"}, nil)
+				reloaded, err := svc.AdminRegistrationSetting(admin)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if reloaded.AgreementTitle != tc.want || reloaded.AgreementContent != content || reloaded.Enabled != req.Enabled {
+					t.Errorf("reloaded = %+v", reloaded)
+				}
+				public, err := svc.PublicAuthSettings()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantPublic := "星河工作室服务协议"
+				if tc.title == "《影策创作者条款》" {
+					wantPublic = "影策创作者条款"
+				}
+				if public.AgreementTitle != wantPublic || public.AgreementContent != content {
+					t.Errorf("public agreement = %q / %q", public.AgreementTitle, public.AgreementContent)
+				}
+			}
+			if tc.title == "" {
+				svc = New(repository.New(db), brandHost{name: "新站点"}, nil)
+				if title, _ := svc.RegistrationAgreement(); title != "新站点服务协议" {
+					t.Fatalf("blank title stopped following site: %q", title)
+				}
+			}
+		})
+	}
+}
+
 func TestUpdateRegistrationSettingStoresAgreement(t *testing.T) {
 	db := newAgreementTestDB(t)
 	svc := New(repository.New(db), brandHost{name: "星野"}, nil)

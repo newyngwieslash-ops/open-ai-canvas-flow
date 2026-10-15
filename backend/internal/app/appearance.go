@@ -452,10 +452,7 @@ func (s *Service) readAppearance() (*model.SystemSetting, AppearanceSetting, err
 	value.ICPFilingNumber = normalizeAppearanceSingleLine(value.ICPFilingNumber)
 	value.RedeemPurchaseURL = strings.TrimSpace(value.RedeemPurchaseURL)
 	value = normalizeAppearanceIdentity(value)
-	value.Canvas, err = normalizeCanvasAppearance(value.Canvas)
-	if err != nil {
-		return nil, AppearanceSetting{}, err
-	}
+	value.Canvas = normalizeCanvasAppearanceIdentity(value.Canvas)
 	return setting, value, nil
 }
 
