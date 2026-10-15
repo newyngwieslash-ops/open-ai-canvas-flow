@@ -201,9 +201,9 @@ bun test test/canvas-appearance.test.ts test/appearance-bootstrap.test.ts test/a
 
 ### Task 7：官方内容源与中文技能目录（3.1）
 
-- [ ] Task 7：官方内容源与中文技能目录（3.1） <!-- comet-task:2b4173a4-bcda-4b74-853d-677cb3b9faa5 -->
+- [x] Task 7：官方内容源与中文技能目录（3.1） <!-- comet-task:2b4173a4-bcda-4b74-853d-677cb3b9faa5 -->
 
-**Files:** 修改 `backend/builtin/影策短剧制作工作流/` 并改名为 `源铭振跃短剧制作工作流/`、`backend/internal/prompts/agent-media-policy.md`、`backend/internal/skills/skills_builtin.go` 中自有作者回退、`backend/agent-runtime/pi/agent-runtime.mjs` 的模型展示名称、`plugin-packages/` 自有元数据与文档；必要的现有加载/嵌入测试随目录引用同步。
+**Files:** 更新 `backend/builtin/` 全部自有品牌说明，其中 `影策短剧制作工作流/` 改名为 `源铭振跃短剧制作工作流/`；同步 `backend/internal/prompts/agent-media-policy.md`、`backend/internal/skills/skills_builtin.go` 中自有作者回退、`backend/agent-runtime/pi/agent-runtime.mjs` 的模型展示名称、`plugin-packages/` 自有元数据与文档；必要的现有加载/嵌入测试随目录引用同步。第三方许可证中的原作者与原文保持，仅更新本产品自述。
 
 - 固定所有中文目录引用及嵌入规则，检查 `skills_yingshi_builtin_test.go`、`skills_builtin_showcase_test.go`；只移动已解析且位于 backend/builtin 内的这个技能目录。
 - 改标题、作者、自述和品牌说明；保留 `yingce-system`、`yingce-short-drama-workflow`、协议与供应商参数，保留 OpenAI 等真实原作者。manifest 的内嵌 documentation 与旁边 README 同步更新，不打印整个巨大 JSON。
