@@ -8,6 +8,8 @@
 - MiniMax H3 视频生成支持 4–30 秒整数时长；原生协议插件升至 2.0.2，秘塔协议插件升至 1.0.1，默认时长保持 5 秒。
 - 升级注意：本版本无数据库结构变更。
 
+> 上游融合说明：v1.6.8.2 / v1.6.8.3（`bf2dc196`，共 9 提交）经集成分支 `sync/upstream-1.6.3` 追加 `git merge` 并入本仓库。冲突 4 文件：`model-capabilities.ts`（保留本地 Fisher/密塔插件段 + 采纳上游 minimax/metaso-h3 合并段与 30 秒档）、`video-provider-minimax.ts`（本地引用媒体重构为底座 + 上游 30 秒上限）、`user-data-sync.ts`（本地 journal 孤儿连接判定 + 上游空操作 remoteSnapshot 短路融合）、`pending-test.mdx`（置顶条目并集）。提交仅推送本仓库 origin。
+
 ## v1.6.8.2
 
 - 压缩创作首页首屏，一行展示创建画布与最近更新的 4 个画布，优化窄屏浏览与加载状态。
