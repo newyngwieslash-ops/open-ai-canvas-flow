@@ -49,19 +49,32 @@ func TestBuiltinMarkdownPackagesPreserveHistoryAndUserState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.EnsureBuiltinSkills(); err != nil {
+	const historyID = "yingce-short-drama-workflow"
+	const oldBody = "---\nname: 影策短剧制作工作流\ndescription: 旧官方工作流\nmetadata:\n  skillId: yingce-short-drama-workflow\n  author: 影策\n  version: 1.0.0\n---\n旧版正文\n"
+	oldPackages, err := loadBuiltinSkillPackagesFromFS(fstest.MapFS{
+		"影策短剧制作工作流/SKILL.md": &fstest.MapFile{Data: []byte(oldBody)},
+	}, svc.repo)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.EnsureSkillPackages(); err != nil {
+	if len(oldPackages) != 1 {
+		t.Fatalf("old packages = %d, want 1", len(oldPackages))
+	}
+	old := oldPackages[0]
+	if err := svc.repo.UpsertBuiltinSkills([]model.Skill{old.skill}); err != nil {
 		t.Fatal(err)
 	}
-	const historyID = "16000000000081"
-	state := model.UserSkillState{ID: "test-state", UserID: "test-user", SkillID: historyID, Added: true, Liked: true}
+	if err := svc.addSkillArchiveVersion(&old.skill, old.archive, "builtin", "", "", "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	state := model.UserSkillState{ID: "test-state", UserID: "test-user", SkillID: historyID, Added: true, Liked: true, InstalledVersionID: old.skill.CurrentVersionID, AutoUpdate: false}
 	if err := db.Create(&state).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.EnsureBuiltinSkills(); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := svc.EnsureBuiltinSkills(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var count int64
 	if err := db.Model(&model.Skill{}).Count(&count).Error; err != nil {
@@ -74,15 +87,27 @@ func TestBuiltinMarkdownPackagesPreserveHistoryAndUserState(t *testing.T) {
 	if err := db.First(&saved, "id = ?", state.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !saved.Added || !saved.Liked {
+	if !saved.Added || !saved.Liked || saved.AutoUpdate || saved.InstalledVersionID != state.InstalledVersionID || saved.UserID != state.UserID || saved.SkillID != historyID {
 		t.Fatalf("user state lost: %#v", saved)
 	}
 	var skill model.Skill
 	if err := db.First(&skill, "id = ?", historyID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if skill.CurrentVersionID == "" || skill.FileCount < 1 {
+	if skill.Name != "源铭振跃短剧制作工作流" || skill.AuthorName != "源铭振跃" {
+		t.Fatalf("official metadata was not refreshed: name=%q author=%q", skill.Name, skill.AuthorName)
+	}
+	if skill.CurrentVersionID == "" || skill.CurrentVersionID == state.InstalledVersionID || skill.FileCount < 1 {
 		t.Fatalf("history skill package not initialized: %#v", skill)
+	}
+	assertSkillVersionCount(t, db, historyID, 2)
+	pinned, err := svc.repo.SkillVersion(saved.InstalledVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := svc.readSkillArchiveEntry(pinned, "SKILL.md")
+	if err != nil || string(body) != oldBody {
+		t.Fatalf("pinned package was changed: body=%q err=%v", body, err)
 	}
 }
 
