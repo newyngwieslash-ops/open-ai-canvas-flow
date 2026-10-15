@@ -105,7 +105,7 @@ func (s *Service) RegistrationAgreement() (string, string) {
 		return "", ""
 	}
 	title := strings.Trim(strings.TrimSpace(value.AgreementTitle), "《》")
-	if title == "" {
+	if title == "" || title == "影策服务协议" {
 		title = s.defaultAgreementTitle()
 	}
 	return title, value.AgreementContent

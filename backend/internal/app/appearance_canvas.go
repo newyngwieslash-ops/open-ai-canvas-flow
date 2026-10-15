@@ -20,7 +20,7 @@ type CanvasAppearance struct {
 }
 
 func defaultCanvasAppearance() CanvasAppearance {
-	return CanvasAppearance{AgentName: "影策", LauncherLabel: "Agent", PanelTitle: "画布助手", WelcomeTitle: "在这里，和{agentName}让灵感，慢慢成形", WelcomeDescription: "从一个想法开始，和{agentName}一起创作。", InputPlaceholder: "输入操作指导；用 @ 引用画布节点，用 / 或 、 引用 Skills", AvatarType: "orb", AvatarHeight: 220}
+	return CanvasAppearance{AgentName: defaultAppearanceBrandName, LauncherLabel: "Agent", PanelTitle: "画布助手", WelcomeTitle: "在这里，和{agentName}让灵感，慢慢成形", WelcomeDescription: "从一个想法开始，和{agentName}一起创作。", InputPlaceholder: "输入操作指导；用 @ 引用画布节点，用 / 或 、 引用 Skills", AvatarType: "orb", AvatarHeight: 220}
 }
 
 func normalizeCanvasAppearance(value CanvasAppearance) (CanvasAppearance, error) {
@@ -42,6 +42,9 @@ func normalizeCanvasAppearance(value CanvasAppearance) (CanvasAppearance, error)
 		if err := validateAppearanceCopy(*field.value, field.label, field.max, field.required); err != nil {
 			return value, err
 		}
+	}
+	if value.AgentName == "影策" {
+		value.AgentName = defaultCanvasAppearance().AgentName
 	}
 	for _, ch := range value.AgentName {
 		if unicode.IsControl(ch) {

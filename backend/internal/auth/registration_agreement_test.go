@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"testing"
 
 	"yingce/backend/internal/kernel"
@@ -10,6 +11,46 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestRegistrationAgreementRecognizesSavedLegacyDefault(t *testing.T) {
+	for _, brand := range []string{"源铭振跃", "星河工作室"} {
+		for _, tc := range []struct{ title, want string }{
+			{"影策服务协议", brand + "服务协议"}, {"《影策服务协议》", brand + "服务协议"},
+			{"", brand + "服务协议"}, {"《影策创作者条款》", "影策创作者条款"},
+		} {
+			db := newAgreementTestDB(t)
+			svc := New(repository.New(db), brandHost{name: brand}, nil)
+			raw, err := json.Marshal(registrationSettingValue{Enabled: true, AgreementTitle: tc.title, AgreementContent: "影策正文\n保留所有条款"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.SystemSetting{Key: registrationSettingKey, ValueJSON: string(raw)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				title, content := svc.RegistrationAgreement()
+				if title != tc.want || content != "影策正文\n保留所有条款" {
+					t.Errorf("brand %q saved title %q = %q / %q", brand, tc.title, title, content)
+				}
+				settings, err := svc.PublicAuthSettings()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if settings.AgreementTitle != tc.want || settings.AgreementContent != content {
+					t.Error("public auth agreement differs")
+				}
+				svc = New(repository.New(db), brandHost{name: brand}, nil)
+			}
+			var stored model.SystemSetting
+			if err := db.First(&stored, "key = ?", registrationSettingKey).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.ValueJSON != string(raw) {
+				t.Fatal("agreement GET changed JSON")
+			}
+		}
+	}
+}
 
 func TestRegistrationAgreementFollowsBrandNameWhenUnset(t *testing.T) {
 	svc := New(repository.New(newAgreementTestDB(t)), brandHost{name: "星野"}, nil)

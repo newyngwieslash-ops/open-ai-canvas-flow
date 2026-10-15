@@ -338,7 +338,7 @@ func normalizeEmailSetting(value EmailSettingValue) EmailSettingValue {
 }
 
 func (s *Service) publicEmailSetting(setting *model.SystemSetting, value EmailSettingValue) *PublicEmailSetting {
-	inherited := value.FromName == "" || value.FromName == DefaultBrandName
+	inherited := isInheritedEmailSender(value.FromName)
 	value = resolveEmailSender(value, s.host.BrandName())
 	result := &PublicEmailSetting{
 		Enabled: value.Enabled, Host: value.Host, Port: value.Port, Username: value.Username, Encryption: value.Encryption,
@@ -422,8 +422,12 @@ func validateRegistrationEmailDomain(email string, allowedDomains []string) erro
 	return kernel.BadAuthRequest("该邮箱域名不在管理员设置的白名单内")
 }
 
+func isInheritedEmailSender(name string) bool {
+	return name == "" || name == DefaultBrandName || name == "影策"
+}
+
 func resolveEmailSender(value EmailSettingValue, brandName string) EmailSettingValue {
-	if value.FromName == "" || value.FromName == DefaultBrandName {
+	if isInheritedEmailSender(value.FromName) {
 		value.FromName = brandName
 	}
 	return value

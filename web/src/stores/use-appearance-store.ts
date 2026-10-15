@@ -70,7 +70,7 @@ export function normalizePublicAppearance(value?: Partial<PublicAppearance> | nu
         ...value,
         schemaVersion: 10,
         updates: normalizeUpdateAnnouncement(value?.updates),
-        canvas: { ...DEFAULT_CANVAS_APPEARANCE, ...value?.canvas },
+        canvas: { ...DEFAULT_CANVAS_APPEARANCE, ...value?.canvas, agentName: displayBrandName(value?.canvas?.agentName ?? DEFAULT_CANVAS_APPEARANCE.agentName) },
         brandName: resolvedBrandName,
         brandSlug,
         authHeroTitle,

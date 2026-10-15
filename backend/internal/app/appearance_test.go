@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,6 +48,123 @@ func TestAppearanceDefaultsPreserveBuiltInBrand(t *testing.T) {
 	}
 	if len(adminAppearance.SkinThemes) != 4 || !adminAppearance.SkinThemes[0].Locked {
 		t.Fatalf("AdminAppearance() skin library = %#v", adminAppearance.SkinThemes)
+	}
+}
+
+func TestAppearanceLegacyIdentityRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name, brand, title, description, copyright, agent               string
+		wantBrand, wantTitle, wantDescription, wantCopyright, wantAgent string
+	}{
+		{"legacy", "影策", "影策", "影策，面向 AI 影视与短剧创作的工作台。", "© 2025 影策. All rights reserved.", "影策", "源铭振跃", "源铭振跃", "源铭振跃，面向 AI 影视与短剧创作的工作台。", "© 2025 源铭振跃. All rights reserved.", "源铭振跃"},
+		{"custom site with legacy templates", "星河工作室", "影策", "影策，面向 AI 影视与短剧创作的工作台。", "© 1999 影策. All rights reserved.", "影策", "星河工作室", "源铭振跃", "源铭振跃，面向 AI 影视与短剧创作的工作台。", "© 1999 源铭振跃. All rights reserved.", "源铭振跃"},
+		{"custom", "星河工作室", "影策创作札记", "关于影策的介绍", "影策团队版权所有", "影策小助手", "星河工作室", "影策创作札记", "关于影策的介绍", "影策团队版权所有", "影策小助手"},
+		{"empty optional copy", "星河工作室", "", "", "", "星河助手", "星河工作室", "", "", "", "星河助手"},
+		{"inexact copyright", "星河工作室", "自由标题", "", "© 26 影策. All rights reserved.", "星河助手", "星河工作室", "自由标题", "", "© 26 影策. All rights reserved.", "星河助手"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db, dataDir, admin := newAppearanceTestService(t)
+			resources := []model.Resource{
+				{ID: "logo", UserID: admin.ID, Kind: "image", Status: model.ResourceStatusReady, Provider: "local", ObjectKey: "brand/logo.png", MimeType: "image/png"},
+				{ID: "dark", UserID: admin.ID, Kind: "image", Status: model.ResourceStatusReady, Provider: "local", ObjectKey: "brand/dark.png", MimeType: "image/png"},
+				{ID: "video", UserID: admin.ID, Kind: "video", Status: model.ResourceStatusReady, Provider: "local", ObjectKey: "brand/video.mp4", MimeType: "video/mp4"},
+				{ID: "poster", UserID: admin.ID, Kind: "image", Status: model.ResourceStatusReady, Provider: "local", ObjectKey: "brand/poster.png", MimeType: "image/png"},
+			}
+			if err := db.Create(&resources).Error; err != nil {
+				t.Fatal(err)
+			}
+			writeAppearanceResourceFixtures(t, dataDir, resources)
+			imported, err := svc.UploadLive2D(admin, multipartFileHeader(t, "avatar.zip", "application/zip", live2DTestZIP(t, live2DTestFiles(t))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := defaultAppearanceSetting()
+			value.BrandName, value.SEOTitle, value.SEODescription, value.FooterCopyright = tc.brand, tc.title, tc.description, tc.copyright
+			value.BrandSlug, value.AuthHeroTitle, value.AuthHeroDescription = "star-studio", "与影策一起创作", "保留影策自由文案"
+			value.LogoResourceID, value.DarkLogoResourceID, value.AuthVideoResourceID, value.AuthVideoPosterResourceID = "logo", "dark", "video", "poster"
+			value.LogoFrameEnabled, value.AuthVideoAutoplay = false, false
+			value.SEOKeywords, value.ICPFilingEnabled, value.ICPFilingNumber, value.RedeemPurchaseURL = "影策,电影", true, "沪ICP备123号", "https://example.com/buy"
+			custom := cloneAppearanceSkin(value.SkinThemes[0], "star-skin", "星河皮肤", "自定义")
+			custom.Tokens.Light.Primary = "#123456"
+			value.SkinThemes, value.SkinID = append(value.SkinThemes, custom), custom.ID
+			value.Updates = UpdateAnnouncement{Enabled: true, CurrentVersion: "1.0", Releases: []UpdateRelease{{ID: "r1", Version: "1.0", Title: "影策公告", Blocks: []UpdateBlock{{ID: "b1", Type: "text", Text: "影策正文不替换", Layout: "full"}}}}}
+			value.Canvas.AgentName, value.Canvas.WelcomeTitle, value.Canvas.WelcomeDescription = tc.agent, "影策和{agentName}", "用户欢迎模板影策"
+			value.Canvas.AvatarType, value.Canvas.Live2DResourceID, value.Canvas.Live2DEntry, value.Canvas.AvatarHeight = "live2d", imported.ResourceID, imported.Entry, 280
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.SystemSetting{Key: appearanceSettingKey, ValueJSON: string(encoded)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			want := value
+			want.BrandName, want.SEOTitle, want.SEODescription, want.FooterCopyright, want.Canvas.AgentName = tc.wantBrand, tc.wantTitle, tc.wantDescription, tc.wantCopyright, tc.wantAgent
+			for i := 0; i < 2; i++ {
+				got, err := svc.AdminAppearance(admin)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got.AppearanceSetting, want) {
+					t.Errorf("admin identity or unrelated fields changed: got %+v, want %+v", got.AppearanceSetting, want)
+				}
+				public, err := svc.Appearance()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(*public, got.Public) {
+					t.Error("public/admin projections differ")
+				}
+			}
+			var stored model.SystemSetting
+			if err := db.First(&stored, "key = ?", appearanceSettingKey).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.ValueJSON != string(encoded) {
+				t.Fatal("GET changed stored JSON")
+			}
+			// Save the original legacy input too: normalization must cover both boundaries.
+			saved, err := svc.UpdateAppearance(admin, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(saved.AppearanceSetting, want) {
+				t.Errorf("save lost fields or legacy identity: %+v", saved.AppearanceSetting)
+			}
+			svc = New(repository.New(db), dataDir)
+			reloaded, err := svc.AdminAppearance(admin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloaded.AppearanceSetting, want) {
+				t.Error("new service did not retain normalized complete setting")
+			}
+			if err := db.First(&stored, "key = ?", appearanceSettingKey).Error; err != nil {
+				t.Fatal(err)
+			}
+			var persisted AppearanceSetting
+			if err := json.Unmarshal([]byte(stored.ValueJSON), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(persisted, want) {
+				t.Error("save did not persist normalized complete setting")
+			}
+		})
+	}
+}
+
+func TestAppearanceEmptyStoredCanvasUsesCurrentDefault(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"canvas":{}}`} {
+		svc, db, _, admin := newAppearanceTestService(t)
+		if err := db.Create(&model.SystemSetting{Key: appearanceSettingKey, ValueJSON: raw}).Error; err != nil {
+			t.Fatal(err)
+		}
+		got, err := svc.AdminAppearance(admin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Canvas.AgentName != "源铭振跃" || got.Public.Canvas.AgentName != "源铭振跃" {
+			t.Errorf("empty canvas default = %+v", got.Canvas)
+		}
 	}
 }
 

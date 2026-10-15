@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -210,6 +211,7 @@ func (s *Service) UpdateAppearance(actor *model.User, value AppearanceSetting) (
 	value.FooterCopyright = normalizeAppearanceSingleLine(value.FooterCopyright)
 	value.ICPFilingNumber = normalizeAppearanceSingleLine(value.ICPFilingNumber)
 	value.RedeemPurchaseURL = strings.TrimSpace(value.RedeemPurchaseURL)
+	value = normalizeAppearanceIdentity(value)
 	if err := validateAppearanceSetting(value); err != nil {
 		return nil, err
 	}
@@ -449,7 +451,29 @@ func (s *Service) readAppearance() (*model.SystemSetting, AppearanceSetting, err
 	value.FooterCopyright = normalizeAppearanceSingleLine(value.FooterCopyright)
 	value.ICPFilingNumber = normalizeAppearanceSingleLine(value.ICPFilingNumber)
 	value.RedeemPurchaseURL = strings.TrimSpace(value.RedeemPurchaseURL)
+	value = normalizeAppearanceIdentity(value)
+	value.Canvas, err = normalizeCanvasAppearance(value.Canvas)
+	if err != nil {
+		return nil, AppearanceSetting{}, err
+	}
 	return setting, value, nil
+}
+
+var legacyAppearanceCopyright = regexp.MustCompile(`^(© [0-9]{4} )影策(\. All rights reserved\.)$`)
+
+// Only exact former product defaults migrate; user-authored copy keeps its identity.
+func normalizeAppearanceIdentity(value AppearanceSetting) AppearanceSetting {
+	if value.BrandName == "影策" {
+		value.BrandName = defaultAppearanceBrandName
+	}
+	if value.SEOTitle == "影策" {
+		value.SEOTitle = defaultAppearanceBrandName
+	}
+	if value.SEODescription == "影策，面向 AI 影视与短剧创作的工作台。" {
+		value.SEODescription = defaultAppearanceBrandName + "，面向 AI 影视与短剧创作的工作台。"
+	}
+	value.FooterCopyright = legacyAppearanceCopyright.ReplaceAllString(value.FooterCopyright, "${1}"+defaultAppearanceBrandName+"${2}")
+	return value
 }
 
 // resolveAvailableAppearanceAssets prevents stale resource references from

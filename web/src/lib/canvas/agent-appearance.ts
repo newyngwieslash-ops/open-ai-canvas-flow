@@ -1,3 +1,5 @@
+import { UI_BRAND_NAME } from "../brand-display";
+
 export type CanvasAppearance = {
     agentName: string;
     launcherLabel: string;
@@ -12,7 +14,7 @@ export type CanvasAppearance = {
 };
 
 export const DEFAULT_CANVAS_APPEARANCE: CanvasAppearance = {
-    agentName: "影策",
+    agentName: UI_BRAND_NAME,
     launcherLabel: "Agent",
     panelTitle: "画布助手",
     welcomeTitle: "在这里，和{agentName}让灵感，慢慢成形",

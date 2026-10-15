@@ -196,6 +196,7 @@ func TestSenderNameBrandsRegistrationAndPasswordResetEmails(t *testing.T) {
 		wantName string
 	}{
 		{name: "default inherits appearance", fromName: DefaultBrandName, wantName: "HIMA Studio"},
+		{name: "legacy default inherits appearance", fromName: "影策", wantName: "HIMA Studio"},
 		{name: "empty inherits appearance", fromName: "", wantName: "HIMA Studio"},
 		{name: "custom sender overrides appearance", fromName: "Custom Canvas", wantName: "Custom Canvas"},
 		{name: "custom sender is trimmed", fromName: "  自定义工作台  ", wantName: "自定义工作台"},
@@ -203,6 +204,27 @@ func TestSenderNameBrandsRegistrationAndPasswordResetEmails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assertRegistrationAndPasswordResetEmailBrand(t, tc.fromName, tc.wantName)
 		})
+	}
+}
+
+func TestSenderNameInheritanceMatchesPublicSetting(t *testing.T) {
+	svc, _ := newPasswordResetTestService(t)
+	svc.host = brandHost{name: "星河工作室"}
+	for _, tc := range []struct {
+		name, want string
+		inherited  bool
+	}{
+		{"", "星河工作室", true}, {"影策", "星河工作室", true}, {"源铭振跃", "星河工作室", true},
+		{"业务通知", "业务通知", false}, {"影策通知", "影策通知", false},
+	} {
+		value := EmailSettingValue{FromName: tc.name}
+		if got := resolveEmailSender(value, "星河工作室"); got.FromName != tc.want {
+			t.Errorf("sender %q resolved to %q", tc.name, got.FromName)
+		}
+		got := svc.publicEmailSetting(nil, value)
+		if got.FromName != tc.want || got.FromNameInherited != tc.inherited {
+			t.Errorf("public sender %q = %+v", tc.name, got)
+		}
 	}
 }
 
