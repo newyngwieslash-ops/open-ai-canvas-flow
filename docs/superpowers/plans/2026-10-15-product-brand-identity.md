@@ -179,8 +179,8 @@ bun run typecheck
 
 **Files:** 修改 `backend/internal/handler/openapi.yaml` 的展示标题、`docs/content/docs/backend/canvas-agent-appearance.mdx` 以及审计定位到的自有外观/认证说明；更新 `web/test/canvas-appearance.test.ts` 和已有默认品牌预期。
 
-- [ ] 修改标题和品牌说明，不更改 OpenAPI paths、schema、操作 ID；文档明确存量默认值识别与自定义配置保留边界。
-- [ ] 运行 Task 4 的后端专项及前端 canvas/appearance 专项，确认旧值只作为回归输入保留；提交说明及对应断言。
+- [x] 修改标题和品牌说明，不更改 OpenAPI paths、schema、操作 ID；文档明确存量默认值识别与自定义配置保留边界。
+- [x] 运行 Task 4 的后端专项及前端 canvas/appearance 专项，确认旧值只作为回归输入保留；提交说明及对应断言。
 
 ```powershell
 Set-Location web
@@ -189,7 +189,7 @@ bun test test/canvas-appearance.test.ts test/appearance-bootstrap.test.ts test/a
 
 ### Task 7：官方内容源与中文技能目录（3.1）
 
-**Files:** 修改 `backend/builtin/影策短剧制作工作流/` 并改名为 `源铭振跃短剧制作工作流/`、`backend/internal/prompts/agent-media-policy.md`、`backend/internal/skills/skills_builtin.go` 中自有作者回退、`plugin-packages/` 自有元数据与文档。
+**Files:** 修改 `backend/builtin/影策短剧制作工作流/` 并改名为 `源铭振跃短剧制作工作流/`、`backend/internal/prompts/agent-media-policy.md`、`backend/internal/skills/skills_builtin.go` 中自有作者回退、`backend/agent-runtime/pi/agent-runtime.mjs` 的模型展示名称、`plugin-packages/` 自有元数据与文档；必要的现有加载/嵌入测试随目录引用同步。
 
 - [ ] 固定所有中文目录引用及嵌入规则，检查 `skills_yingshi_builtin_test.go`、`skills_builtin_showcase_test.go`；只移动已解析且位于 backend/builtin 内的这个技能目录。
 - [ ] 改标题、作者、自述和品牌说明；保留 `yingce-system`、`yingce-short-drama-workflow`、协议与供应商参数，保留 OpenAI 等真实原作者。manifest 的内嵌 documentation 与旁边 README 同步更新，不打印整个巨大 JSON。
@@ -250,7 +250,7 @@ go test ./internal/protocol -count=1
 
 ### Task 11：文档、脚本及可见文件名（4.2）
 
-**Files:** 按扫描精确更新 `README.md`、`CONTEXT.md`、`AGENTS.md`、`CHANGELOG.md` 当前产品展示、维护文档/注释和 `scripts/` 输出。历史研究稿与用户参考按明确例外记录，不将其旧限制当作本次授权边界。
+**Files:** 按扫描精确更新 `README.md`、`CONTEXT.md`、`AGENTS.md`、`CHANGELOG.md` 当前产品展示、维护文档/注释、`scripts/` 和 `.github/` 展示文本，以及 `backend/internal/app/appearance.go` 的恢复默认审计文案（仅显示文字，不动旧值识别或业务逻辑）。历史研究稿与用户参考按明确例外记录，不将其旧限制当作本次授权边界。
 
 - [ ] 对每个命中先判定品牌、普通词、机器标识或真实出处；产品当前可见品牌改名，来源链接、许可证和真实作者保留。
 - [ ] 改名文件时同步每个真实引用，使用 `rg -n --fixed-strings` 检查旧路径；不改变脚本行为或依赖锁文件。
