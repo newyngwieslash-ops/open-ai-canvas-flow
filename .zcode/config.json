@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PreToolUse": [
+        {
+          "matcher": "Write|Edit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "E:\\AI_Vedio_Things\\new-toonflow\\open-ai-canvas-flow\\.zcode\\skills\\comet\\scripts\\comet-hook-router.mjs",
+                "--platform",
+                "zcode",
+                "--project-root",
+                "E:\\AI_Vedio_Things\\new-toonflow\\open-ai-canvas-flow"
+              ],
+              "timeoutMs": 60000
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
