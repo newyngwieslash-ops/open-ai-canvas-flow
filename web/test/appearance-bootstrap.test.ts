@@ -202,6 +202,17 @@ test("default studio label uses a neutral subtitle while custom slugs keep their
     expect(brandStudioLabel(normalizePublicAppearance({ brandName: "HIMA Studio", brandSlug: "hima-studio" }))).toBe("HIMA STUDIO");
 });
 
+test("custom brands using an omitted or explicit default machine slug get a neutral studio label", () => {
+    for (const input of [{ brandName: "HIMA Studio" }, { brandName: "HIMA Studio", brandSlug: "open-ai-canvas" }]) {
+        const original = { ...input };
+        const appearance = normalizePublicAppearance(input);
+        expect(brandStudioLabel(appearance)).toBe("AI 创作工作台");
+        expect(appearance.brandName).toBe("HIMA Studio");
+        expect(appearance.brandSlug).toBe("open-ai-canvas");
+        expect(input).toEqual(original);
+    }
+});
+
 test("only exact legacy SEO and copyright templates are treated as defaults", () => {
     const appearance = normalizePublicAppearance({
         brandName: "HIMA Studio", seoTitle: "影策",
