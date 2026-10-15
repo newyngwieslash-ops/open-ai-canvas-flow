@@ -245,7 +245,7 @@ export default function AppearanceSettingsPage() {
     const restoreBuiltInAppearance = () => {
         if (!setting?.configured || saving || refreshing || restoring || canvasUploading) return;
         modal.confirm({
-            title: "恢复影策默认品牌标识？",
+            title: "恢复源铭振跃默认品牌标识？",
             content: "品牌名称、英文标识、Logo、画布 Agent 名称/文案/形象、更新公告、登录页文案、视频、封面、SEO、备案和皮肤主题会立即恢复为项目内置值；自定义公告会清空并关闭，展示原有更新日志。已上传文件仍保留在存储资源中，不会被删除。",
             okText: "恢复默认",
             cancelText: "取消",
@@ -260,7 +260,7 @@ export default function AppearanceSettingsPage() {
                     Object.values(inputRefs).forEach((ref) => {
                         if (ref.current) ref.current.value = "";
                     });
-                    message.success("已恢复影策默认品牌标识");
+                    message.success("已恢复源铭振跃默认品牌标识");
                 } catch (error) {
                     message.error(error instanceof Error ? error.message : "恢复默认外观失败");
                     throw error;
@@ -486,7 +486,7 @@ export default function AppearanceSettingsPage() {
                                 </Button>
                             ) : null}
                             <Button icon={<RotateCcw className="size-4" />} loading={restoring} disabled={!setting.configured || saving || refreshing || canvasUploading} onClick={restoreBuiltInAppearance}>
-                                恢复影策默认
+                                恢复源铭振跃默认
                             </Button>
                             <Button icon={<RefreshCw className="size-4" />} loading={refreshing} disabled={saving || restoring || canvasUploading} onClick={requestRefresh}>
                                 刷新状态

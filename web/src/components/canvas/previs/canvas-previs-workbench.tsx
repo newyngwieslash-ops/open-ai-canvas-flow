@@ -1215,7 +1215,7 @@ export function CanvasPrevisWorkbench({
                     <X className="size-4" />
                 </button>
                 <div className="previs-desk-brand">
-                    <span className="previs-desk-logo">影策</span>
+                    <span className="previs-desk-logo">源铭振跃</span>
                     <span className="previs-desk-brand-title">预演台</span>
                     <span className="previs-desk-brand-sub">AI 短剧预演</span>
                 </div>
