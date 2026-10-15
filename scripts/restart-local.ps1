@@ -1,5 +1,5 @@
 ﻿# 影策本地二次开发重启。
-# 前端 5178，后端 8178，避开被其他项目占用的 3000/8080。
+# 前端默认 5178（受限时改用 15178），后端 8178。
 # 数据目录、Go 缓存、Vite 代理约定见 docs/content/docs/backend/local-development.mdx
 
 [CmdletBinding()]
@@ -24,7 +24,7 @@ function ConvertTo-ArgSet([string[]]$Values) {
 $argSet = ConvertTo-ArgSet $Remaining
 if ($argSet.ContainsKey("--help") -or $argSet.ContainsKey("-h") -or $argSet.ContainsKey("/?")) {
     Write-Host "restart.bat [--check]"
-    Write-Host ("  前端 http://localhost:{0}" -f $WebPort)
+    Write-Host ("  前端默认 http://localhost:{0}，端口受限时改用 15178。" -f $WebPort)
     Write-Host ("  后端 http://127.0.0.1:{0}" -f $BackendPort)
     Write-Host "  本项目占用指定端口则结束并重启；其他项目占用则写入 .local\restart.log 后退出。"
     exit 0
@@ -172,9 +172,18 @@ function Read-RestartMarker {
     }
 }
 
-function Get-PortOccupancy([int]$Port) {
+function Get-PortOccupancy([int]$Port, [string]$Address = "0.0.0.0") {
     $pids = @(Get-ListeningPids $Port)
     if ($pids.Count -eq 0) {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse($Address), $Port)
+        try {
+            $listener.Server.ExclusiveAddressUse = $true
+            $listener.Start()
+        } catch {
+            return [pscustomobject]@{ Port = $Port; Status = "unavailable"; Pids = @(); Ours = @(); Foreign = @(); Details = @("TCP ${Address}:${Port} 无法绑定（可能为 Windows 保留端口）: $($_.Exception.Message)") }
+        } finally {
+            $listener.Stop()
+        }
         return [pscustomobject]@{ Port = $Port; Status = "free"; Pids = @(); Ours = @(); Foreign = @(); Details = @() }
     }
     $ours = @()
@@ -258,7 +267,12 @@ function Install-AgentRuntime {
 }
 
 $webOcc = Get-PortOccupancy $WebPort
-$backendOcc = Get-PortOccupancy $BackendPort
+if ($webOcc.Status -eq "unavailable") {
+    Write-RestartLog WARN ("前端端口 {0} 无法绑定，尝试备用端口 15178。{1}" -f $WebPort, ($webOcc.Details -join "; "))
+    $WebPort = 15178
+    $webOcc = Get-PortOccupancy $WebPort
+}
+$backendOcc = Get-PortOccupancy $BackendPort "127.0.0.1"
 
 Write-RestartLog INFO ("仓库: {0}" -f $repoRoot)
 Write-RestartLog INFO ("前端端口 {0}: {1}" -f $WebPort, $webOcc.Status)
@@ -268,9 +282,9 @@ foreach ($detail in @($backendOcc.Details)) { Write-RestartLog INFO ("  {0}" -f 
 
 $blocked = $false
 foreach ($occ in @($webOcc, $backendOcc)) {
-    if ($occ.Status -ne "foreign") { continue }
+    if ($occ.Status -notin @("foreign", "unavailable")) { continue }
     $blocked = $true
-    Write-RestartLog ERROR ("端口 {0} 已被其他项目占用，拒绝重启。" -f $occ.Port)
+    Write-RestartLog ERROR ("端口 {0} 被其他项目占用或无法绑定，拒绝重启。" -f $occ.Port)
     foreach ($detail in @($occ.Details)) { Write-RestartLog ERROR ("  {0}" -f $detail) }
 }
 if ($blocked) {

@@ -62,11 +62,11 @@ restart.bat
 
 脚本会：
 
-- 前端固定监听 `5178`，浏览器访问 [http://localhost:5178](http://localhost:5178)；
+- 前端默认监听 `5178`；若该端口没有监听进程却无法绑定（例如被 Windows 保留），自动尝试 `15178`，以启动窗口打印的访问地址为准；
 - 后端固定监听 `8178`，Vite 把 `/api` 代理到 `http://127.0.0.1:8178`；
 - 数据目录和 Go 缓存与上面的一键启动相同（`.local/project-workbench-debug`、`.local/cache/go-build`、`.local/cache/go-mod`）；
-- 若 `5178` 或 `8178` 上是本仓库实例，则结束进程后重启；
-- 若端口被其他项目占用，则拒绝启动，并把进程信息写入 `.local/restart.log`。
+- 若选定端口上是本仓库实例，则结束进程后重启；
+- 若选定端口被其他项目占用或仍无法绑定，则在结束已有实例前拒绝启动，并把原因写入 `.local/restart.log`；不会修改 Windows 保留端口设置。
 - 后端会精确放行 `localhost` 和 `127.0.0.1`，因此可以配置本机端口上的大模型（例如 `http://localhost:18317`）。不要打开全量私网开关。
 
 只检查端口、不启动：
@@ -74,6 +74,8 @@ restart.bat
 ```bat
 restart.bat --check
 ```
+
+端口检测回归检查：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-restart-local.ps1`。浏览器按端口隔离本地缓存与偏好；切换访问端口后需核对服务端已保存的画布，不要清除旧地址的本地缓存。
 
 ## 手工启动
 
