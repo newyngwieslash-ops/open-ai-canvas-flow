@@ -90,7 +90,7 @@ $response.data.appearance | Select-Object brandName,brandSlug,seoTitle,seoDescri
 
 **Interfaces:** 保留 `normalizePublicAppearance(value?: Partial<PublicAppearance> | null): PublicAppearance`、`displayBrandName(value: string): string`、`displayBrandTitle(title: string, brandName: string): string` 和现有 store 消费合同；不新增页面品牌 helper。
 
-- [ ] 补充默认身份和失败降级的断言；保留自定义品牌和自定义 SEO 测试，测试先前显示映射可以收敛但不改变调用合同。
+- [x] 补充默认身份和失败降级的断言；保留自定义品牌和自定义 SEO 测试，测试先前显示映射可以收敛但不改变调用合同。
 
 ```typescript
 expect(DEFAULT_PUBLIC_APPEARANCE.brandName).toBe('源铭振跃');
@@ -99,8 +99,8 @@ expect(normalizePublicAppearance({ brandName: 'HIMA Studio', seoTitle: '定制�
 expect(displayBrandName('HIMA Studio')).toBe('HIMA Studio');
 ```
 
-- [ ] 在原入口更新默认名、默认 SEO/版权和 `brandStudioLabel` 的可见英文副标；保持 `brandSlug: open-ai-canvas`。处理旧值的逻辑与 Task 4 保持同一字段规则，调用方不再叠加新的映射。
-- [ ] 运行专项，初始、成功加载、失败刷新、元数据和自定义配置均应通过；提交默认与读取补丁。
+- [x] 在原入口更新默认名、默认 SEO/版权和 `brandStudioLabel` 的可见英文副标；保持 `brandSlug: open-ai-canvas`。处理旧值的逻辑与 Task 4 保持同一字段规则，调用方不再叠加新的映射。
+- [x] 运行专项，初始、成功加载、失败刷新、元数据和自定义配置均应通过；提交默认与读取补丁。
 
 ```powershell
 Set-Location web
