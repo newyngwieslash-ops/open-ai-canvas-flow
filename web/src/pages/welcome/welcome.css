@@ -8,7 +8,7 @@
     --welcome-axis: 42vw;
     --welcome-gutter: 16px;
     --welcome-header-height: 56px;
-    --t1: clamp(64px, 8.3vw, 128px);
+    --t1: clamp(52px, 6.4vw, 104px);
     --t2: clamp(36px, 5vw, 80px);
     --t3: 28px;
     --t4: 20px;
@@ -95,7 +95,7 @@ body:has(.welcome-page) {
     height: 100svh;
     min-height: 640px;
     display: grid;
-    grid-template-rows: 52% 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
     background: var(--welcome-paper);
     overflow: hidden;
 }
@@ -226,27 +226,34 @@ body:has(.welcome-page) {
 .welcome-mosaic .is-field { background: var(--welcome-field); }
 .welcome-copy {
     position: relative;
+    display: grid;
+    grid-template-columns: minmax(16px, 42vw) 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 6px 28px;
+    padding: 18px var(--welcome-gutter) 16px;
     background: var(--welcome-paper);
     color: var(--welcome-ink);
     min-height: 0;
     overflow: clip;
 }
 .welcome-rail {
-    position: absolute;
-    left: var(--welcome-gutter);
-    top: 28px;
-    width: calc(var(--welcome-axis) - 32px);
-    max-width: 34ch;
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    position: static;
+    width: auto;
+    max-width: none;
     display: grid;
-    gap: 18px;
+    align-content: space-between;
+    gap: 12px;
     z-index: 2;
 }
 .welcome-looks {
-    display: grid;
-    gap: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
 }
 .welcome-looks button {
-    min-height: 44px;
+    min-height: 36px;
     padding: 0;
     color: var(--welcome-muted);
     font-size: 16px;
@@ -275,10 +282,12 @@ body:has(.welcome-page) {
     color: var(--welcome-ink);
 }
 .welcome-chapter {
-    position: absolute;
-    left: var(--welcome-axis);
-    right: var(--welcome-gutter);
-    top: 72px;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    position: relative;
+    left: auto;
+    right: auto;
+    top: auto;
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -315,14 +324,20 @@ body:has(.welcome-page) {
     margin-top: 16px;
     min-height: 44px;
 }
+.welcome-copy-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: flex-end;
+    gap: 8px;
+}
 .welcome-action-foot {
     display: none;
-    margin-top: 20px;
 }
 .welcome-next {
-    position: absolute;
-    right: var(--welcome-gutter);
-    bottom: 20px;
+    position: static;
     min-height: 44px;
     padding: 0 16px;
     background: var(--welcome-ink);
@@ -330,21 +345,21 @@ body:has(.welcome-page) {
 }
 .welcome-showcase {
     display: grid;
-    grid-template-columns: repeat(12, 1fr);
-    min-height: 88svh;
-    padding: 72px var(--welcome-gutter) 0;
+    grid-template-columns: minmax(220px, 42vw) 1fr;
+    min-height: 100svh;
+    padding: 0;
     background: var(--welcome-paper);
     scroll-margin-top: 16px;
     position: relative;
     z-index: 1;
 }
 .welcome-index {
-    grid-column: 1 / 6;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: flex-start;
-    gap: 8px;
-    padding-top: 24px;
+    gap: 10px;
+    padding: 48px var(--welcome-gutter);
 }
 .welcome-index button {
     font-size: clamp(36px, 4vw, 64px);
@@ -367,38 +382,51 @@ body:has(.welcome-page) {
     transform: translateY(1px);
 }
 .welcome-sheet-stage {
-    grid-column: 7 / 13;
-    background: var(--welcome-field);
-    min-height: 88svh;
+    background: var(--welcome-ink);
+    min-height: 100svh;
     overflow: hidden;
     position: relative;
 }
 .welcome-sheet {
-    width: min(760px, 94%);
-    margin: 40px 24px 0;
-    background: var(--welcome-paper);
-    color: var(--welcome-ink);
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    background: var(--welcome-ink);
+    color: var(--welcome-paper);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    position: relative;
+    min-height: 100svh;
 }
 .welcome-sheet img {
     display: block;
+    position: absolute;
+    inset: 0;
     width: 100%;
-    height: auto;
+    height: 100%;
+    min-height: 0;
+    object-fit: cover;
 }
 .welcome-sheet p,
 .welcome-sheet a {
     display: block;
-    padding: 16px 18px 0;
+    position: relative;
+    z-index: 1;
+    background: var(--welcome-ink);
+    padding: 14px 20px 0;
     font-size: 16px;
 }
 .welcome-sheet a {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding-bottom: 24px;
+    padding: 10px 20px 18px;
 }
 .welcome-method {
     padding: 120px var(--welcome-gutter) 80px;
-    background: var(--welcome-paper);
+    background: var(--welcome-ink);
+    color: var(--welcome-paper);
     position: relative;
     z-index: 1;
     overflow-x: clip;
@@ -432,7 +460,7 @@ body:has(.welcome-page) {
 .welcome-reply {
     display: block;
     margin: 0;
-    background: var(--welcome-field);
+    background: #161616;
     padding: 20px;
 }
 .welcome-call span {
@@ -445,7 +473,7 @@ body:has(.welcome-page) {
     resize: none;
     background: transparent;
     border: 0;
-    color: var(--welcome-ink);
+    color: var(--welcome-paper);
     font-size: 16px;
     line-height: 1.5;
 }
@@ -459,7 +487,7 @@ body:has(.welcome-page) {
 .welcome-reply img {
     display: block;
     width: 100%;
-    height: 220px;
+    height: 320px;
     object-fit: cover;
 }
 .welcome-reply figcaption {
@@ -663,24 +691,34 @@ body:has(.welcome-page) {
         position: static;
         width: auto;
         max-width: none;
-        padding: 20px 16px 0;
+        padding: 0;
     }
     .welcome-copy {
         display: grid;
-        grid-template-rows: auto 1fr auto;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
     }
     .welcome-chapter {
         position: relative;
         left: auto;
         right: auto;
         top: auto;
-        padding: 8px 16px 12px;
+        grid-column: 1;
+        grid-row: auto;
+        padding: 4px 0 8px;
     }
     .welcome-lines { max-width: 8ch; }
+    .welcome-copy-actions {
+        grid-column: 1;
+        grid-row: auto;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        align-items: center;
+    }
     .welcome-next {
         position: static;
-        justify-self: end;
-        margin: 0 16px 16px;
+        margin-left: auto;
     }
     .welcome-method h2,
     .welcome-method article,
@@ -697,7 +735,7 @@ body:has(.welcome-page) {
     }
     .welcome-story { height: 470svh; }
     .welcome-stage {
-        grid-template-rows: 38% 1fr;
+        grid-template-rows: minmax(0, 1fr) auto;
         min-height: 560px;
     }
     .welcome-nav {
@@ -712,6 +750,7 @@ body:has(.welcome-page) {
     }
     .welcome-nav.is-open { display: flex; justify-content: space-between; }
     .welcome-header > .welcome-action { display: none; }
+    .welcome-page .welcome-header > a.welcome-action { display: none; }
     .welcome-menu { display: block; margin-left: auto; }
     .welcome-mosaic { grid-template-columns: repeat(3, 1fr); }
     .welcome-rail {
@@ -734,12 +773,12 @@ body:has(.welcome-page) {
     .welcome-action-foot {
         display: flex;
         width: max-content;
-        margin-top: 12px;
+        margin-top: 0;
     }
     .welcome-showcase {
         display: flex;
         flex-direction: column;
-        padding: 40px 0 0;
+        padding: 0;
         min-height: 0;
     }
     .welcome-index {
@@ -755,7 +794,7 @@ body:has(.welcome-page) {
         scroll-snap-align: start;
     }
     .welcome-sheet-stage {
-        min-height: 70svh;
+        min-height: 62svh;
         width: 100%;
     }
     .welcome-sheet {

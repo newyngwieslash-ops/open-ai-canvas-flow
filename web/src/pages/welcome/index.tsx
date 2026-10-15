@@ -159,26 +159,27 @@ function WelcomeExperience({ look, brandName, onLookChange }: { look: WelcomeLoo
                                         {item.label}
                                     </button>
                                 ))}
-                                {look.credit && <a href={`/welcome/credits.html#${look.id}`} target="_blank" rel="noreferrer">{look.credit}</a>}
                             </div>
                             <nav className="welcome-chapter-nav" aria-label="故事章节">
                                 {chapters.map((item, index) => (
                                     <button key={item.id} type="button" className={chapter === index ? "is-current" : ""} aria-current={chapter === index ? "step" : undefined} onClick={() => jumpTo(index)}>{item.label}</button>
                                 ))}
                             </nav>
-                            <button type="button" className="welcome-pause" disabled={staticScene} aria-pressed={paused || staticScene} onClick={() => setPaused(!paused)}>{paused || staticScene ? "播放画面" : "暂停画面"}</button>
                         </aside>
                         <section key={activeChapter.id} className="welcome-chapter is-active">
                             <TitleTag className="welcome-lines">
                                 {titleLines.map((line) => <span key={line} className="line"><span>{line}</span></span>)}
                             </TitleTag>
                             {chapter === 0 && activeChapter.subtitle && <p className="welcome-standfirst">{activeChapter.subtitle}</p>}
-                            {chapter === 0 && footage && <button type="button" className="welcome-film-link" onClick={() => setPlaying(true)}>观看片段</button>}
-                            {chapter === 0 && <a className="welcome-action welcome-action-foot" href="/create">开始创作</a>}
                         </section>
-                        <button type="button" className="welcome-next" onClick={() => chapter < 5 ? jumpTo(chapter + 1) : document.getElementById("workbench")?.scrollIntoView({ behavior: reduced ? "instant" : "smooth" })}>
-                            {chapter === 5 ? "进入创作现场" : "下一幕"}
-                        </button>
+                        <div className="welcome-copy-actions">
+                            {chapter === 0 && footage && <button type="button" className="welcome-film-link" onClick={() => setPlaying(true)}>观看片段</button>}
+                            <a className="welcome-action welcome-action-foot" href="/create">开始创作</a>
+                            <button type="button" className="welcome-pause" disabled={staticScene} aria-pressed={paused || staticScene} onClick={() => setPaused(!paused)}>{paused || staticScene ? "播放画面" : "暂停画面"}</button>
+                            <button type="button" className="welcome-next" onClick={() => chapter < 5 ? jumpTo(chapter + 1) : document.getElementById("workbench")?.scrollIntoView({ behavior: reduced ? "instant" : "smooth" })}>
+                                {chapter === 5 ? "进入创作现场" : "下一幕"}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
