@@ -415,6 +415,27 @@ func TestArchiveFromZipSuiteInstall(t *testing.T) {
 	}
 }
 
+// 套装闭包并入后，20MB 产品上限对最终集合生效（含兄弟目录），超限明确报错。
+func TestArchiveFromZipSuitePackageLimit(t *testing.T) {
+	heavy := strings.Repeat("x", 7*1024*1024)
+	files := map[string]string{
+		"director/SKILL.md": "---\nname: 总控\ndescription: 超限\n---\n见 heavy-a/SKILL.md heavy-b/SKILL.md heavy-c/SKILL.md",
+		"heavy-a/SKILL.md":  "---\nname: A\ndescription: 重\n---\n",
+		"heavy-a/blob.bin":  heavy,
+		"heavy-b/SKILL.md":  "---\nname: B\ndescription: 重\n---\n",
+		"heavy-b/blob.bin":  heavy,
+		"heavy-c/SKILL.md":  "---\nname: C\ndescription: 重\n---\n",
+		"heavy-c/blob.bin":  heavy,
+	}
+	_, err := archiveFromZip(skillZip(t, files), "director")
+	if err == nil {
+		t.Fatal("expected bundled suite over 20MB to be rejected")
+	}
+	if !strings.Contains(err.Error(), "技能包内容不能超过 20MB") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseGitHubSkillURL(t *testing.T) {
 	spec, err := parseGitHubSkillURL("https://github.com/ddcat-ai/open-ai-canvas/tree/main/skills/canvas-context", "", "")
 	if err != nil {
