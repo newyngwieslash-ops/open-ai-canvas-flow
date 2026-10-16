@@ -13,9 +13,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"yingce/backend/internal/kernel"
@@ -398,4 +400,49 @@ func yamlScalar(value string) string {
 		return strings.TrimSpace(value[1 : len(value)-1])
 	}
 	return value
+}
+
+// suiteRefTokenSeparator 切分 SKILL.md 正文中的引用 token。分隔符表刻意
+// 不含 "/"：套装引用形如 `sd-xxx/SKILL.md`，若按斜杠切断，目录名的尾部
+// 斜杠信息丢失，dir/ 前缀形态无法匹配。
+func suiteRefTokenSeparator(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(",，、。;；:：\\|()（）[]【】{}<>\"'“”‘’!！?？+*&`", r)
+}
+
+// suiteSiblingDirs 从剥壳后的 raw 归档视图收集被引用的兄弟技能目录：
+// 双条件（根一级含 SKILL.md + 目录名以裸名或 dir/ 前缀出现在某个已纳入
+// 技能的正文 token 中）按引用关系传递至固定点，visited 防环，返回字典序。
+func suiteSiblingDirs(raw map[string][]byte, entryText string) []string {
+	skillDirs := make([]string, 0, 8)
+	for filePath := range raw {
+		dir, rest, found := strings.Cut(filePath, "/")
+		if !found || rest != "SKILL.md" {
+			continue
+		}
+		skillDirs = append(skillDirs, dir)
+	}
+	if len(skillDirs) == 0 || entryText == "" {
+		return nil
+	}
+	visited := make(map[string]bool, len(skillDirs))
+	pending := []string{entryText}
+	for len(pending) > 0 {
+		text := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, token := range strings.FieldsFunc(text, suiteRefTokenSeparator) {
+			for _, dir := range skillDirs {
+				if visited[dir] || (token != dir && !strings.HasPrefix(token, dir+"/")) {
+					continue
+				}
+				visited[dir] = true
+				pending = append(pending, string(raw[dir+"/SKILL.md"]))
+			}
+		}
+	}
+	result := make([]string, 0, len(visited))
+	for dir := range visited {
+		result = append(result, dir)
+	}
+	sort.Strings(result)
+	return result
 }

@@ -208,6 +208,77 @@ func TestArchiveFromZipIgnoresOversizedUnrelatedAssets(t *testing.T) {
 	}
 }
 
+// 套装闭包扫描：从入口正文 token 中收集"根一级 + 含 SKILL.md + 被引用"的兄弟
+// 目录，双形态匹配（裸名 / dir/ 前缀），visited 防环，返回字典序排序。
+func TestSuiteSiblingDirs(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       map[string]string
+		entryText string
+		want      []string
+	}{
+		{
+			name:      "bare token and dir-prefix both match",
+			raw:       map[string]string{"a/SKILL.md": "x", "b/SKILL.md": "y", "b/lib.js": "z"},
+			entryText: "使用 `b/SKILL.md`，另见 b/lib.js。",
+			want:      []string{"b"},
+		},
+		{
+			name:      "word boundary rejects longer names",
+			raw:       map[string]string{"sd-script-engine/SKILL.md": "x"},
+			entryText: "不要混淆 sd-script-engine-x/SKILL.md。",
+			want:      []string{},
+		},
+		{
+			name:      "mutual references terminate",
+			raw:       map[string]string{"a/SKILL.md": "引 b/SKILL.md", "b/SKILL.md": "回引 a/SKILL.md"},
+			entryText: "b/SKILL.md",
+			want:      []string{"a", "b"},
+		},
+		{
+			name:      "self reference terminates",
+			raw:       map[string]string{"sd-x/SKILL.md": "参见 sd-x/SKILL.md 自身。"},
+			entryText: "sd-x/SKILL.md",
+			want:      []string{"sd-x"},
+		},
+		{
+			name:      "sorted output",
+			raw:       map[string]string{"c/SKILL.md": "x", "a/SKILL.md": "y"},
+			entryText: "c/SKILL.md a/SKILL.md",
+			want:      []string{"a", "c"},
+		},
+		{
+			name:      "empty entry text yields empty set",
+			raw:       map[string]string{"a/SKILL.md": "x"},
+			entryText: "",
+			want:      []string{},
+		},
+		{
+			name:      "directories without root SKILL.md are not indexed",
+			raw:       map[string]string{"a/SKILL.md": "见 examples/readme.md", "examples/readme.md": "素材"},
+			entryText: "见 examples/readme.md",
+			want:      []string{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make(map[string][]byte, len(tc.raw))
+			for filePath, content := range tc.raw {
+				raw[filePath] = []byte(content)
+			}
+			got := suiteSiblingDirs(raw, tc.entryText)
+			if len(got) != len(tc.want) {
+				t.Fatalf("suiteSiblingDirs = %v, want %v", got, tc.want)
+			}
+			for index := range got {
+				if got[index] != tc.want[index] {
+					t.Fatalf("suiteSiblingDirs = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestParseGitHubSkillURL(t *testing.T) {
 	spec, err := parseGitHubSkillURL("https://github.com/ddcat-ai/open-ai-canvas/tree/main/skills/canvas-context", "", "")
 	if err != nil {
