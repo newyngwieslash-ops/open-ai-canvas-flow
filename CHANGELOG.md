@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 上游融合说明（v1.6.8.4）
+
+- 上游 v1.6.8.4（`f951d330`，共 17 提交）经集成分支 `sync/upstream-1.6.8.4` 追加 `git merge` 并入本仓库。冲突 2 文件：`operations_test.go`（保留本地收敛字段/回执幂等测试 + 上游 updatedAt 基线忽略测试，三者并集）、`pending-test.mdx`（置顶条目并集）。融合后后端 `go build ./...`、canvas 包专项测试、前端生产构建及上游新增前端专项测试通过；`internal/repository` 的 `TestGmailMailboxRegistrationConcurrent` 在 Windows TempDir 清理上预存失败（SQLite 句柄占用），与本融合无关。提交仅推送本仓库 origin。
+
 ## v1.6.8.4
 
 - 新增远程服务商目录与秘塔一键接入：支持密钥验证、推荐模型、价格档及加价率配置，记录渠道与模型的目录来源。
