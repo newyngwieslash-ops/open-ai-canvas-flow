@@ -3,6 +3,7 @@ package skills
 import (
 	"archive/zip"
 	"bytes"
+	"sort"
 	"strings"
 	"testing"
 
@@ -200,9 +201,9 @@ func TestArchiveFromZipIgnoresOversizedUnrelatedAssets(t *testing.T) {
 
 	oversized := strings.Repeat("x", maxSkillPackageBytes+1024)
 	if _, err := archiveFromZip(skillZip(t, map[string]string{
-		"skill/SKILL.md":      "---\nname: 分镜导演\ndescription: 工作流\n---\n",
-		"skill/assets/a.md":   oversized,
-		"skill/assets/b.md":   oversized,
+		"skill/SKILL.md":    "---\nname: 分镜导演\ndescription: 工作流\n---\n",
+		"skill/assets/a.md": oversized,
+		"skill/assets/b.md": oversized,
 	}), ""); err == nil {
 		t.Fatal("expected skill body over 20MB to be rejected")
 	}
@@ -273,6 +274,141 @@ func TestSuiteSiblingDirs(t *testing.T) {
 			for index := range got {
 				if got[index] != tc.want[index] {
 					t.Fatalf("suiteSiblingDirs = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// 子目录安装接入闭包：X 压平到根后，被引用的兄弟技能目录按原路径并入。
+func TestArchiveFromZipSuiteInstall(t *testing.T) {
+	cases := []struct {
+		name   string
+		files  map[string]string
+		subdir string
+		want   map[string]string
+		noKeys []string
+	}{
+		{
+			name: "suite closure keeps sibling paths and lifts entry",
+			files: map[string]string{
+				"director/SKILL.md":         "---\nname: 总控\ndescription: 引擎\n---\n使用 `engine-a/SKILL.md`。",
+				"director/refs/camera.md":   "# Camera",
+				"engine-a/SKILL.md":         "---\nname: 引擎A\ndescription: 子技能\n---\n",
+				"engine-a/scripts/check.js": "export default true",
+			},
+			subdir: "director",
+			want: map[string]string{
+				"SKILL.md":                  "---\nname: 总控\ndescription: 引擎\n---\n使用 `engine-a/SKILL.md`。",
+				"refs/camera.md":            "# Camera",
+				"engine-a/SKILL.md":         "---\nname: 引擎A\ndescription: 子技能\n---\n",
+				"engine-a/scripts/check.js": "export default true",
+			},
+			noKeys: []string{"director/"},
+		},
+		{
+			name: "transitive closure bundles referenced engines",
+			files: map[string]string{
+				"director/SKILL.md": "---\nname: 总控\ndescription: 链\n---\n见 engine-a/SKILL.md",
+				"engine-a/SKILL.md": "---\nname: A\ndescription: 中转\n---\n见 `engine-b/SKILL.md`",
+				"engine-a/e.md":     "E",
+				"engine-b/SKILL.md": "---\nname: B\ndescription: 末端\n---\n",
+				"engine-b/f.md":     "F",
+			},
+			subdir: "director",
+			want: map[string]string{
+				"SKILL.md":          "---\nname: 总控\ndescription: 链\n---\n见 engine-a/SKILL.md",
+				"engine-a/SKILL.md": "---\nname: A\ndescription: 中转\n---\n见 `engine-b/SKILL.md`",
+				"engine-a/e.md":     "E",
+				"engine-b/SKILL.md": "---\nname: B\ndescription: 末端\n---\n",
+				"engine-b/f.md":     "F",
+			},
+			noKeys: []string{"director/"},
+		},
+		{
+			name: "assets without SKILL.md and unreferenced skills stay out",
+			files: map[string]string{
+				"director/SKILL.md":     "---\nname: 总控\ndescription: 排除\n---\n素材见 examples/a.md",
+				"director/x.md":         "X",
+				"examples/a.md":         "素材",
+				"unused-skill/SKILL.md": "---\nname: 闲置\ndescription: 未引用\n---\n",
+			},
+			subdir: "director",
+			want: map[string]string{
+				"SKILL.md": "---\nname: 总控\ndescription: 排除\n---\n素材见 examples/a.md",
+				"x.md":     "X",
+			},
+			noKeys: []string{"examples/", "unused-skill/"},
+		},
+		{
+			name: "entry directory itself is not re-bundled",
+			files: map[string]string{
+				"director/SKILL.md":            "---\nname: 总控\ndescription: 自身\n---\n风格见 director/references/style.md 与 `engine-a/SKILL.md`",
+				"director/references/style.md": "# Style",
+				"engine-a/SKILL.md":            "---\nname: A\ndescription: 子技能\n---\n",
+			},
+			subdir: "director",
+			want: map[string]string{
+				"SKILL.md":            "---\nname: 总控\ndescription: 自身\n---\n风格见 director/references/style.md 与 `engine-a/SKILL.md`",
+				"references/style.md": "# Style",
+				"engine-a/SKILL.md":   "---\nname: A\ndescription: 子技能\n---\n",
+			},
+			noKeys: []string{"director/"},
+		},
+		{
+			name: "flattened entry files win over bundled siblings",
+			files: map[string]string{
+				"pkg/SKILL.md": "---\nname: 包\ndescription: 优先\n---\n见 sub/SKILL.md",
+				"pkg/sub/x.md": "X内容",
+				"sub/SKILL.md": "# Sub",
+				"sub/x.md":     "Sub内容",
+			},
+			subdir: "pkg",
+			want: map[string]string{
+				"SKILL.md":     "---\nname: 包\ndescription: 优先\n---\n见 sub/SKILL.md",
+				"sub/x.md":     "X内容",
+				"sub/SKILL.md": "# Sub",
+			},
+			noKeys: []string{"pkg/"},
+		},
+		{
+			name: "cyclic references terminate",
+			files: map[string]string{
+				"a/SKILL.md": "---\nname: A\ndescription: 环\n---\n见 b/SKILL.md 与 a/SKILL.md 自身",
+				"b/SKILL.md": "---\nname: B\ndescription: 回引\n---\n回引 a/SKILL.md",
+			},
+			subdir: "a",
+			want: map[string]string{
+				"SKILL.md":   "---\nname: A\ndescription: 环\n---\n见 b/SKILL.md 与 a/SKILL.md 自身",
+				"b/SKILL.md": "---\nname: B\ndescription: 回引\n---\n回引 a/SKILL.md",
+			},
+			noKeys: []string{"a/"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			archive, err := archiveFromZip(skillZip(t, tc.files), tc.subdir)
+			if err != nil {
+				t.Fatalf("archiveFromZip: %v", err)
+			}
+			if len(archive.Files) != len(tc.want) {
+				keys := make([]string, 0, len(archive.Files))
+				for key := range archive.Files {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				t.Fatalf("files = %v, want %d keys", keys, len(tc.want))
+			}
+			for key, content := range tc.want {
+				if string(archive.Files[key]) != content {
+					t.Fatalf("file %s = %q, want %q", key, archive.Files[key], content)
+				}
+			}
+			for _, prefix := range tc.noKeys {
+				for key := range archive.Files {
+					if strings.HasPrefix(key, prefix) {
+						t.Fatalf("unexpected key %s with prefix %s", key, prefix)
+					}
 				}
 			}
 		})

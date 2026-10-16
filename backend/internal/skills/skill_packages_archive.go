@@ -210,6 +210,23 @@ func normalizeSkillArchiveRoot(raw map[string][]byte, subdir string) (map[string
 		if len(filtered) == 0 {
 			return nil, kernel.BadAuthRequest("GitHub 子目录不存在或为空")
 		}
+		// 套装仓库：入口目录之外的兄弟技能目录若被入口（或已纳入技能）正文
+		// 引用且含 SKILL.md，按原相对路径并入，保证总控相对引用可达。传剥壳
+		// 后的 raw 全仓视图；入口目录自身不并入，已压平键不覆盖。
+		for _, dir := range suiteSiblingDirs(raw, string(filtered["SKILL.md"])) {
+			if dir == normalized {
+				continue
+			}
+			prefix := dir + "/"
+			for filePath, content := range raw {
+				if !strings.HasPrefix(filePath, prefix) {
+					continue
+				}
+				if _, exists := filtered[filePath]; !exists {
+					filtered[filePath] = content
+				}
+			}
+		}
 		raw = filtered
 	}
 	skillRoots := make([]string, 0, 2)
