@@ -39,7 +39,30 @@ func (s *Service) cloudAgentModelList(intent *ModelRequestIntent) (any, error) {
 			}
 		}
 	}
-	return map[string]any{"source": catalog.Source, "models": items, "intent": intent}, nil
+	for _, item := range items {
+		selection := item["selection"].(map[string]any)
+		defaults, _ := item["defaults"].(map[string]any)
+		arguments := map[string]any{"mode": normalizeCapability(stringValue(item["capability"]))}
+		for key, value := range selection {
+			arguments[key] = value
+		}
+		for _, key := range []string{"size", "quality", "imageResolution", "videoGenerateAudio"} {
+			if value, exists := defaults[key]; exists {
+				arguments[key] = value
+			}
+		}
+		if value, exists := defaults["videoSeconds"]; exists {
+			arguments["durationSeconds"] = value
+		}
+		if value, exists := defaults["vquality"]; exists {
+			arguments["quality"] = value
+		}
+		item["generationArguments"] = arguments
+	}
+	return map[string]any{
+		"source": catalog.Source, "models": items, "intent": intent,
+		"generationGuidance": "generate_media 使用 generationArguments 的顶层字段，再补 prompt、nodeId、title、referenceNodeIds；按本次创作选择支持的参数值。图片 mode 固定 image，尺寸字段固定 size；不要把 options 的 parameters、binding、count 或 image_to_image 操作名直接当作工具参数。",
+	}, nil
 }
 
 // Resolve actual canvas resources before filtering the shared catalog. Counts
@@ -796,6 +819,7 @@ func applyCloudAgentResolvedMediaDefaults(req *CreateTaskRequest, plan *cloudAge
 	plan.Args.Size = stringValue(config["size"])
 	if plan.Args.Mode == "image" {
 		plan.Args.Quality = stringValue(config["quality"])
+		plan.Args.ImageResolution = stringValue(config["imageResolution"])
 	}
 	if plan.Args.Mode == "video" {
 		plan.Args.Quality = stringValue(config["vquality"])

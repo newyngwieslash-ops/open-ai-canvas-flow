@@ -60,11 +60,16 @@ func (r *Repository) GrantCreditsOnce(userID string, entryType model.CreditLedge
 }
 
 func (r *Repository) CreditAccount(userID string) (*model.CreditAccount, error) {
-	account := model.CreditAccount{UserID: userID}
-	if err := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
+	var account model.CreditAccount
+	err := r.db.First(&account, "user_id = ?", userID).Error
+	if err == nil {
+		return &account, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	if err := r.db.First(&account, "user_id = ?", userID).Error; err != nil {
+	account = model.CreditAccount{UserID: userID}
+	if err := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
 		return nil, err
 	}
 	return &account, nil

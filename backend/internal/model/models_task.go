@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 type Task struct {
 	AgentRunID                   string                   `json:"agentRunId,omitempty" gorm:"size:36;index"`
@@ -57,7 +61,19 @@ type Task struct {
 	StartedAt         *time.Time `json:"startedAt"`
 	CompletedAt       *time.Time `json:"completedAt"`
 	CreatedAt         time.Time  `json:"createdAt" gorm:"index:idx_tasks_user_created,priority:2;index:idx_tasks_status_created,priority:2;index:idx_tasks_claim,priority:3;index:idx_tasks_user_project_created,priority:3"`
+	CreatedAtEpoch    int64      `json:"-" gorm:"index:idx_tasks_created_epoch"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
+}
+
+func (t *Task) BeforeCreate(tx *gorm.DB) error {
+	if t.CreatedAtEpoch == 0 {
+		if t.CreatedAt.IsZero() {
+			t.CreatedAtEpoch = time.Now().Unix()
+		} else {
+			t.CreatedAtEpoch = t.CreatedAt.Unix()
+		}
+	}
+	return nil
 }
 
 // TaskTextDelta 只保存可回放窗口内的文本增量；最终正文和失败草稿分别归并到 Task.ResultJSON 与 Task.TextDraft。

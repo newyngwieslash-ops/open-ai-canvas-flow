@@ -302,6 +302,30 @@ func TestApplyCanvasOperationsConvergedRequestKeepsReceiptIdentity(t *testing.T)
 	}
 }
 
+// 服务端写入（Agent、生成回写）会刷新节点 updatedAt；客户端基于旧 updatedAt 的
+// 补丁不能因此整体冲突，业务字段仍按基线校验。
+func TestApplyCanvasOperationsIgnoresNodeUpdatedAtBase(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{
+		ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","updatedAt":"server-new","metadata":{"title":"旧"}}],"connections":[]}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "stale-updated-at", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{
+		"updatedAt":      json.RawMessage(`"client-new"`),
+		"metadata.title": json.RawMessage(`"新"`),
+	}, Before: map[string]json.RawMessage{"updatedAt": json.RawMessage(`"client-old"`), "metadata.title": json.RawMessage(`"旧"`)}}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("stale updatedAt base rejected: %v", err)
+	}
+	stale := CanvasOperationsRequest{MutationID: "stale-title-with-updated-at", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{
+		"metadata.title": json.RawMessage(`"再改"`),
+	}, Before: map[string]json.RawMessage{"updatedAt": json.RawMessage(`"client-new"`), "metadata.title": json.RawMessage(`"旧"`)}}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", stale); err == nil {
+		t.Fatal("stale business field accepted")
+	}
+}
+
 func TestApplyCanvasOperationsRejectsStaleCanvasField(t *testing.T) {
 	svc := newCanvasOperationTestService(t)
 	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", Title: "旧标题", PayloadJSON: `{"nodes":[],"connections":[],"title":"旧标题"}`}); err != nil {

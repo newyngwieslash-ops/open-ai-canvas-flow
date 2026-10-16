@@ -203,6 +203,9 @@ func setCanvasPath(target map[string]any, path string, raw json.RawMessage) erro
 	return nil
 }
 
+// canvasNodeBookkeepingFields 是节点顶层的写入簿记字段，补丁按后写覆盖，不参与冲突基线校验。
+var canvasNodeBookkeepingFields = map[string]struct{}{"updatedAt": {}}
+
 func canvasOperationConflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrCanvasOperationConflict, fmt.Sprintf(format, args...))
 }
@@ -288,6 +291,11 @@ func applyCanvasOperations(payload map[string]json.RawMessage, operations []Canv
 			for path, expected := range op.Before {
 				if path == "id" {
 					return fmt.Errorf("节点 ID 不可修改")
+				}
+				// updatedAt 只是写入簿记，服务端（Agent/生成回写）会随时刷新它；
+				// 用它做基线会让任何被服务端触碰过的节点永久拒绝用户保存。
+				if _, bookkeeping := canvasNodeBookkeepingFields[path]; bookkeeping {
+					continue
 				}
 				actual, exists := canvasPathValue(nodes[index], path)
 				if !canvasExpectedValueMatches(actual, exists, expected) {

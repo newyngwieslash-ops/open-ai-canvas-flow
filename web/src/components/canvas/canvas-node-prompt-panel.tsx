@@ -151,7 +151,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
             vquality: node.metadata?.vquality || globalConfig.vquality,
             videoGenerateAudio: node.metadata?.generateAudio ?? globalConfig.videoGenerateAudio,
             videoWatermark: node.metadata?.watermark ?? globalConfig.videoWatermark,
-            audioVoice: node.metadata?.audioVoice || globalConfig.audioVoice,
+            audioVoice: node.metadata?.audioVoice ?? globalConfig.audioVoice,
             audioFormat: node.metadata?.audioFormat || globalConfig.audioFormat,
             audioSpeed: node.metadata?.audioSpeed || globalConfig.audioSpeed,
         }, mode),
