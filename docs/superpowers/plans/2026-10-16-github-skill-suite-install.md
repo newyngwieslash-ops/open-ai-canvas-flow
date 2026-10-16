@@ -2,6 +2,7 @@
 change: github-skill-suite-install
 design-doc: docs/superpowers/specs/2026-10-16-github-skill-suite-install-design.md
 base-ref: 9ce50f27ce93b22955edce69033a19d5674d7b8e
+archived-with: 2026-10-16-github-skill-suite-install
 ---
 
 <!-- comet-task-authority: docs/openspec/changes/github-skill-suite-install/tasks.md -->
