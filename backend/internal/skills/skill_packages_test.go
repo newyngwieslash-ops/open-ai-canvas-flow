@@ -225,6 +225,12 @@ func TestSuiteSiblingDirs(t *testing.T) {
 			want:      []string{"b"},
 		},
 		{
+			name:      "bare directory name without slash matches",
+			raw:       map[string]string{"b/SKILL.md": "y", "b/lib.js": "z"},
+			entryText: "安装 b 引擎后再运行。",
+			want:      []string{"b"},
+		},
+		{
 			name:      "word boundary rejects longer names",
 			raw:       map[string]string{"sd-script-engine/SKILL.md": "x"},
 			entryText: "不要混淆 sd-script-engine-x/SKILL.md。",
