@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import localforage from "localforage";
 
 import { apiClient } from "@/services/api/request";
-import { deleteAssetsWithRemoteSync, initializeRemoteUserDataSession, loadAssetLibraryPage, resetRemoteUserDataSync } from "@/services/user-data-sync";
+import { deleteAssetsWithRemoteSync, initializeRemoteUserDataSession, loadAssetLibraryPage, loadAssetsForUse, resetRemoteUserDataSync, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { flushAssetStorePersistence, useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { appQueryClient } from "@/lib/query-client";
 
@@ -199,6 +199,52 @@ describe("素材批量删除", () => {
         expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["first", "second"]);
     });
 
+    test("跨页选中 ID 不依赖首屏本地缓存，全部提交到同一批量删除请求", async () => {
+        useAssetStore.setState({ assets: [asset("page-1"), asset("keep")] });
+        const ids = ["page-1", "page-2-a", "page-2-b"];
+        const bodies: string[][] = [];
+        apiClient.defaults.adapter = async (config) => {
+            bodies.push(JSON.parse(config.data));
+            return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { ids }, msg: "ok" } };
+        };
+        await deleteAssetsWithRemoteSync(ids);
+        expect(bodies).toEqual([ids]);
+        expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+    });
+
+    test("分页未缓存素材补齐详情后，移入回收站同步全部选中项", async () => {
+        const ids = ["page-1", "page-2-a", "page-2-b"];
+        const remoteAssets = ids.map(asset);
+        const writes: Asset[] = [];
+        apiClient.defaults.adapter = async (config) => {
+            const body = JSON.parse(config.data);
+            if (config.url === "/assets/batch") {
+                expect(body.ids).toEqual(ids);
+                return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { assets: remoteAssets }, msg: "ok" } };
+            }
+            expect(config.method).toBe("put");
+            writes.push(body.asset);
+            return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { asset: body.asset }, msg: "ok" } };
+        };
+        await loadAssetsForUse(ids);
+        for (const id of ids) useAssetStore.getState().updateAsset(id, { status: "archived" });
+        await flushAssetStorePersistence();
+        await saveRemoteUserDataNow();
+        expect(writes.map((item) => item.id)).toEqual(ids);
+        expect(writes.every((item) => item.status === "archived")).toBe(true);
+    });
+
+    test("服务端绑定图片后强制刷新已验证素材，保留本地标签编辑", async () => {
+        const initial = { ...asset("scene"), category: "environment" as const, primaryVersionId: "v1" };
+        let remote: Asset = initial;
+        apiClient.defaults.adapter = async (config) => ({ config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { assets: [remote] }, msg: "ok" } });
+        await loadAssetsForUse(["scene"]);
+        useAssetStore.getState().updateAsset("scene", { tags: ["本地标签"] });
+        remote = { ...initial, kind: "image", primaryVersionId: "v2", data: { dataUrl: "/api/resources/image/file", storageKey: "resource:image", width: 800, height: 600, bytes: 100, mimeType: "image/png" } };
+        await loadAssetsForUse(["scene"], { refresh: true });
+        expect(useAssetStore.getState().assets[0]).toMatchObject({ kind: "image", primaryVersionId: "v2", tags: ["本地标签"], data: { storageKey: "resource:image" } });
+    });
+
     test("删除响应返回前切换账号，不删除新账号本地素材", async () => {
         useAssetStore.setState({ assets: [asset("same-id")] });
         apiClient.defaults.adapter = async (config) => {
@@ -227,7 +273,11 @@ describe("素材批量删除", () => {
         const page = readFileSync(new URL("../src/pages/assets/index.tsx", import.meta.url), "utf8");
         const picker = readFileSync(new URL("../src/components/assets/asset-library-picker-modal.tsx", import.meta.url), "utf8");
         expect(page).toContain("deleteAssetsWithRemoteSync(trashAssets.map");
-        expect(page).toContain("deleteAssetsWithRemoteSync(selectedAssets.map");
+        expect(page).toContain("const ids = [...selectedIds]");
+        expect(page).toContain("deleteAssetsWithRemoteSync(ids)");
+        expect(page).not.toContain("validAssets.filter((asset) => selectedIds.includes(asset.id))");
+        expect(page).not.toContain("current.filter((id) => existingIds.has(id))");
+        expect(page).toContain("count={selectedIds.length}");
         expect(picker).toContain("deleteAssetsWithRemoteSync(archivedSelectedIds)");
         expect(picker).toContain("deleteAssetsWithRemoteSync(toDelete.map");
     });

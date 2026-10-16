@@ -466,8 +466,29 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 
 生成提示词工具引用格式为 `@[tool:type:ID:label:icon]`，label 使用 URI 编码。名称和图标只用于展示，不作为授权依据。服务端在任务入队及执行前检查用户可见性、启用状态、工具类型和生成模式；无效、越权、嵌套工具或数据库错误必须失败，不能把未解析 token 发送给模型。风格和九宫格仅用于图片，运镜和特效仅用于视频。入队校验不冻结工具快照：排队期间删除工具将导致执行失败。
 
+## 场景与道具图片
+
+`PUT /api/projects/:id/assets/:assetId/image` 接收 `{ resourceId, expectedVersionId }`，返回标准信封 `data={ asset }`。只允许当前用户在自己项目内，为场景或道具绑定本人已就绪的图片；资源必须有有效尺寸和图片 MIME。两个字段均必填，过期版本拒绝，主版本必须属于目标资产。
+
+项目资产摘要可包含 `visual={ definition, status }`：definition 保留描述与提示词，status 为 `missing|ready`。未出图的设定使用 `entity`；真实图片绑定后，同一资产使用 `image` 和真实资源定位，旧版本及图片引用保留。继续使用现有资产、版本、表现表，无数据库迁移。
+
+受管图片任务使用 `metadata.operation=project_asset_image`、`projectAssetId` 和 `projectAssetVersionId`，由任务成功事务绑定资源，媒体保存恢复同样适用。结果的 `projectAssetImageStatus=bound|stale` 表示已绑定或资产版本已变化；stale 仍保留生成文件，不能自动重发收费请求。历史画布图片匹配只信任服务端版本表现记录，不信任客户端自报的历史。
+
 ## 平台技能策展
 
 新增登录读取 `/api/skills/curation` 与管理员 GET／PUT `/api/admin/skill-curation`；原技能列表仅在策展开启时应用新增分类筛选，响应结构不变。见 [接口与行为](./skill-curation)。
 
 一级分类扩展：管理写入增加 root 命令，assignment.rootId 与子分类完整集合一起保存；列表增加 platformRootId 筛选。关闭模式继续忽略新增筛选。
+
+## 服务商目录 API
+
+均需管理员权限，返回统一信封。目录来自 `https://ai.yingce.tv/v1/catalog.json`（静态 JSON），`CANVAS_PROVIDER_CATALOG_DISABLED=1` 时关闭。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/admin/provider-catalog` | 返回推广期内（`startsAt ≤ now < endsAt`）的服务商，按 `rank` 排序；`source` 为 `live/cache/unavailable/disabled`；成本已按 1 元 = 1 积分换算为微积分；不支持的协议标记 `supported=false` |
+| POST | `/admin/provider-catalog/refresh` | 强制重新拉取，失败时沿用上次快照 |
+| POST | `/admin/provider-catalog/:id/verify` | `{ apiKey }`，请求 `GET {baseUrl}/models`，返回 `upstreamModelCount`、`availableModels`、`missingModels`，不落库 |
+| POST | `/admin/provider-catalog/:id/install` | `{ name, apiKey, markupPercent, models: [{ modelKey, markupPercent? }], enabled }`，一次事务创建渠道、模型和规格档，返回 `{ channel }` |
+
+install 的 Base URL、协议、能力和成本全部从服务端快照读取，不信任请求体。售价 = 成本 × (1 + 加价率)，向上取整到微积分；加价率 0–1000%，最多两位小数。推广期已过返回 404。API Key 只加密存入渠道，不写日志。

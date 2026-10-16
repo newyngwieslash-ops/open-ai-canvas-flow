@@ -149,6 +149,10 @@ func validateCloudAgentResolvedMediaOptions(requested, resolvedInput map[string]
 	}
 	for _, key := range []string{"size", "imageResolution", "videoSeconds", "vquality", "quality", "count", "videoGenerateAudio", "videoWatermark", "videoArkPrivateAssetUpload"} {
 		requestedValue := stringValue(requested[key])
+		// 图片目录保留比例，任务配置保存按预设换算的像素；审批可以提交任一种表达。
+		if key == "size" && stringValue(resolvedInput["mode"]) == "image" && requestedValue != "" && strings.EqualFold(requestedValue, stringValue(resolvedConfig[key])) {
+			continue
+		}
 		if key == "quality" && requestedValue != "" {
 			if _, declared := resolvedOptions[key]; !declared && !strings.EqualFold(requestedValue, stringValue(resolvedOptions["imageResolution"])) {
 				return creationConflict("所选图片模型未声明质量参数，请使用模型声明的图片分辨率或质量选项")

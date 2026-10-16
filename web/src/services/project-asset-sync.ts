@@ -125,7 +125,7 @@ async function persistCanvasNodeAsset(options: EnsureCanvasNodeAssetOptions): Pr
     // 继续上传素材和画布，不能把一个可恢复的本地成功报告成失败。
     if (!hasRemoteUserDataSyncSession()) return { assetId: asset.id, created, linkedToProject: false };
     if (!options.domainProjectId) {
-        await saveRemoteUserDataNow();
+        await saveRemoteUserDataNow([]);
         throwIfAborted(options.signal);
         return { assetId: asset.id, created, linkedToProject: false };
     }
@@ -144,7 +144,7 @@ async function syncAssetToProject(assetId: string, domainProjectId: string, cate
     }
 
     // 项目关联依赖后端 assets 记录，先强制完成素材同步，不能依赖延迟自动同步的时序。
-    await saveRemoteUserDataNow();
+    await saveRemoteUserDataNow([]);
     throwIfAborted(signal);
     const { asset: linkedAsset } = await linkProjectAsset(
         domainProjectId,
@@ -165,7 +165,7 @@ async function syncAssetToProject(assetId: string, domainProjectId: string, cate
         primaryVersionId: linked.primaryVersionId,
         metadata: { ...asset.metadata, projectIds: [...new Set([...linkedProjectIds, domainProjectId])] },
     });
-    await saveRemoteUserDataNow();
+    await saveRemoteUserDataNow([]);
     throwIfAborted(signal);
 }
 
