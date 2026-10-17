@@ -77,8 +77,7 @@ export function fenceRejectedTaskTimestampMutation(request: CanvasOperationsRequ
  * Only call after an explicit HTTP 409 canvas_field_conflict rejection (the
  * transaction rolled back without a receipt). Restores the original baseline
  * value from the journal snapshot; the caller must assign a new mutationId.
- */
-export function repairLegacyTaskIdFence(request: CanvasOperationsRequest, baseline?: CanvasProject, prepared?: CanvasProject): CanvasOperationsRequest | undefined {
+ */export function repairLegacyTaskIdFence(request: CanvasOperationsRequest, baseline?: CanvasProject, prepared?: CanvasProject): CanvasOperationsRequest | undefined {
     if (!baseline || !prepared || baseline.id !== prepared.id) return undefined;
     let changed = false;
     const operations: CanvasOperationsRequest["operations"] = [];
@@ -102,4 +101,27 @@ export function repairLegacyTaskIdFence(request: CanvasOperationsRequest, baseli
         changed = true;
     }
     return changed ? { ...request, operations } : undefined;
+}
+
+/**
+ * A journal replay can re-send create_node for a node the server already
+ * committed (lost response or a stale acknowledged baseline). The server
+ * rejects it with 409 canvas_field_conflict forever, so the request can never
+ * succeed as-is and no local retry can fix it.
+ *
+ * Drop only create_node operations whose node id already exists on the remote
+ * document. Existence is the convergence proof the same server check uses
+ * ("显式新增不能覆盖已有节点"); the dropped op carried no field baseline, so
+ * removing it keeps every other operation's preconditions intact. Content
+ * divergence is not decided here: the save loop compares the refreshed remote
+ * snapshot afterwards and reports a real conflict instead of overwriting.
+ *
+ * Returns the original request when nothing is dropped; the caller must
+ * persist the replacement journal and assign a new mutationId.
+ */
+export function dropConvergedCreateNodeOperations(request: CanvasOperationsRequest, remote?: CanvasProject): CanvasOperationsRequest {
+    if (!remote || !request.operations.some((operation) => operation.type === "create_node")) return request;
+    const remoteNodeIds = new Set(remote.nodes.map((node) => node.id));
+    const operations = request.operations.filter((operation) => operation.type !== "create_node" || !remoteNodeIds.has(operation.node.id));
+    return operations.length === request.operations.length ? request : { ...request, operations };
 }

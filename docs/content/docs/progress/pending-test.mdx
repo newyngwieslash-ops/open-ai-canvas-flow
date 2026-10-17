@@ -5,6 +5,13 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 画布同步 create_node 收敛重放（毒 journal 解除阻塞）
+
+- 已实现：journal 重放的 `create_node` 在 409 `canvas_field_conflict`（“节点已存在，显式新增不能覆盖已有节点”）后不再永久失败。409 处理链先重读云端文档，只丢弃云端已存在同 ID 节点的 `create_node` 操作：全部收敛时清空 journal 并以云端 revision 收尾，部分收敛时瘦身后换新 mutationId 重试；无 `create_node` 可收敛时保持原有 fence/冲突路径不变。同步实现位于 `web/src/lib/canvas/canvas-task-mutation.ts` 的 `dropConvergedCreateNodeOperations` 与 `web/src/services/user-data-sync.ts` 的 `submitPendingCanvasMutation` 409 分支。
+- 已验证：单元测试 `canvas-create-node-convergence.test.ts`（5 项）与集成测试 `canvas-converged-create-replay.test.ts`（3 项：全量收敛清 journal、部分收敛保留剩余操作并换新 ID、纯 patch 409 不误收敛）通过；`tsc --noEmit` 通过；相关专项 `canvas-task-mutation`、`canvas-edit-leases`、`canvas-sync-polling` 共 52 项通过。
+- [ ] 浏览器验收：在出现“画布同步未完成，Agent 请求尚未发送”的画布上重新发送 Agent 消息，确认发送成功且画布节点无重复、无丢失；含历史毒 journal 的旧会话刷新后自动解除阻塞。
+- [ ] 存量说明：`canvas-sync-progress.test.ts`（13 过 23 挂）与 `user-data-canvas-sync.test.ts`（23 挂）在本改动前即处于损坏状态——`95746b4b` 给生产代码引入 `getRemoteCanvasRevision` 调用但未更新测试桩，`d97faf0a` 上行合并丢弃了上游测试更新；失败清单与本改动前后逐字一致，修复需另行立项。
+
 ## 同账号多端同步贡献分支
 
 本分支基于官方 v1.6.8.6，仅提取同账号多端同步、输入租约、Agent 单画布排他及原任务重连，保留官方保存队列隔离和同任务回写校验。不包含站点定制、模型目录、灵感广场、R2 或通用日志聚合改动。

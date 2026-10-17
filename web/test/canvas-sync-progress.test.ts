@@ -104,6 +104,7 @@ export async function applyRemoteCanvasOperations(id, request) {
     return response;
 }
 export async function getRemoteCanvasProject(id) { fixture.reads++; fixture.readsById.set(id, (fixture.readsById.get(id) ?? 0) + 1); const hook = fixture.readHook; fixture.readHook = undefined; await hook?.(id); return { project: structuredClone(remoteFor(id)) }; }
+export async function getRemoteCanvasRevision(id, revision) { const project = remoteFor(id); if (!project || project.revision !== revision) throw new ApiError("revision missing", { status: 404 }); return { project: structuredClone(project) }; }
 export async function getRemoteAsset(id) { fixture.assetReads.push(id); return { asset: structuredClone(fixture.remoteAssetsById.get(id)) }; }
 export async function upsertRemoteAsset(asset) { fixture.assetWrites.push(structuredClone(asset)); fixture.remoteAssetsById.set(asset.id, structuredClone(asset)); }
 export const assetForRemoteSync = asset => asset;

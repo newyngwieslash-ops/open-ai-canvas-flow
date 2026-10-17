@@ -15,7 +15,7 @@ import {
 import type { CanvasOperation, CanvasOperationsRequest } from "@/services/api/user-data";
 import { ApiError } from "@/services/api/request";
 import { canvasContentHash, sameCanvasContent } from "@/lib/canvas/canvas-content";
-import { fenceRejectedTaskTimestampMutation, repairLegacyTaskIdFence } from "@/lib/canvas/canvas-task-mutation";
+import { dropConvergedCreateNodeOperations, fenceRejectedTaskTimestampMutation, repairLegacyTaskIdFence } from "@/lib/canvas/canvas-task-mutation";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
 import { appQueryClient } from "@/lib/query-client";
@@ -1198,6 +1198,32 @@ async function submitPendingCanvasMutation(entry: PendingCanvasMutation) {
         // A field-conflict response proves this transaction rolled back. A lost
         // response does not: ambiguous writes must retain their exact ID/body.
         if (!(error instanceof ApiError) || error.status !== 409 || error.reason !== "canvas_field_conflict") throw error;
+        // A lost create response can leave the journal replaying create_node for
+        // a node the server already committed. Fetch the authoritative document
+        // first: only ids that already exist remotely are proven converged.
+        const remote = await restoreRemoteTextNodeContents((await getRemoteCanvasProject(entry.projectId)).project);
+        assertSession();
+        const converged = dropConvergedCreateNodeOperations(entry.request, remote);
+        if (converged !== entry.request) {
+            // Persist the slimmed request BEFORE retrying so a crash between the
+            // two posts cannot resurrect the converged create_node operations.
+            const convergedEntry = { ...entry, request: { ...converged, mutationId: converged.operations.length ? newCanvasMutationId() : entry.request.mutationId } };
+            pendingCanvasMutations.set(entry.projectId, convergedEntry);
+            try {
+                await persistPendingCanvasMutationJournal();
+            } catch (storageError) {
+                if (epoch === sessionEpoch && pendingCanvasMutations.get(entry.projectId) === convergedEntry) pendingCanvasMutations.set(entry.projectId, entry);
+                throw storageError;
+            }
+            assertSession();
+            if (!converged.operations.length) {
+                // The whole batch already exists on the server. Report the live
+                // revision so the caller's tail reconciliation adopts the fresh
+                // document instead of re-sending the dropped operations.
+                return { project: { id: remote.id, title: remote.title, createdAt: remote.createdAt, updatedAt: remote.updatedAt, revision: Number(remote.revision) }, mutationId: entry.request.mutationId } as Awaited<ReturnType<typeof applyRemoteCanvasOperations>>;
+            }
+            return submitPendingCanvasMutation(convergedEntry);
+        }
         // v1.6.8.5 journals may carry a self-contradicting taskId baseline; restore it
         // from the original snapshot first, then apply the timestamp fence if eligible.
         const repaired = repairLegacyTaskIdFence(entry.request, entry.baseline, entry.prepared);
@@ -1467,7 +1493,10 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
                 } else {
                     savedRevision = Number(current.revision);
                 }
-                request = pendingJournal.request;
+                // submitPendingCanvasMutation may replace the entry (409 convergence
+                // or fence repair). Read the latest journal state, not the stale
+                // local snapshot, or the tail submit would re-send dropped ops.
+                request = pendingCanvasMutations.get(source.id)?.request ?? pendingJournal.request;
             } else {
                 const operations = buildCanvasOperations(base, prepared);
                 if (!operations.length) {
