@@ -2,6 +2,7 @@
 change: add-yuxibox-seedance-video-channel
 design-doc: docs/superpowers/specs/2026-10-18-yuxibox-seedance-video-design.md
 base-ref: 8f927d5301078a2a9e3ea6ad3ce1ae783b210302
+archived-with: 2026-10-18-add-yuxibox-seedance-video-channel
 ---
 
 # yuxibox seedance2.5 视频渠道实施计划

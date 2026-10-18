@@ -2,6 +2,8 @@
 comet_change: add-yuxibox-seedance-video-channel
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-10-18-add-yuxibox-seedance-video-channel
+status: final
 ---
 
 # Design Doc：yuxibox seedance2.5 视频渠道接入（深度技术设计）
