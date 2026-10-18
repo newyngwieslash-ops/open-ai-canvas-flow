@@ -1,6 +1,6 @@
 workflow: full
 language: zh-CN
-phase: build
+phase: archive
 context_compression: off
 build_mode: executing-plans
 build_pause: null
@@ -8,18 +8,18 @@ subagent_dispatch: null
 tdd_mode: tdd
 review_mode: standard
 isolation: branch
-verify_mode: null
+verify_mode: full
 auto_transition: true
 base_ref: 8f927d5301078a2a9e3ea6ad3ce1ae783b210302
 design_doc: docs/superpowers/specs/2026-10-18-yuxibox-seedance-video-design.md
 plan: docs/superpowers/plans/2026-10-18-yuxibox-seedance-video.md
-verify_result: pending
+verify_result: pass
 verify_failures: 0
-verification_report: null
+verification_report: docs/superpowers/reports/2026-10-18-add-yuxibox-seedance-video-channel-verify.md
 branch_status: pending
 created_at: 2026-10-18
-verified_at: null
-archive_confirmation: null
+verified_at: 2026-10-18
+archive_confirmation: pending
 archived: false
 bound_branch: feature/20260618/add-yuxibox-seedance-video-channel
 direct_override: null
@@ -28,4 +28,4 @@ handoff_hash: df51da5199da231c2c061dae3b3eb1be7ead48911f09b3e39047e4a3b47ea8d7
 classic_profile: full
 classic_migration: 1
 run_id: 3820dc85-5828-4839-aaab-b3103d3ca2e3
-check_epoch: 2
+check_epoch: 4
