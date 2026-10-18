@@ -16,12 +16,12 @@ plan: docs/superpowers/plans/2026-10-18-yuxibox-seedance-video.md
 verify_result: pass
 verify_failures: 0
 verification_report: docs/superpowers/reports/2026-10-18-add-yuxibox-seedance-video-channel-verify.md
-branch_status: pending
+branch_status: handled
 created_at: 2026-10-18
 verified_at: 2026-10-18
 archive_confirmation: confirmed
 archived: true
-bound_branch: feature/20260618/add-yuxibox-seedance-video-channel
+bound_branch: sync/upstream-1.6.3
 direct_override: null
 handoff_context: docs/openspec/changes/archive/2026-10-18-add-yuxibox-seedance-video-channel/.comet/handoff/design-context.json
 handoff_hash: df51da5199da231c2c061dae3b3eb1be7ead48911f09b3e39047e4a3b47ea8d7
