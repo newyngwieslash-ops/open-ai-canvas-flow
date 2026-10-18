@@ -528,6 +528,10 @@ export function createMetasoChannel(): ModelChannel {
     return createModelChannel({ name: "密塔 H3", baseUrl: "https://metaso.cn/api/minimax", apiKey: "", models: ["MiniMax-H3"], modelCosts: [{ model: "MiniMax-H3", displayName: "MiniMax-H3 (Metaso)", capability: "video", protocol: "metaso-minimax-video", billingMode: "per_second", unitPriceMicrocredits: 0, capabilityConfig: defaultModelCapabilityConfig("metaso-minimax-video", "MiniMax-H3"), description: "密塔（metaso.cn）MiniMax V2 中转：480P/768P/1080P/2K，4–15 秒，六档固定比例；价格以密塔控制台为准，待确认后补充。" }] });
 }
 
+export function createYuxiboxChannel(): ModelChannel {
+    return createModelChannel({ name: "yuxibox Seedance", baseUrl: "https://yuxibox.cn", apiKey: "", models: ["seedance2.5-yx-count"], modelCosts: [{ model: "seedance2.5-yx-count", displayName: "Seedance 2.5 (yuxibox)", capability: "video", protocol: "yuxibox-seedance-video", billingMode: "fixed_request", unitPriceMicrocredits: 0, capabilityConfig: defaultModelCapabilityConfig("yuxibox-seedance-video", "seedance2.5-yx-count"), description: "yuxibox seedance2.5：4–30 秒（默认 30）、固定 720P、七档比例；按条计费基础价 4.5 元/条，实际以 yuxibox 控制台与令牌分组倍率为准。" }] });
+}
+
 export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;

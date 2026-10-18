@@ -486,6 +486,15 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.defaultResolution = "768P";
         video.operations.push("reference_to_video");
     }
+    if (protocol === "yuxibox-seedance-video") {
+        Object.assign(video.references, { promptMaxChars: 16000, maxImages: 30, maxVideos: 10, maxAudios: 10 });
+        video.duration = { selection: "range", min: 4, max: 30, step: 1, default: 30 };
+        video.ratios = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+        video.defaultRatio = "16:9";
+        video.resolutions = ["720p"];
+        video.defaultResolution = "720p";
+        video.operations.push("reference_to_video", "audio_to_video");
+    }
     if (protocol === "minimax-video" || protocol === "metaso-h3") {
         video.references.maxImages = 9;
         video.references.maxImageBytes = 30 * 1024 * 1024;
