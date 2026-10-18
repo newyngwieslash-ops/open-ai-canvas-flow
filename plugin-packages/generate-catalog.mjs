@@ -210,6 +210,48 @@ function add(spec) {
   });
 }
 
+{
+  // yuxibox 合同无 resolution/generateAudio/watermark，参数从源头不暴露；时长强制必填（默认 30 由能力层与 workflow defaults 保证）。
+  const yuxiboxParams = videoParams
+    .filter(([name]) => !["resolution", "generateAudio", "watermark"].includes(name))
+    .map(([name, type, required, mapping, description]) => [name, type, required || ["duration"].includes(name), mapping, description]);
+  const yuxiboxIncludes = (value, values) => ({ $in: [value, values] });
+  const yuxiboxRatios = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+  add({
+    id: "yuxibox-seedance-video", providerId: "yuxibox-seedance-video", name: "yuxibox Seedance", vendor: "yuxibox", capability: "video",
+    baseUrl: "https://yuxibox.cn", auth: bearer, params: yuxiboxParams, requiresPublicMediaUrls: true,
+    workflows: [{ id: "yuxibox-seedance-video", label: "yuxibox Seedance", providerId: "yuxibox-seedance-video", capability: "video", parameters: parameters(yuxiboxParams), defaults: { model: "seedance2.5-yx-count", duration: 30, aspectRatio: "16:9" } }],
+    notes: "yuxibox（yuxibox.cn）中转 seedance2.5-yx-count：OpenAI Videos 风格异步合同，创建 POST /v1/videos JSON、查询 GET /v1/videos/{task_id}。模型名称精确为 seedance2.5-yx-count，时长 4–30 秒整数默认 30，输出固定 720P，七档比例（adaptive/16:9/9:16/1:1/4:3/3:4/21:9）统一走 ratio 单字段（不发 size）。参考素材 JSON 数组：reference_images ≤ 30、videos ≤ 10、audios ≤ 10，须为公网 HTTPS 或 data URL；不发 multipart input_reference。seconds 以字符串发送（上游示例 \"seconds\": \"30\"）。按条计费基础价 4.5 元/条，最终费用受令牌分组倍率及请求规格影响，以 yuxibox 控制台为准。同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。上游未提供取消接口。真实 Key 的付费生成尚待用户验收。",
+    validations: [
+      { assert: eq(ref("request.model"), "seedance2.5-yx-count"), message: "yuxibox 渠道模型必须为 seedance2.5-yx-count。" },
+      { assert: and(gt(len(trim(ref("request.prompt"))), 0), lte(len(ref("request.prompt")), 16000)), message: "yuxibox 提示词不能为空且最多 16000 字符。" },
+      { assert: and(gte(ref("request.duration"), 4), lte(ref("request.duration"), 30)), message: "yuxibox 时长为 4–30 秒整数，默认 30。" },
+      { assert: yuxiboxIncludes(coalesce(ref("request.aspectRatio"), "16:9"), yuxiboxRatios), message: "yuxibox 比例仅支持 adaptive、16:9、9:16、1:1、4:3、3:4、21:9。" },
+      { assert: lte(len(ref("request.images")), 30), message: "yuxibox 参考图最多 30 张。" },
+      { assert: lte(len(ref("request.videos")), 10), message: "yuxibox 参考视频最多 10 条。" },
+      { assert: lte(len(ref("request.audios")), 10), message: "yuxibox 参考音频最多 10 条。" }
+    ],
+    create: jsonCreate("/v1/videos", {
+      model: ref("request.model"),
+      prompt: ref("request.prompt"),
+      seconds: { $toString: ref("request.duration") },
+      ratio: coalesce(ref("request.aspectRatio"), "16:9"),
+      reference_images: omit(map({ $sortByOrder: ref("request.images") }, "media", ref("media.value"))),
+      videos: omit(map({ $sortByOrder: ref("request.videos") }, "media", ref("media.value"))),
+      audios: omit(map({ $sortByOrder: ref("request.audios") }, "media", ref("media.value")))
+    }),
+    poll: { method: "GET", path: "/v1/videos/{{taskId}}" },
+    response: asyncResponse("video", {
+      taskId: coalesce(ref("response.id"), ref("response.task_id"), ref("response.taskId"), ref("response.data.id"), ref("taskId")),
+      status: coalesce(ref("response.status"), ref("response.state"), ref("response.data.status"), "pending"),
+      message: coalesce(ref("response.error.message"), ref("response.message"), ref("response.fail_reason")),
+      videos: coalesce(ref("response.video_url"), ref("response.videoUrl"), ref("response.result_url"), ref("response.url"), ref("response.data.video_url"), ref("response.output.url")),
+      errorPaths: ["error.code"],
+      resultEphemeral: true
+    })
+  });
+}
+
 add({
   id: "openai-chat-completions", providerId: "chat-completion", name: "OpenAI Chat Completions", vendor: "OpenAI", capability: "text",
   baseUrl: "https://api.openai.com", auth: bearer, params: textParams,
