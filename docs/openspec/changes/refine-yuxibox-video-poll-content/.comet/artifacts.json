@@ -1,0 +1,6 @@
+{
+  "openspec_proposal": "docs/openspec/changes/refine-yuxibox-video-poll-content/proposal.md",
+  "openspec_design": "docs/openspec/changes/refine-yuxibox-video-poll-content/design.md",
+  "openspec_tasks": "docs/openspec/changes/refine-yuxibox-video-poll-content/tasks.md",
+  "openspec_delta_spec": "docs/openspec/changes/refine-yuxibox-video-poll-content/specs/yuxibox-seedance-video-provider/spec.md"
+}
