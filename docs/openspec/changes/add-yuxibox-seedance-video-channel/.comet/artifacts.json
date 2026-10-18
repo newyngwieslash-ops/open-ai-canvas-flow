@@ -1,0 +1,8 @@
+{
+  "openspec_proposal": "docs/openspec/changes/add-yuxibox-seedance-video-channel/proposal.md",
+  "openspec_design": "docs/openspec/changes/add-yuxibox-seedance-video-channel/design.md",
+  "openspec_tasks": "docs/openspec/changes/add-yuxibox-seedance-video-channel/tasks.md",
+  "openspec_delta_spec": "docs/openspec/changes/add-yuxibox-seedance-video-channel/specs/yuxibox-seedance-video-provider/spec.md",
+  "handoff_context": "docs/openspec/changes/add-yuxibox-seedance-video-channel/.comet/handoff/design-context.json",
+  "handoff_markdown": "docs/openspec/changes/add-yuxibox-seedance-video-channel/.comet/handoff/design-context.md"
+}
