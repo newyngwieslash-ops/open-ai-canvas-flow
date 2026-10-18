@@ -616,6 +616,7 @@ export function defaultBaseUrlForChannelInterface(interfaceType?: ChannelInterfa
     if (interfaceType === "volcengine-jimeng-image" || interfaceType === "volcengine-jimeng-video") return "https://visual.volcengineapi.com";
     if (interfaceType === "fisher-h3-video") return "https://api.work-fisher.com";
     if (interfaceType === "metaso-minimax-video") return "https://metaso.cn/api/minimax";
+    if (interfaceType === "yuxibox-seedance-video") return "https://yuxibox.cn";
     if (interfaceType === "minimax-video") return "https://api.minimaxi.com";
     if (interfaceType === "grok-image" || interfaceType === "newapi" || interfaceType === "newapi-channel-1" || interfaceType === "newapi-channel-2" || interfaceType === "xai-video") return "";
     return OPENAI_BASE_URL;
