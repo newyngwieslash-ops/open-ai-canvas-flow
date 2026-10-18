@@ -67,7 +67,7 @@ docs/content/docs/progress/pending-test.mdx   # 修改：登记待验收（已�
 - Consumes: `generate-catalog.mjs` 顶部既有助手——`ref`/`omit`/`coalesce`/`map`/`len`/`trim`/`gte`/`lte`/`gt`/`and`/`eq`/`sorted`、`videoParams`、`parameters`、`bearer`、`jsonCreate`、`asyncResponse`、`config`；`includes` 写法 `({ $in: [value, values] })`（metaso L176 同款）。
 - Produces: provider `yuxibox-seedance-video`（manifest 契约即 Task 3 契约测试与 Task 4 能力默认值的行为真相）；`yuxibox-seedance-video.yingce-plugin` 包（Task 2/3 读取）。
 
-- [ ] **Step 1: 在 metaso 定义块后新增 yuxibox 定义块**
+- **Step 1: 在 metaso 定义块后新增 yuxibox 定义块** <!-- comet-task-ref:78f4fe0d-3d97-4dad-a07d-4475a30dde79 -->
 
 在 L211（metaso 块结束 `}`）与 L213（`add({ id: "openai-chat-completions"`）之间插入以下完整块（独立块作用域，与 metaso 段同层级）：
 
@@ -123,7 +123,7 @@ docs/content/docs/progress/pending-test.mdx   # 修改：登记待验收（已�
 - response overrides 显式重申 taskId/status/message/videos 链（`asyncResponse("video")` 基座即此四项，显式写出便于 interface.md 文档渲染与后续验收时单独调整；errorPaths 与 resultEphemeral 与基座一致）。
 - 无 `cancel` 声明（上游无 DELETE）。
 
-- [ ] **Step 2: 运行生成脚本，产出 manifest**
+- **Step 2: 运行生成脚本，产出 manifest** <!-- comet-task-ref:78f4fe0d-3d97-4dad-a07d-4475a30dde79 -->
 
 ```bash
 cd plugin-packages && node generate-catalog.mjs
@@ -131,7 +131,7 @@ cd plugin-packages && node generate-catalog.mjs
 
 预期：`plugin-packages/yuxibox-seedance-video/manifest.json` 生成，无报错；`specs` 数量比执行前多 1。
 
-- [ ] **Step 3: 抽查 manifest 关键字段**
+- **Step 3: 抽查 manifest 关键字段** <!-- comet-task-ref:78f4fe0d-3d97-4dad-a07d-4475a30dde79 -->
 
 ```bash
 node -e "const m=require('./plugin-packages/yuxibox-seedance-video/manifest.json');const p=m.contributes.providers[0];console.log(p.id,p.baseUrl,p.auth.type,p.requiresPublicMediaUrls,p.parameters.map(x=>x.name).join(','))"
@@ -147,7 +147,7 @@ node -e "const m=require('./plugin-packages/yuxibox-seedance-video/manifest.json
 
 预期输出：`{"model":"seedance2.5-yx-count","duration":30,"aspectRatio":"16:9"}`。
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit** <!-- comet-task-ref:78f4fe0d-3d97-4dad-a07d-4475a30dde79 -->
 
 ```bash
 git add plugin-packages/generate-catalog.mjs plugin-packages/yuxibox-seedance-video/manifest.json
@@ -167,7 +167,7 @@ git commit -m "feat(video): yuxibox seedance2.5 - 新增插件定义与 manifest
 - Consumes: Task 1 生成的 `manifest.json`；`embed-documentation.mjs` 的拼接规则（README + interface.md → manifest `documentation` 字段）。
 - Produces: `.yingce-plugin` zip 包（manifest.json、README.md、docs/interface.md），Task 3 契约测试 `ParsePluginPackage` 读取它并要求与源码 manifest 逐字节一致。
 
-- [ ] **Step 1: 写 README.md**
+- **Step 1: 写 README.md** <!-- comet-task-ref:ec1bae1f-6178-4d69-b030-f7c61dcff4f5 -->
 
 创建 `plugin-packages/yuxibox-seedance-video/README.md`（LF 行尾）：
 
@@ -181,7 +181,7 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count 视频模型，提供 OpenAI 
 完整接口见 [docs/interface.md](docs/interface.md)。
 ```
 
-- [ ] **Step 2: 写 docs/interface.md 正文**
+- **Step 2: 写 docs/interface.md 正文** <!-- comet-task-ref:ec1bae1f-6178-4d69-b030-f7c61dcff4f5 -->
 
 创建 `plugin-packages/yuxibox-seedance-video/docs/interface.md`（LF 行尾）。正文骨架如下（manifest 契约块由 embed 脚本自动追加，手写部分如下；含嵌套代码块，整体照抄）：
 
@@ -258,7 +258,7 @@ Content-Type: application/json
 - 真实 Key 的付费生成尚待用户验收。
 ````
 
-- [ ] **Step 3: 回填 manifest documentation 并打包**
+- **Step 3: 回填 manifest documentation 并打包** <!-- comet-task-ref:a31f5d7e-dd40-4159-a1c0-c5c15aad18dd -->
 
 ```bash
 cd plugin-packages && node embed-documentation.mjs yuxibox-seedance-video && sh build-packages.sh
@@ -270,7 +270,7 @@ cd plugin-packages && node embed-documentation.mjs yuxibox-seedance-video && sh 
 1. `manifest.json` 的 `documentation` 字段包含 README 与 interface.md 全文（含 manifest 契约块）。
 2. `plugin-packages/yuxibox-seedance-video.yingce-plugin` 生成。
 
-- [ ] **Step 4: 验证包内容**
+- **Step 4: 验证包内容** <!-- comet-task-ref:a31f5d7e-dd40-4159-a1c0-c5c15aad18dd -->
 
 ```bash
 unzip -l plugin-packages/yuxibox-seedance-video.yingce-plugin
@@ -286,7 +286,7 @@ node -e "const m=require('./plugin-packages/yuxibox-seedance-video/manifest.json
 
 预期输出：`true true <正长度>`。
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit** <!-- comet-task-ref:a31f5d7e-dd40-4159-a1c0-c5c15aad18dd -->
 
 ```bash
 git add plugin-packages/yuxibox-seedance-video/
@@ -307,7 +307,7 @@ git commit -m "docs(video): yuxibox seedance2.5 - 插件 README、接口文档�
 - Consumes: Task 1/2 的插件包（`ensureOfficialProtocolAdapter` → `LoadOfficialFallbackRegistry().Resolve("yuxibox-seedance-video")`，无需新代码）。
 - Produces: `OfficialDeclarativeVideoInterface("yuxibox-seedance-video") == ("yuxibox Seedance", true)`；`DefaultModelCapabilityConfig("yuxibox-seedance-video")` 返回设计文档 2.2 节的 VideoCapabilityConfig。Task 5 契约测试与 Task 4 前端能力映射依赖这两处。
 
-- [ ] **Step 1: registry.go 注册显示名**
+- **Step 1: registry.go 注册显示名** <!-- comet-task-ref:a0cc38d4-3b07-4515-948d-c03eecc231c9 -->
 
 在 `backend/internal/generation/registry.go` 的 `OfficialDeclarativeVideoInterface` switch 中，`case "metaso-minimax-video": return "密塔 H3", true`（L65-66）之后插入：
 
@@ -316,7 +316,7 @@ git commit -m "docs(video): yuxibox seedance2.5 - 插件 README、接口文档�
 		return "yuxibox Seedance", true
 ```
 
-- [ ] **Step 2: model_capability_defaults.go 添加能力默认值 case**
+- **Step 2: model_capability_defaults.go 添加能力默认值 case** <!-- comet-task-ref:936004e0-1b61-41e5-8404-2d6919622c05 -->
 
 在 `backend/internal/app/model_capability_defaults.go` 的 `DefaultModelCapabilityConfigForModel` switch 中，`case "metaso-minimax-video":` 块（L180-190）之后插入（设计文档 2.2 节骨架，补齐注释与字段名核对）：
 
@@ -336,7 +336,7 @@ git commit -m "docs(video): yuxibox seedance2.5 - 插件 README、接口文档�
 
 字段核对：`VideoReferenceConfig` 有 `PromptMaxChars/MaxImages/MaxVideos/MaxAudios`（metaso case L184-185 同款赋值方式）；`VideoDurationConfig{Selection, Min, Max, Step, Default}`（fisher case L177 同款）；GenerateAudio/Watermark 保持基座默认（L166-167 已是 Supported false），不写。字节上限（MaxImageBytes 等）沿用基座 30MB 图片上限，不覆盖。
 
-- [ ] **Step 3: 构建验证**
+- **Step 3: 构建验证** <!-- comet-task-ref:936004e0-1b61-41e5-8404-2d6919622c05 -->
 
 ```bash
 go -C backend build ./...
@@ -344,7 +344,7 @@ go -C backend build ./...
 
 预期：编译通过，无输出。
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit** <!-- comet-task-ref:a0cc38d4-3b07-4515-948d-c03eecc231c9 -->
 
 ```bash
 git add backend/internal/generation/registry.go backend/internal/app/model_capability_defaults.go
@@ -362,7 +362,7 @@ git commit -m "feat(video): yuxibox seedance2.5 - 注册官方声明式接口与
 - Consumes: Task 2 的 `yuxibox-seedance-video.yingce-plugin`；同包既有测试助手 `officialPackageAdapter(t, packageName, providerID)`（`official_catalog_test.go:534`）、`manifestTestBody(t, spec)`（`official_catalog_test.go:557`）；类型 `GenerationRequest`/`MediaReference`/`RequestContext`/`PollContext`/`Status*`。
 - Produces: `yuxiboxRequest()` 测试基座函数与四个 Test 函数，覆盖设计文档 4.1 节测试清单。Task 6 集成验证复跑。
 
-- [ ] **Step 1: 写契约测试（先跑确认对 Task 3 的注册已生效、对 manifest 行为的断言可失败）**
+- **Step 1: 写契约测试（先跑确认对 Task 3 的注册已生效、对 manifest 行为的断言可失败）** <!-- comet-task-ref:3bae58db-0aaa-48c6-addd-a65ca9ac68e6 -->
 
 创建 `backend/internal/protocol/yuxibox_seedance_video_test.go`：
 
@@ -553,7 +553,7 @@ func TestYuxiboxSeedancePollAndResponse(t *testing.T) {
 - 上游 status 词表未实测：`running`/`cancelled` 归一依赖宿主既有状态机，与 metaso 一致；若真实上游使用其他词（如 `processing`），验收时只需在响应映射补状态映射，测试同步调整（设计文档风险表）。
 - “结果不确定”语义是宿主 `provider_protocol.go` 行为（非插件代码）：manifest taskId 链提取为空 → `extractProviderTaskID` 再兜底 → 仍为空则 `errors.New("声明式协议创建请求没有返回任务 ID")` 上抛，不自动重发；契约测试只锁定“无关编号不得成为任务 ID”。
 
-- [ ] **Step 2: 运行测试**
+- **Step 2: 运行测试** <!-- comet-task-ref:3bae58db-0aaa-48c6-addd-a65ca9ac68e6 -->
 
 ```bash
 go -C backend test ./internal/protocol/ -run YuxiboxSeedance -v
@@ -561,7 +561,7 @@ go -C backend test ./internal/protocol/ -run YuxiboxSeedance -v
 
 预期：4 个 Test 全部 PASS（含 9 个 validation 子测试）。若 `TestYuxiboxSeedancePackage` 因 manifest 与包内 manifest 不一致失败，回 Task 2 Step 3 重新 embed + 打包。
 
-- [ ] **Step 3: Commit**
+- **Step 3: Commit** <!-- comet-task-ref:3bae58db-0aaa-48c6-addd-a65ca9ac68e6 -->
 
 ```bash
 git add backend/internal/protocol/yuxibox_seedance_video_test.go
@@ -581,7 +581,7 @@ git commit -m "test(video): yuxibox seedance2.5 - 插件契约测试"
 - Consumes: `createModelChannel`（`use-config-store.ts:500`）、`defaultModelCapabilityConfig(protocol, model)`（`model-capabilities.ts`，import 已存在于 `use-config-store.ts`）；`ModelProtocol` 为 `string` 别名，无需在 `model-protocols.ts` 注册新类型。
 - Produces: 导出函数 `createYuxiboxChannel(): ModelChannel`；preset 标识 `"yuxibox"`；`defaultModelCapabilityConfig("yuxibox-seedance-video", ...)` 的 video 档位（与 Task 3 后端默认值逐字段对齐）。Task 6 构建验证与用户手动验收依赖。
 
-- [ ] **Step 1: use-config-store.ts 新增 createYuxiboxChannel**
+- **Step 1: use-config-store.ts 新增 createYuxiboxChannel** <!-- comet-task-ref:296b3313-145d-46d4-973b-d43378590a54 -->
 
 在 `createMetasoChannel()`（L527-529）之后插入（设计文档 2.3 节骨架）：
 
@@ -593,7 +593,7 @@ export function createYuxiboxChannel(): ModelChannel {
 
 字段核对：`ModelCost` 类型含 `model/displayName/capability/protocol/billingMode/unitPriceMicrocredits/capabilityConfig/description`（`use-config-store.ts:100-106` 与 fisher/metaso 同款）；`billingMode: "fixed_request"` 是合法联合类型成员（`use-config-store.ts:104`）。
 
-- [ ] **Step 2: channel-settings-pane.tsx 加 preset 与按钮**
+- **Step 2: channel-settings-pane.tsx 加 preset 与按钮** <!-- comet-task-ref:5883bcdc-a517-4e95-8057-91e416ac26d6 -->
 
 改动 1——import（L10-20 import 块内，`createMetasoChannel` 之后加一行）：
 
@@ -614,7 +614,7 @@ export function createYuxiboxChannel(): ModelChannel {
                     <Button className="h-10 sm:h-8" onClick={() => addChannel("yuxibox")}>添加 yuxibox Seedance</Button>
 ```
 
-- [ ] **Step 3: model-capabilities.ts 新增 yuxibox 分支**
+- **Step 3: model-capabilities.ts 新增 yuxibox 分支** <!-- comet-task-ref:3d36f574-6a4a-460d-a54e-78ec136ba2c5 -->
 
 在 `if (protocol === "metaso-minimax-video") {...}` 块（L480-488）之后、`if (protocol === "minimax-video" || protocol === "metaso-h3")` 块之前插入（与 Task 3 后端默认值逐字段对齐）：
 
@@ -644,7 +644,7 @@ export function createYuxiboxChannel(): ModelChannel {
 
 说明：resolutions 值统一小写 `"720p"`（与后端 Task 3 一致；仓库惯例是同一协议前后端同大小写——metaso 前后端均大写、jimeng/veo 前后端均小写，jimeng 的 `["720p"]` 固定单档是与本渠道最同构的先例，见 `model_capability_defaults.go:193` 与 `model-capabilities.ts:443-444`）。前端 `Object.assign(video.references, ...)` 只覆盖写出的四个键，maxImageBytes/maxVideoBytes 等保持基座值，与后端"字节上限沿用宿主默认"对齐。
 
-- [ ] **Step 4: 构建验证**
+- **Step 4: 构建验证** <!-- comet-task-ref:3d36f574-6a4a-460d-a54e-78ec136ba2c5 -->
 
 ```bash
 cd web && bun run build
@@ -652,7 +652,7 @@ cd web && bun run build
 
 预期：构建成功，无类型错误（覆盖 `createYuxiboxChannel` 返回结构、preset 分支联合类型、能力映射字段）。
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit** <!-- comet-task-ref:296b3313-145d-46d4-973b-d43378590a54 -->
 
 ```bash
 git add web/src/stores/use-config-store.ts web/src/pages/settings/channel-settings-pane.tsx web/src/lib/model-capabilities.ts
@@ -671,7 +671,7 @@ git commit -m "feat(video): yuxibox seedance2.5 - 前端渠道预设、按钮与
 - Consumes: Task 1-5 的协议事实（端点、鉴权、档位、计费模式）。
 - Produces: 文档站可构建的协议说明；待验收条目（用户真实 Key 浏览器验收的依据）。
 
-- [ ] **Step 1: http-api.mdx 补 yuxibox 协议说明**
+- **Step 1: http-api.mdx 补 yuxibox 协议说明** <!-- comet-task-ref:2101c9ec-c45f-4963-bf70-954ba2a59ef2 -->
 
 在 `docs/content/docs/backend/http-api.mdx` 的渠道协议章节（搜索既有 `metaso`/`fisher` 协议说明小节，按相同层级与格式追加）：
 
@@ -690,7 +690,7 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count 的声明式视频协议插�
 
 （以文档中既有协议小节的实际标题层级与 front-matter 为准，保持同一格式；不确定层级时先看 metaso/fisher 小节的标题深度。）
 
-- [ ] **Step 2: pending-test.mdx 登记待验收**
+- **Step 2: pending-test.mdx 登记待验收** <!-- comet-task-ref:820c4f43-edaf-4aed-82e0-f8f1a82caa4b -->
 
 在 `docs/content/docs/progress/pending-test.mdx` 按既有条目格式追加：
 
@@ -698,7 +698,7 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count 的声明式视频协议插�
 - **yuxibox seedance2.5 视频渠道**：设置页"添加 yuxibox Seedance"按钮 → 渠道卡片档位（时长 4–30 默认 30、七档比例、无分辨率选择、参考上限 30/10/10）→ 填入真实 Key 后画布发起文生视频与参考生视频，核对任务创建/轮询/结果下载与账单扣费（4.5 元/条基础价 × 分组倍率）。待用户执行浏览器验收。
 ```
 
-- [ ] **Step 3: 文档站类型检查**
+- **Step 3: 文档站类型检查** <!-- comet-task-ref:2101c9ec-c45f-4963-bf70-954ba2a59ef2 -->
 
 ```bash
 cd docs && bun run types:check
@@ -706,7 +706,7 @@ cd docs && bun run types:check
 
 预期：通过，无 MDX/front-matter 类型错误。
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit** <!-- comet-task-ref:2101c9ec-c45f-4963-bf70-954ba2a59ef2 -->
 
 注意：这两个 mdx 是 gitignore 白名单中已跟踪的文件，正常 `git add` 即可。
 
@@ -726,7 +726,7 @@ git commit -m "docs(video): yuxibox seedance2.5 - 渠道协议说明与待验收
 - Consumes: Task 1-6 全部产物。
 - Produces: 全绿的集成验证结果；change 产物（openspec change 目录与本计划）入库。
 
-- [ ] **Step 1: 后端集成测试**
+- **Step 1: 后端集成测试** <!-- comet-task-ref:714f3d74-33b3-4cb3-8561-c10eaadac1e4 -->
 
 ```bash
 go -C backend test ./internal/protocol/ ./internal/generation/ ./internal/app/
@@ -734,7 +734,7 @@ go -C backend test ./internal/protocol/ ./internal/generation/ ./internal/app/
 
 预期：全部 PASS（含既有用例与 `TestYuxiboxSeedance*` 四个新用例）。
 
-- [ ] **Step 2: 前端构建**
+- **Step 2: 前端构建** <!-- comet-task-ref:f13eedce-4925-4551-94b0-05bcbbf225ac -->
 
 ```bash
 cd web && bun run build
@@ -742,7 +742,7 @@ cd web && bun run build
 
 预期：构建成功，无类型错误。
 
-- [ ] **Step 3: OpenSpec 校验**
+- **Step 3: OpenSpec 校验** <!-- comet-task-ref:067ba9e1-0386-4281-94fe-e4ed10b14226 -->
 
 在 docs 根（`docs/openspec` 所在仓库根目录，即工作区根 `E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow`）执行：
 
@@ -752,7 +752,7 @@ openspec validate add-yuxibox-seedance-video-channel
 
 预期：通过（4 需求 12 场景齐备）。
 
-- [ ] **Step 4: 提交 change 产物（gitignore 处理）**
+- **Step 4: 提交 change 产物（gitignore 处理）** <!-- comet-task-ref:f13eedce-4925-4551-94b0-05bcbbf225ac -->
 
 `docs/openspec/changes/add-yuxibox-seedance-video-channel/` 与 `docs/superpowers/plans/`、`docs/superpowers/specs/` 命中 `docs/*` 忽略规则，需 `git add -f`：
 
@@ -761,7 +761,7 @@ git add -f docs/openspec/changes/add-yuxibox-seedance-video-channel/ docs/superp
 git commit -m "docs(video): yuxibox seedance2.5 - 登记 openspec change、设计与实施计划"
 ```
 
-- [ ] **Step 5: 汇总交付**
+- **Step 5: 汇总交付** <!-- comet-task-ref:067ba9e1-0386-4281-94fe-e4ed10b14226 -->
 
 向用户报告：
 1. 改动清单（插件包、后端两处 case + 测试、前端三处、两份文档）。
