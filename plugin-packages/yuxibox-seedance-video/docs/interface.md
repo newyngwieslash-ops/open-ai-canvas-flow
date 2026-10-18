@@ -6,68 +6,28 @@
 - Provider ID：`yuxibox-seedance-video`。
 - 能力：`video`。
 - 默认 Base URL：`https://yuxibox.cn`。
-- 鉴权驱动：`bearer`（配置字段 `apiKey`）。
-- 创建：`POST /v1/videos`（application/json）。
+- 鉴权驱动：`bearer`。
+- 创建：`POST /v1/videos`。
 - 查询：`GET /v1/videos/{{taskId}}`。
-- 取消：上游未提供，manifest 不声明 cancel。
 
 ## 配置字段
 
 | 字段 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
-| `apiKey` | secret | 是 | API Key（Bearer） |
+| `apiKey` | secret | 是 | API Key |
 
 ## 统一字段映射
 
 | 统一字段 | 类型 | 必填 | 上游映射 | 说明 |
 | --- | --- | --- | --- | --- |
-| `model` | string | 是 | `model` | 视频模型 ID，精确 `seedance2.5-yx-count`。 |
-| `prompt` | string | 是 | `prompt` | 视频提示词，1–16000 字符。 |
-| `images` | media[] | 否 | `reference_images` | 参考图，最多 30 张，URL 数组。 |
-| `videos` | media[] | 否 | `videos` | 参考视频，最多 10 条，URL 数组。 |
-| `audios` | media[] | 否 | `audios` | 参考音频，最多 10 条，URL 数组。 |
-| `duration` | integer | 是 | `seconds` | 时长秒数 4–30，默认 30；以字符串发送。 |
-| `aspectRatio` | string | 否 | `ratio` | 画幅比例：adaptive/16:9/9:16/1:1/4:3/3:4/21:9，缺省 16:9；不发 `size`。 |
-| `providerOptions` | object | 否 | provider-specific fields | 插件命名空间内的厂商扩展字段。 |
-
-不暴露 `resolution`（输出固定 720P）、`generateAudio`、`watermark`——上游合同无这些字段。
-
-## 请求示例
-
-```json
-POST /v1/videos
-Authorization: Bearer <apiKey>
-Content-Type: application/json
-
-{
-  "model": "seedance2.5-yx-count",
-  "prompt": "少女在雨巷中转身回望",
-  "seconds": "30",
-  "ratio": "16:9",
-  "reference_images": ["https://example.com/ref-1.jpg"],
-  "videos": [],
-  "audios": []
-}
-```
-
-空素材组（`reference_images`/`videos`/`audios` 为空数组）不发送字段键；`seconds` 为字符串（上游示例 `"seconds": "30"`，整数同样接受）。
-
-## 响应与错误
-
-- 任务 ID 提取：`response.id` → `response.task_id` → `response.taskId` → `response.data.id`，提取失败按“结果不确定”失败上抛，不自动重发。
-- 状态归一：`response.status`/`response.state`/`response.data.status`，缺省 `pending`。
-- 错误消息：`response.error.message` → `response.message` → `response.fail_reason`；`errorPaths: ["error.code"]`。
-- 视频地址 coalesce：`response.video_url` → `response.videoUrl` → `response.result_url` → `response.url` → `response.data.video_url` → `response.output.url`；`resultEphemeral: true`，宿主立即下载持久化。
-- HTTP 400/401/403/429/5xx 为真实失败上抛，不包装成成功。
-
-## 兼容边界
-
-- 同一视频不重复 POST：宿主恢复合同保证已有任务 ID 只查询不重建（上游错误处理章节要求）。
-- 参考素材须为公网 HTTPS URL 或 data URL（`requiresPublicMediaUrls: true`），裸 Base64/内网地址不可用。
-- 不发送 multipart `input_reference`（JSON `reference_images` 路径覆盖全部用例）。
-- 画幅统一 `ratio` 单字段，`size` 与 `ratio` 不会同时发送。
-- 计费按条：基础价 4.5 元/条，最终费用受令牌分组倍率及请求规格影响，以 yuxibox 控制台为准。
-- 真实 Key 的付费生成尚待用户验收。
+| `model` | string | 是 | `model` | 视频模型 ID。 |
+| `prompt` | string | 是 | `prompt/content/input` | 视频提示词。 |
+| `images` | media[] | 否 | `first/last/reference image` | 显式 role 图片输入。 |
+| `videos` | media[] | 否 | `reference video` | 参考视频。 |
+| `audios` | media[] | 否 | `reference audio/voice` | 参考音频或音色。 |
+| `duration` | integer | 是 | `duration/seconds` | 时长秒数。 |
+| `aspectRatio` | string | 否 | `ratio/aspect_ratio/size` | 画幅比例或尺寸。 |
+| `providerOptions` | object | 否 | `provider-specific fields` | 插件命名空间内的厂商扩展字段。 |
 
 ## 上游请求模板逐字段清单
 
@@ -88,6 +48,10 @@ Content-Type: application/json
 | `poll.method` | `"GET"` |
 | `poll.path` | `"/v1/videos/{{taskId}}"` |
 | `poll.contentType` | `"application/json"` |
+| `result.method` | `"GET"` |
+| `result.path` | `"/v1/videos/{{taskId}}/content"` |
+| `result.contentType` | `"application/json"` |
+| `result.headers.Accept` | `"video/mp4"` |
 
 ## Provider 扩展键
 
@@ -102,7 +66,7 @@ Content-Type: application/json
 | `response.taskId` | `{"$coalesce":[{"$ref":"response.id"},{"$ref":"response.task_id"},{"$ref":"response.taskId"},{"$ref":"response.data.id"},{"$ref":"taskId"}]}` |
 | `response.status` | `{"$coalesce":[{"$ref":"response.status"},{"$ref":"response.state"},{"$ref":"response.data.status"},"pending"]}` |
 | `response.message` | `{"$coalesce":[{"$ref":"response.error.message"},{"$ref":"response.message"},{"$ref":"response.fail_reason"}]}` |
-| `response.videos` | `{"$coalesce":[{"$ref":"response.video_url"},{"$ref":"response.videoUrl"},{"$ref":"response.result_url"},{"$ref":"response.url"},{"$ref":"response.data.video_url"},{"$ref":"response.output.url"}]}` |
+| `response.videos` | `{"$coalesce":[{"$ref":"response.video_url"},{"$ref":"response.download_url"},{"$ref":"response.downloadUrl"},{"$ref":"response.videoUrl"},{"$ref":"response.result_url"},{"$ref":"response.url"},{"$ref":"response.data.video_url"},{"$ref":"response.output.url"}]}` |
 | `response.errorPaths[0]` | `"error.code"` |
 | `response.resultEphemeral` | `true` |
 
@@ -495,6 +459,13 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count：OpenAI Videos 风格异步�
           "method": "GET",
           "path": "/v1/videos/{{taskId}}"
         },
+        "result": {
+          "method": "GET",
+          "path": "/v1/videos/{{taskId}}/content",
+          "headers": {
+            "Accept": "video/mp4"
+          }
+        },
         "response": {
           "taskId": {
             "$coalesce": [
@@ -546,6 +517,12 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count：OpenAI Videos 风格异步�
             "$coalesce": [
               {
                 "$ref": "response.video_url"
+              },
+              {
+                "$ref": "response.download_url"
+              },
+              {
+                "$ref": "response.downloadUrl"
               },
               {
                 "$ref": "response.videoUrl"

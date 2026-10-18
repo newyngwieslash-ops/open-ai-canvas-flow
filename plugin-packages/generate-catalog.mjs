@@ -241,11 +241,12 @@ function add(spec) {
       audios: omit(map({ $sortByOrder: ref("request.audios") }, "media", ref("media.value")))
     }),
     poll: { method: "GET", path: "/v1/videos/{{taskId}}" },
+    result: { method: "GET", path: "/v1/videos/{{taskId}}/content", headers: { Accept: "video/mp4" } },
     response: asyncResponse("video", {
       taskId: coalesce(ref("response.id"), ref("response.task_id"), ref("response.taskId"), ref("response.data.id"), ref("taskId")),
       status: coalesce(ref("response.status"), ref("response.state"), ref("response.data.status"), "pending"),
       message: coalesce(ref("response.error.message"), ref("response.message"), ref("response.fail_reason")),
-      videos: coalesce(ref("response.video_url"), ref("response.videoUrl"), ref("response.result_url"), ref("response.url"), ref("response.data.video_url"), ref("response.output.url")),
+      videos: coalesce(ref("response.video_url"), ref("response.download_url"), ref("response.downloadUrl"), ref("response.videoUrl"), ref("response.result_url"), ref("response.url"), ref("response.data.video_url"), ref("response.output.url")),
       errorPaths: ["error.code"],
       resultEphemeral: true
     })

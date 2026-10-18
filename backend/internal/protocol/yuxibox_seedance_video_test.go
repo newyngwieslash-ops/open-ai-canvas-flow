@@ -152,6 +152,19 @@ func TestYuxiboxSeedancePollAndResponse(t *testing.T) {
 	if err != nil || polled.Path != "/v1/videos/task-123" || polled.Method != "GET" {
 		t.Fatalf("poll = %#v, %v", polled, err)
 	}
+	// 内容兜底端点：URL 全缺失时宿主经 ResultAdapter 下载 MP4 二进制（Bearer 由宿主注入）。
+	resultCapability, ok := adapter.(ResultCapability)
+	if !ok || !resultCapability.ResultAvailable() {
+		t.Fatal("yuxibox result operation is unavailable")
+	}
+	resultAdapter, ok := adapter.(ResultAdapter)
+	if !ok {
+		t.Fatal("yuxibox does not implement ResultAdapter")
+	}
+	download, err := resultAdapter.BuildResult(context.Background(), PollContext{TaskID: "task-123"})
+	if err != nil || download.Path != "/v1/videos/task-123/content" || download.Method != "GET" || download.Headers["Accept"] != "video/mp4" || download.Auth.Type != "bearer" {
+		t.Fatalf("result = %#v, %v", download, err)
+	}
 	// 状态归一与多字段 URL coalesce。
 	for _, tc := range []struct {
 		payload string
@@ -159,13 +172,14 @@ func TestYuxiboxSeedancePollAndResponse(t *testing.T) {
 		message string
 	}{
 		{`{"status":"queued"}`, StatusPending, ""},
-		{`{"status":"running"}`, StatusProcessing, ""},
+		{`{"status":"in_progress","progress":50}`, StatusProcessing, ""},
 		{`{"status":"failed","fail_reason":"rejected"}`, StatusFailed, "rejected"},
 		{`{"error":{"code":"401","message":"invalid api key"}}`, StatusFailed, "invalid api key"},
 		{`{"status":"cancelled"}`, StatusCancelled, ""},
-		{`{"status":"succeeded","url":"https://example.com/result.mp4"}`, StatusSucceeded, ""},
-		{`{"status":"succeeded","video_url":"https://example.com/alt.mp4"}`, StatusSucceeded, ""},
-		{`{"status":"succeeded","output":{"url":"https://example.com/output.mp4"}}`, StatusSucceeded, ""},
+		{`{"status":"completed","url":"https://example.com/result.mp4"}`, StatusSucceeded, ""},
+		{`{"status":"completed","video_url":"https://example.com/alt.mp4"}`, StatusSucceeded, ""},
+		{`{"status":"completed","download_url":"https://example.com/only-download.mp4"}`, StatusSucceeded, ""},
+		{`{"status":"completed","output":{"url":"https://example.com/output.mp4"}}`, StatusSucceeded, ""},
 	} {
 		result, err := adapter.ParsePoll(context.Background(), PollContext{TaskID: "task-123"}, []byte(tc.payload))
 		if err != nil || result.Status != tc.status || result.TaskID != "task-123" || result.Message != tc.message {
