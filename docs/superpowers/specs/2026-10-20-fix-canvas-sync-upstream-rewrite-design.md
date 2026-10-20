@@ -2,6 +2,7 @@
 comet_change: fix-canvas-sync-upstream-rewrite
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-10-20-fix-canvas-sync-upstream-rewrite
 status: final
 ---
 
