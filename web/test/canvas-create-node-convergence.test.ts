@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { dropConvergedCreateNodeOperations } from "@/lib/canvas/canvas-task-mutation";
+import { dropConvergedCreateCanvasOperation, dropConvergedCreateConnectionOperations, dropConvergedCreateNodeOperations } from "@/lib/canvas/canvas-task-mutation";
 import type { CanvasOperationsRequest } from "@/services/api/user-data";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 
@@ -26,6 +26,24 @@ const node = (id: string, content: string) => ({ id, type: "text", metadata: { c
 function request(operations: CanvasOperationsRequest["operations"]): CanvasOperationsRequest {
     return { mutationId: "original-id", baseRevision: 4, operations };
 }
+
+describe("dropConvergedCreateCanvasOperation", () => {
+    test("drops create_canvas once the same canvas already exists remotely", () => {
+        const original = request([{ type: "create_canvas", id: "canvas", patch: { title: "Canvas" } }, { type: "create_node", node: node("text-1", "hello") }]);
+        const result = dropConvergedCreateCanvasOperation(original, canvas([]));
+        expect(result.operations).toEqual([original.operations[1]]);
+        expect(dropConvergedCreateCanvasOperation(original, { ...canvas([]), id: "other" })).toBe(original);
+    });
+});
+
+describe("dropConvergedCreateConnectionOperations", () => {
+    test("drops a create_connection whose id already exists remotely", () => {
+        const connection = { id: "agent-22d0b42251826e1f02e5de0ea21bcc25", fromNodeId: "a", toNodeId: "b" };
+        const original = request([{ type: "create_connection", connection }, { type: "patch_node", id: "text-2", patch: { x: 7 }, before: { x: 3 } }]);
+        const remote = { ...canvas([]), connections: [connection] };
+        expect(dropConvergedCreateConnectionOperations(original, remote).operations).toEqual([original.operations[1]]);
+    });
+});
 
 describe("dropConvergedCreateNodeOperations", () => {
     test("drops create_node ops whose node id already exists on the remote document", () => {

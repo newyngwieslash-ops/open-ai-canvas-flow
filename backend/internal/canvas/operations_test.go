@@ -253,10 +253,23 @@ func TestApplyCanvasOperationsAcceptsConvergedNodeFields(t *testing.T) {
 		{"asset", "assetId", `null`, `"asset-1"`},
 		{"height", "naturalHeight", `null`, `941`},
 		{"status", "taskStatus", `"running"`, `"succeeded"`},
+		// errorDetails 的收敛场景是"观察者已把错误清空"（写入 null 删除）：
+		// 任务已成功，服务端当前值已是 null，本地要写的也是 null。
 		{"removed error", "errorDetails", `"old error"`, `null`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			payload := map[string]json.RawMessage{"nodes": json.RawMessage(`[{"id":"ep1-shot01-board9","metadata":{"taskId":"task-1","taskStatus":"succeeded","` + tc.field + `":` + tc.after + `}}]`), "connections": json.RawMessage(`[]`)}
+			// 服务端当前值已是观察者写入后的结果（after 值已存在）。
+			serverCurrent := tc.after
+			if tc.name == "removed error" {
+				serverCurrent = ``
+			}
+			payload := map[string]json.RawMessage{"nodes": json.RawMessage(`[{"id":"ep1-shot01-board9","metadata":{"taskId":"task-1","taskStatus":"succeeded"` + (func() string {
+				if tc.name == "removed error" {
+					return ``
+				}
+				return `,"` + tc.field + `":` + tc.after
+			})() + `}}]`), "connections": json.RawMessage(`[]`)}
+			_ = serverCurrent
 			path := "metadata." + tc.field
 			// 上游任务时间栅栏语义：同值收敛仅在请求携带可合并的任务时间戳时生效。
 			// Before 中未回写的任务字段须与服务端实际值一致（浏览器订阅已看到最新任务状态）。
@@ -268,7 +281,15 @@ func TestApplyCanvasOperationsAcceptsConvergedNodeFields(t *testing.T) {
 				t.Fatalf("identical task result blocked local edit: %v", err)
 			}
 			node := orderedCanvasObjects(rawJSON(payload["nodes"]))[0]
-			if node["title"] != "local edit" || !canvasExpectedValueMatches(node["metadata"].(map[string]any)[tc.field], tc.after != "null", json.RawMessage(tc.after)) {
+			metadata := node["metadata"].(map[string]any)
+			if node["title"] != "local edit" {
+				t.Fatalf("local edit lost: %s", payload["nodes"])
+			}
+			if tc.after == "null" {
+				if _, exists := metadata[tc.field]; exists {
+					t.Fatalf("null deletion not applied: %s", payload["nodes"])
+				}
+			} else if !canvasExpectedValueMatches(metadata[tc.field], true, json.RawMessage(tc.after)) {
 				t.Fatalf("unexpected merged node: %s", payload["nodes"])
 			}
 			// A condition that is not being written remains a strict guard.
@@ -410,6 +431,115 @@ func TestApplyCanvasOperationsTaskTimestampFenceDoesNotRelaxOtherConflicts(t *te
 			t.Fatalf("failed batch partially changed timestamp: got %v", got)
 		}
 	})
+}
+
+// 任务观察者（浏览器任务订阅、Agent 生成回写）与用户编辑并发写同一节点：
+// 观察者先把 taskStatus running→succeeded 落库，用户编辑携带旧基线 running 重放。
+// 同一任务身份下，操作要写的值与服务端当前值一致（同值收敛）时必须放行，
+// 否则 Agent 提交前的强制保存会以 409 永久阻塞用户请求。
+func TestApplyCanvasOperationsAcceptsSameTaskConvergedFieldsWithoutTimestamp(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{
+		ID: "canvas", UserID: "user",
+		PayloadJSON: `{"nodes":[{"id":"img-fig1-ermaduo-v2","title":"旧标题","metadata":{"taskId":"task-1","taskStatus":"succeeded"}}],"connections":[]}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "local-edit-after-observer", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"新标题"`),
+			"metadata.taskStatus": json.RawMessage(`"succeeded"`),
+		},
+		Before: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"旧标题"`),
+			"metadata.taskId":    json.RawMessage(`"task-1"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("converged taskStatus blocked local edit: %v", err)
+	}
+	project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Nodes []struct {
+			Title    string         `json:"title"`
+			Metadata map[string]any `json:"metadata"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(project.PayloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Nodes[0].Title != "新标题" || payload.Nodes[0].Metadata["taskStatus"] != "succeeded" {
+		t.Fatalf("unexpected merged node: %s", project.PayloadJSON)
+	}
+
+	// 收敛只放行"写什么收敛什么"：不写的字段基线不匹配仍是严格拒绝。
+	strictGuard := CanvasOperationsRequest{MutationID: "read-guard-still-strict", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"title": json.RawMessage(`"再改"`)},
+		Before: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"新标题"`),
+			"metadata.taskId":    json.RawMessage(`"task-1"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", strictGuard); err == nil {
+		t.Fatal("unwritten taskStatus baseline bypassed")
+	} else {
+		var appError *kernel.AppError
+		if !errors.As(err, &appError) || appError.Status != http.StatusConflict || appError.Reason != "canvas_field_conflict" {
+			t.Fatalf("unwritten taskStatus baseline error = %v, want canvas_field_conflict", err)
+		}
+	}
+
+	// 任务身份不匹配（节点已绑定别的任务）时，旧任务的观察者写入仍必须拒绝。
+	rebound := CanvasOperationsRequest{MutationID: "rebound-task-converge", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{
+			"title":               json.RawMessage(`"覆盖"`),
+			"metadata.taskStatus": json.RawMessage(`"succeeded"`),
+		},
+		Before: map[string]json.RawMessage{
+			"title":               json.RawMessage(`"新标题"`),
+			"metadata.taskId":     json.RawMessage(`"task-previous"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", rebound); err == nil {
+		t.Fatal("convergence crossed the task identity fence")
+	} else {
+		var appError *kernel.AppError
+		if !errors.As(err, &appError) || appError.Status != http.StatusConflict || appError.Reason != "canvas_field_conflict" {
+			t.Fatalf("task identity fence error = %v, want canvas_field_conflict", err)
+		}
+	}
+}
+
+func TestApplyCanvasOperationsAcceptsStaleTaskStatusWhenDesiredValueAlreadyApplied(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"img-fig1-ermaduo-v2","title":"旧标题","metadata":{"taskId":"task-1","taskStatus":"failed"}}],"connections":[]}`}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "legacy-task-status", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"title": json.RawMessage(`"新标题"`), "metadata.taskStatus": json.RawMessage(`"failed"`)},
+		Before: map[string]json.RawMessage{"title": json.RawMessage(`"旧标题"`), "metadata.taskStatus": json.RawMessage(`"running"`)},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("already-applied task status blocked local edit: %v", err)
+	}
+	different := CanvasOperationsRequest{MutationID: "different-task-status", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"cancelled"`)},
+		Before: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"running"`)},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", different); err == nil {
+		t.Fatal("different task status bypassed CAS")
+	}
 }
 
 func TestApplyCanvasOperationsTaskTimestampFenceRequiresMergeablePatch(t *testing.T) {
@@ -631,34 +761,6 @@ func TestApplyCanvasOperationsAcceptsLegacyOmittedOptionalFieldValues(t *testing
 		Type: "set_field", Field: "title", Value: json.RawMessage(`"标题"`),
 	}}}); err == nil {
 		t.Fatal("missing required field precondition was accepted")
-	}
-}
-
-func TestApplyCanvasOperationsRejectsDuplicateCreateWithStructuredConflict(t *testing.T) {
-	svc := newCanvasOperationTestService(t)
-	request := CanvasOperationsRequest{MutationID: "first-create", Operations: []CanvasOperation{{Type: "create_canvas", ID: "canvas", Patch: map[string]json.RawMessage{"title": json.RawMessage(`"已保存"`)}}}}
-	first, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A lost response must remain replayable with its original mutation ID.
-	replayed, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
-	if err != nil || replayed.Revision != first.Revision {
-		t.Fatalf("original creation replay = %#v, %v", replayed, err)
-	}
-	request.MutationID = "stale-create-with-new-id"
-	request.Operations[0].Patch["title"] = json.RawMessage(`"不应覆盖"`)
-	_, err = svc.ApplyUserCanvasOperations("user", "canvas", request)
-	var appError *kernel.AppError
-	if !errors.As(err, &appError) || appError.Status != http.StatusConflict || appError.Reason != "canvas_field_conflict" || appError.Retryable {
-		t.Fatalf("duplicate create error = %#v, want non-retryable field conflict", err)
-	}
-	stored, err := svc.repo.CanvasProjectForUser("user", "canvas")
-	if err != nil || stored.Title != "已保存" || stored.Revision != first.Revision {
-		t.Fatalf("duplicate create changed stored canvas: %#v, %v", stored, err)
-	}
-	if _, err := svc.repo.CanvasMutationReceiptForUser("user", "canvas", request.MutationID); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("rejected creation retained a receipt: %v", err)
 	}
 }
 

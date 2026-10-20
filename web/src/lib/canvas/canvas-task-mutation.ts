@@ -77,7 +77,37 @@ export function fenceRejectedTaskTimestampMutation(request: CanvasOperationsRequ
  * Only call after an explicit HTTP 409 canvas_field_conflict rejection (the
  * transaction rolled back without a receipt). Restores the original baseline
  * value from the journal snapshot; the caller must assign a new mutationId.
- */export function repairLegacyTaskIdFence(request: CanvasOperationsRequest, baseline?: CanvasProject, prepared?: CanvasProject): CanvasOperationsRequest | undefined {
+ *//**
+ * Older journals recorded task observer changes without the same-task identity
+ * fence. A 409 proves that exact request rolled back, so it is safe to add the
+ * unchanged task ID from the original snapshots and retry with a new mutation ID.
+ * Task binding changes remain untouched and continue through strict CAS.
+ */
+export function fenceRejectedTaskObservationMutation(request: CanvasOperationsRequest, baseline?: CanvasProject, prepared?: CanvasProject): CanvasOperationsRequest | undefined {
+    if (!baseline || !prepared || baseline.id !== prepared.id) return undefined;
+    let changed = false;
+    const operations: CanvasOperationsRequest["operations"] = [];
+    for (const operation of request.operations) {
+        if (operation.type !== "patch_node" || !operation.before || owns(operation.before, taskIdField) || owns(operation.patch, taskIdField) || owns(operation.patch, "metadata")) {
+            operations.push(operation);
+            continue;
+        }
+        const hasTaskObservation = Object.keys(operation.patch).some((key) => key.startsWith("metadata.task") && key !== taskIdField);
+        if (!hasTaskObservation) {
+            operations.push(operation);
+            continue;
+        }
+        const baseNode = baseline.nodes.find((node) => node.id === operation.id);
+        const nextNode = prepared.nodes.find((node) => node.id === operation.id);
+        const taskId = baseNode?.metadata?.taskId;
+        if (!baseNode || !nextNode || typeof taskId !== "string" || !taskId.trim() || nextNode.metadata?.taskId !== taskId) return undefined;
+        operations.push({ ...operation, before: { ...operation.before, [taskIdField]: taskId } });
+        changed = true;
+    }
+    return changed ? { ...request, operations } : undefined;
+}
+
+export function repairLegacyTaskIdFence(request: CanvasOperationsRequest, baseline?: CanvasProject, prepared?: CanvasProject): CanvasOperationsRequest | undefined {
     if (!baseline || !prepared || baseline.id !== prepared.id) return undefined;
     let changed = false;
     const operations: CanvasOperationsRequest["operations"] = [];
@@ -119,6 +149,42 @@ export function fenceRejectedTaskTimestampMutation(request: CanvasOperationsRequ
  * Returns the original request when nothing is dropped; the caller must
  * persist the replacement journal and assign a new mutationId.
  */
+const staleTaskObserverFields = ["metadata.taskStatus", "metadata.taskProgress", "metadata.taskStage", "metadata.errorDetails"];
+
+/** A 409 proves the transaction rolled back. Task observer fields are not user edits; drop their stale baselines so the remaining canvas edits can commit. */
+export function dropStaleTaskObserverFields(request: CanvasOperationsRequest): CanvasOperationsRequest {
+    let changed = false;
+    const operations: CanvasOperationsRequest["operations"] = [];
+    for (const operation of request.operations) {
+        if (operation.type !== "patch_node" || !staleTaskObserverFields.some((field) => owns(operation.patch, field))) {
+            operations.push(operation);
+            continue;
+        }
+        const patch = { ...operation.patch };
+        const before = operation.before ? { ...operation.before } : undefined;
+        for (const field of staleTaskObserverFields) {
+            delete patch[field];
+            if (before) delete before[field];
+        }
+        changed = true;
+        if (Object.keys(patch).length) operations.push({ ...operation, patch, ...(before ? { before } : {}) });
+    }
+    return changed ? { ...request, operations } : request;
+}
+
+export function dropConvergedCreateCanvasOperation(request: CanvasOperationsRequest, remote?: CanvasProject): CanvasOperationsRequest {
+    if (!remote || remote.id !== request.operations.find((operation) => operation.type === "create_canvas")?.id) return request;
+    const operations = request.operations.filter((operation) => operation.type !== "create_canvas");
+    return operations.length === request.operations.length ? request : { ...request, operations };
+}
+
+export function dropConvergedCreateConnectionOperations(request: CanvasOperationsRequest, remote?: CanvasProject): CanvasOperationsRequest {
+    if (!remote || !request.operations.some((operation) => operation.type === "create_connection")) return request;
+    const remoteConnectionIds = new Set(remote.connections.map((connection) => connection.id));
+    const operations = request.operations.filter((operation) => operation.type !== "create_connection" || !remoteConnectionIds.has(operation.connection.id));
+    return operations.length === request.operations.length ? request : { ...request, operations };
+}
+
 export function dropConvergedCreateNodeOperations(request: CanvasOperationsRequest, remote?: CanvasProject): CanvasOperationsRequest {
     if (!remote || !request.operations.some((operation) => operation.type === "create_node")) return request;
     const remoteNodeIds = new Set(remote.nodes.map((node) => node.id));

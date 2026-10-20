@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { fenceRejectedTaskTimestampMutation, repairLegacyTaskIdFence } from "@/lib/canvas/canvas-task-mutation";
+import { dropStaleTaskObserverFields, fenceRejectedTaskObservationMutation, fenceRejectedTaskTimestampMutation, repairLegacyTaskIdFence } from "@/lib/canvas/canvas-task-mutation";
 import type { CanvasOperationsRequest } from "@/services/api/user-data";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 
@@ -27,6 +27,27 @@ function canvas(taskUpdatedAt: unknown = oldTime, taskId: unknown = "task-1"): C
 function request(patch: Record<string, unknown> = { "metadata.taskUpdatedAt": newTime }, before: Record<string, unknown> = { "metadata.taskUpdatedAt": oldTime }): CanvasOperationsRequest {
     return { mutationId: "original-id", baseRevision: 4, operations: [{ type: "patch_node", id: "video", patch, before }] };
 }
+
+describe("dropStaleTaskObserverFields", () => {
+    test("removes stale task status while preserving the user edit", () => {
+        const original = request({ title: "new", "metadata.taskStatus": "failed" }, { title: "old", "metadata.taskStatus": "running" });
+        const result = dropStaleTaskObserverFields(original);
+        expect(result.operations[0]).toEqual({ ...original.operations[0], patch: { title: "new" }, before: { title: "old" } });
+    });
+});
+
+describe("fenceRejectedTaskObservationMutation", () => {
+    test("adds the unchanged task identity to a legacy task status journal", () => {
+        const original = request({ "metadata.taskStatus": "failed", title: "new" }, { "metadata.taskStatus": "running", title: "old" });
+        const result = fenceRejectedTaskObservationMutation(original, canvas(), canvas());
+        expect(result?.operations[0]).toEqual({ ...original.operations[0], before: { "metadata.taskStatus": "running", title: "old", "metadata.taskId": "task-1" } });
+    });
+
+    test("does not fence task rebinding or non-task edits", () => {
+        expect(fenceRejectedTaskObservationMutation(request({ title: "new" }, { title: "old" }), canvas(), canvas())).toBeUndefined();
+        expect(fenceRejectedTaskObservationMutation(request({ "metadata.taskStatus": "failed" }, { "metadata.taskStatus": "running" }), canvas(), canvas(undefined, "task-2"))).toBeUndefined();
+    });
+});
 
 describe("fenceRejectedTaskTimestampMutation", () => {
     test("adds only a same-task fence to original JSON wire without mutating inputs", () => {

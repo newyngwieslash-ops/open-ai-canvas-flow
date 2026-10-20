@@ -111,6 +111,14 @@ func safeInternalErrorMessage(status int) string {
 	}
 }
 
+func truncateHandlerError(err error) string {
+	text := err.Error()
+	if len(text) > 500 {
+		return text[:500]
+	}
+	return text
+}
+
 func logHandlerError(c *gin.Context, status int, err error) {
 	if err == nil {
 		return
@@ -125,5 +133,5 @@ func logHandlerError(c *gin.Context, status int, err error) {
 		}
 	}
 	// 普通访问日志会输出 Gin error；这里只记录错误类型，避免密钥或上游响应体进入日志。
-	log.Printf("handler request failed: method=%s route=%s status=%d error_type=%T", method, route, status, err)
+	log.Printf("handler request failed: method=%s route=%s status=%d error_type=%T error=%q", method, route, status, err, truncateHandlerError(err))
 }

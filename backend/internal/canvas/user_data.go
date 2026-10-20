@@ -3,6 +3,7 @@ package canvas
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -350,13 +351,13 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 			if isCreate && (len(req.Operations) == 0 || req.Operations[0].Type != "create_canvas") {
 				return kernel.NotFound("画布不存在或已删除")
 			}
-			if !isCreate {
-				for _, operation := range req.Operations {
-					if operation.Type == "create_canvas" {
-						return canvasOperationConflict("画布 %q 已存在，不能重复创建", canvasID)
+				if !isCreate {
+					for _, operation := range req.Operations {
+						if operation.Type == "create_canvas" {
+							return canvasMutationError("canvas_field_conflict", fmt.Sprintf("画布 %q 已存在，不能重复创建", canvasID))
+						}
 					}
 				}
-			}
 			if req.BaseRevision != nil && *req.BaseRevision > 0 && isCreate {
 				return canvasMutationError("canvas_invalid_base", "新画布不能使用已有版本作为基线")
 			}
