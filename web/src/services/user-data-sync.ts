@@ -1257,15 +1257,13 @@ async function submitCanvasMutation(entry: PendingCanvasMutation): Promise<Canva
                 assertSession();
                 // Only an explicit rejection permits a new request ID/body.
                 if (!(error instanceof ApiError) || error.status !== 409 || error.reason !== "canvas_field_conflict") throw error;
-                // A lost create response can leave the journal replaying create_node for
+                                // A lost create response can leave the journal replaying create_node for
                 // a node the server already committed. Fetch the authoritative document
                 // first: only ids that already exist remotely are proven converged.
                 const remote = await restoreRemoteTextNodeContents((await getRemoteCanvasProject(entry.projectId)).project);
                 assertSession();
                 const converged = dropConvergedCreateNodeOperations(request, remote);
                 if (converged !== request) {
-                    // Persist the slimmed request BEFORE retrying so a crash between the
-                    // two posts cannot resurrect the converged create_node operations.
                     const convergedEntry = { ...entry, request: { ...converged, mutationId: converged.operations.length ? newCanvasMutationId() : entry.request.mutationId } };
                     pendingCanvasMutations.set(entry.projectId, convergedEntry);
                     try {
@@ -1276,9 +1274,6 @@ async function submitCanvasMutation(entry: PendingCanvasMutation): Promise<Canva
                     }
                     assertSession();
                     if (!converged.operations.length) {
-                        // The whole batch already exists on the server. Report the live
-                        // revision so the caller's tail reconciliation adopts the fresh
-                        // document instead of re-sending the dropped operations.
                         return { project: { id: remote.id, title: remote.title, createdAt: remote.createdAt, updatedAt: remote.updatedAt, revision: Number(remote.revision) }, mutationId: entry.request.mutationId } as Awaited<ReturnType<typeof applyRemoteCanvasOperations>>;
                     }
                     return submitCanvasMutation(convergedEntry);
@@ -1671,7 +1666,7 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
             let preparedForMutation = current;
             let savedRevision: number | undefined;
             let remoteSnapshot: CanvasProject | undefined;
-            let request: CanvasOperationsRequest;
+            let request: CanvasOperationsRequest | undefined;
             if (pendingJournal) {
                 acknowledgedEditVersions = pendingJournal.editSession === canvasEditLeases.session() ? pendingJournal.editVersions || {} : {};
                 preparedForMutation = pendingJournal.localPrepared ?? (sameCanvasContent(prepared, pendingJournal.prepared) ? current : pendingJournal.prepared);
@@ -1705,40 +1700,35 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
                 // or fence repair). Read the latest journal state, not the stale
                 // local snapshot, or the tail submit would re-send dropped ops.
                 request = pendingCanvasMutations.get(source.id)?.request ?? pendingJournal.request;
-            } else {
-                const operations = buildCanvasOperations(base, prepared);
-                if (!operations.length) {
-                    // No cloud write is needed, but local persistence and progress
-                    // still need the same completion path as a submitted mutation.
-                    remoteSnapshot = { ...prepared, revision: current.revision };
                 } else {
-                    const request: CanvasOperationsRequest = {
-                        mutationId: newCanvasMutationId(),
-                        ...(base ? { baseRevision: base.revision } : {}),
-                        operations,
-                    };
-                    if (base) {
-                        const ids = new Set(operations.flatMap((operation) => (operation.type === "create_node" ? [operation.node.id] : "id" in operation ? [operation.id] : [])));
-                        request.editProofs = await canvasEditLeases.proofs(source.id, ids);
+                    const operations = buildCanvasOperations(base, prepared);
+                    if (!operations.length) {
+                        // No cloud write is needed, but local persistence and progress
+                        // still need the same completion path as a submitted mutation.
+                        remoteSnapshot = { ...prepared, revision: current.revision };
+                    } else {
+                        request = {
+                            mutationId: newCanvasMutationId(),
+                            ...(base ? { baseRevision: base.revision } : {}),
+                            operations,
+                        };
+                        if (base) {
+                            const ids = new Set(operations.flatMap((operation) => (operation.type === "create_node" ? [operation.node.id] : "id" in operation ? [operation.id] : [])));
+                            request.editProofs = await canvasEditLeases.proofs(source.id, ids);
+                        }
+                        requireCurrentSession();
+                        const entry: PendingCanvasMutation = { projectId: source.id, request, baseline: base, prepared, localPrepared: current, editVersions, editSession: canvasEditLeases.session(), createdAt: new Date().toISOString() };
+                        pendingCanvasMutations.set(source.id, entry);
+                        await persistPendingCanvasMutationJournal();
+                        requireCurrentSession();
+                        useSyncProgressStore.getState().setProjectProgress(source.id, { phase: "saving", message: base ? "正在提交画布操作" : "正在创建画布" });
+                        const response = await submitPendingCanvasMutation(entry);
+                        if (assetSyncEpoch !== sessionEpoch) throw new Error("账号已切换，已停止旧会话保存");
+                        savedRevision = Number(response.project.revision);
                     }
-                    requireCurrentSession();
-                    const entry: PendingCanvasMutation = { projectId: source.id, request, baseline: base, prepared, localPrepared: current, editVersions, editSession: canvasEditLeases.session(), createdAt: new Date().toISOString() };
-                    pendingCanvasMutations.set(source.id, entry);
-                    await persistPendingCanvasMutationJournal();
-                    requireCurrentSession();
-                    useSyncProgressStore.getState().setProjectProgress(source.id, { phase: "saving", message: base ? "正在提交画布操作" : "正在创建画布" });
-                    const response = await submitPendingCanvasMutation(entry);
-                    if (assetSyncEpoch !== sessionEpoch) throw new Error("账号已切换，已停止旧会话保存");
-                    savedRevision = Number(response.project.revision);
                 }
-                request = {
-                    mutationId: newCanvasMutationId(),
-                    ...(base ? { baseRevision: base.revision } : {}),
-                    operations: buildCanvasOperations(base, prepared),
-                };
-            }
             let rejected: ApiError | undefined;
-            try {
+            if (request) try {
                 // 空操作走 remoteSnapshot 完成路径，不再请求远端；旧队列可能只剩
                 // undefined 与缺省值之间的无效变化。
                 const committedRevision = request.operations.length ? Number((await applyRemoteCanvasOperations(source.id, request)).project.revision) : Number(current.revision);
@@ -1756,7 +1746,7 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
             requireCurrentSession();
             const latest = useCanvasStore.getState().openProject(source.id);
             if (!latest) throw new Error("画布已关闭，停止提交操作");
-            if (rejected) {
+            if (rejected && request) {
                 const originalBase = pendingJournal ? pendingJournal.baseline : base;
                 const knownNodeIds = new Set([...(originalBase?.nodes || []), ...preparedForMutation.nodes, ...latest.nodes, ...remote.nodes].map((node) => node.id));
                 // Only discard an all-orphan create batch. If an endpoint exists in
