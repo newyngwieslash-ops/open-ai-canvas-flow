@@ -1157,7 +1157,12 @@ export function buildCanvasOperations(base: CanvasProject | undefined, next: Can
             continue;
         }
         const diff = diffCanvasObject(previous as unknown as Record<string, unknown>, node as unknown as Record<string, unknown>);
+        // 节点顶层 updatedAt 是写入簿记（服务端跳过其 CAS 基线），纯簿记变化
+        // 不产生保存操作；与服务端/保存回写的时间戳翻转互相抵消，避免幻影版本。
+        if (Object.keys(diff.patch).every((key) => key === "updatedAt")) continue;
         if (Object.keys(diff.patch).length) {
+            delete diff.patch.updatedAt;
+            delete diff.previous.updatedAt;
             const taskId = previous.metadata?.taskId;
             const sameTask = typeof taskId === "string" && taskId.trim() && taskId === node.metadata?.taskId && !Object.hasOwn(diff.previous, "metadata.taskId");
             if (sameTask) {

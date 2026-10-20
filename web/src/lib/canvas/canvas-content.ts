@@ -4,7 +4,10 @@ import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 // These fields describe local viewing / synchronization, not an edit to the document.
 export function canvasContentSnapshot(project: CanvasProject) {
     const { viewport: _viewport, updatedAt: _updatedAt, revision: _revision, remoteContentHash: _hash, ...content } = project;
-    return { ...content, projectId: content.projectId || undefined };
+    // 节点顶层 updatedAt 是写入簿记（服务端 canvasNodeBookkeepingFields 同样跳过 CAS 基线），
+    // 任务观察者/保存回写会反复刷新它；算内容会把纯时间戳翻转判脏造成保存死循环。
+    const nodes = content.nodes.map(({ updatedAt: _nodeUpdatedAt, ...node }) => node);
+    return { ...content, nodes, projectId: content.projectId || undefined };
 }
 
 export function sameCanvasContent(left: CanvasProject | undefined, right: CanvasProject | undefined) {
