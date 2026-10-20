@@ -1,0 +1,16 @@
+{
+  "change": "fix-canvas-sync-upstream-rewrite",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "e521e1d4199d42cf1a8c048806ee59cd284e30b7f875b1555de2d0742a3263ad",
+  "files": [
+    { "path": "docs/openspec/changes/fix-canvas-sync-upstream-rewrite/proposal.md", "sha256": "284aaca971188433691661ecb5628aca7aa7ec2787b9f4e8299eed479b08f13c" },
+    { "path": "docs/openspec/changes/fix-canvas-sync-upstream-rewrite/design.md", "sha256": "a081fac7bb79ddb14c9b05195af641dbe9a9d99d2ded42b5c0ba716dabec537c" },
+    { "path": "docs/openspec/changes/fix-canvas-sync-upstream-rewrite/tasks.md", "sha256": "dcb5839fbd7fd0853e3aad1bca529396df93940e178f0f479441d9eb772528e9" },
+    { "path": "docs/openspec/changes/fix-canvas-sync-upstream-rewrite/.openspec.yaml", "sha256": "ff4326f8b42dcf8851877f4f3989c7fecb8f97d8154686d7d74b7281b70e6b9b" },
+    { "path": "docs/openspec/changes/fix-canvas-sync-upstream-rewrite/specs/canvas-sync-local-extensions/spec.md", "sha256": "c3277507d755987c1ff572f3a53d675f8fcd425af97803a4691984f9a842d2f4" }
+  ]
+}

@@ -1,0 +1,81 @@
+bun test v1.3.6 (d530ed99)
+....................................
+
+test\canvas-sync-progress.test.ts:
+225 | }
+226 | 
+227 | test("两端在两秒轮询前同时输入：拒绝端保持可编辑，定时自动交接并收敛，不出现错误状态或新画布", async () => {
+228 |     const { server, clients, type } = await twoDevices();
+229 |     type(0, "甲"); type(1, "乙");
+230 |     await expect(peerSync.saveRemoteUserDataNow("canvas")).rejects.toThrow("another device owns the lease");
+                                                                         ^
+error: 
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow\web\test\canvas-sync-progress.test.ts:230:68)
+(fail) 两端在两秒轮询前同时输入：拒绝端保持可编辑，定时自动交接并收敛，不出现错误状态或新画布 [16.00ms]
+257 |     fixture.afterPostHook = () => { fixture.afterPostHook = undefined; type(0, "新"); };
+258 |     await sync.saveRemoteUserDataNow("canvas");
+259 |     expect(server.lease).toBeUndefined();
+260 |     await peerSync.saveRemoteUserDataNow("canvas");
+261 |     await sync.refreshCanvasAfterAgent("canvas", "sync");
+262 |     expect(live().nodes[0]!.metadata!.prompt).toBe("场景：甲新乙");
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "场景：甲新乙"
+Received: "场景：甲新"
+
+      at <anonymous> (E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow\web\test\canvas-sync-progress.test.ts:262:47)
+(fail) 双端持续输入期间也交出写入租约，保存途中新输入进入后续批次 [15.00ms]
+276 |     expect(journal()[0].request).toEqual(original);
+277 |     await sync.saveRemoteUserDataNow("canvas");
+278 |     expect(fixture.writes[1]).toEqual(original);
+279 |     await peerSync.saveRemoteUserDataNow("canvas");
+280 |     await sync.refreshCanvasAfterAgent("canvas", "sync");
+281 |     expect(server.project.nodes[0]!.metadata!.prompt).toBe("场景：甲新乙");
+                                                            ^
+error: expect(received).toBe(expected)
+
+Expected: "场景：甲新乙"
+Received: "场景：甲新"
+
+      at <anonymous> (E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow\web\test\canvas-sync-progress.test.ts:281:55)
+(fail) 已提交但响应丢失时，轮询和刷新先保留 journal，重放 receipt 不重复合入自己的输入 [16.00ms]
+286 | test("合并缓存写入失败后另一端又输入，重建请求使用 journal 的新基线，不重复云端文字", async () => {
+287 |     const { server, type, time } = await twoDevices();
+288 |     type(0, "甲"); type(1, "乙");
+289 |     await sync.saveRemoteUserDataNow("canvas");
+290 |     peer.fixture.flushError = new Error("cache unavailable");
+291 |     await expect(peerSync.saveRemoteUserDataNow("canvas")).rejects.toThrow("cache unavailable");
+                                                                         ^
+error: 
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow\web\test\canvas-sync-progress.test.ts:291:68)
+(fail) 合并缓存写入失败后另一端又输入，重建请求使用 journal 的新基线，不重复云端文字
+306 |         const pending = JSON.parse(value);
+307 |         if (key !== journalKey || !pending[0]?.rebaseSource) return;
+308 |         peer.fixture.data.set(key, value);
+309 |         throw new Error("browser interrupted before cache projection");
+310 |     };
+311 |     await expect(peerSync.saveRemoteUserDataNow("canvas")).rejects.toThrow("browser interrupted before cache projection");
+                                                                         ^
+error: 
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (E:\AI_Vedio_Things\new-toonflow\open-ai-canvas-flow\web\test\canvas-sync-progress.test.ts:311:68)
+(fail) 新 journal 落盘但投影缓存尚未写入就刷新，后续输入先接上投影再重放
+.......................................................................................
+
+120 pass
+3 skip
+5 fail
+490 expect() calls
+Ran 128 tests across 6 files. [1.98s]

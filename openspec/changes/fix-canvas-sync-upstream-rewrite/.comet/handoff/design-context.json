@@ -1,0 +1,14 @@
+{
+  "change": "fix-canvas-sync-upstream-rewrite",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "c975f5833ba7d412b88861f71f3f6fa4c32a567bde8da5cbe848c08fbdecbfbf",
+  "files": [
+    { "path": "openspec/changes/fix-canvas-sync-upstream-rewrite/proposal.md", "sha256": "284aaca971188433691661ecb5628aca7aa7ec2787b9f4e8299eed479b08f13c" },
+    { "path": "openspec/changes/fix-canvas-sync-upstream-rewrite/design.md", "sha256": "a081fac7bb79ddb14c9b05195af641dbe9a9d99d2ded42b5c0ba716dabec537c" },
+    { "path": "openspec/changes/fix-canvas-sync-upstream-rewrite/tasks.md", "sha256": "12c5d7265b3f18944462733b6f4018fc6005c1e1591b9f00cbffc42645833376" },
+    { "path": "openspec/changes/fix-canvas-sync-upstream-rewrite/specs/canvas-sync-local-extensions/spec.md", "sha256": "c3277507d755987c1ff572f3a53d675f8fcd425af97803a4691984f9a842d2f4" }
+  ]
+}
