@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import { applyMaterializedGenerationTaskResultToNodes, generationTaskInput } from "@/lib/canvas/canvas-generation-task-sync";
-import { commitCanvasGenerationResult } from "@/lib/canvas/canvas-generation-result";
+import { commitCanvasGenerationResult, completedGenerationObservationBase } from "@/lib/canvas/canvas-generation-result";
 import { reconcileImageBatchRoot } from "@/lib/canvas/canvas-image-batch-retry";
 import { imageLayerCompositeSignature } from "@/lib/canvas/canvas-image-layers";
 import { findCanvasNodeAsset, requiresMaterializedCanvasAsset } from "@/lib/canvas/canvas-node-asset";
@@ -176,6 +176,7 @@ export async function applyCanvasGenerationTaskNodeEffect(input: {
             previousNodes,
             nodes,
             imageBatchRootId,
+            completedTaskId: input.task.status === "succeeded" ? input.task.id : undefined,
             signal: input.signal,
         });
     } catch (error) {
@@ -442,6 +443,7 @@ export async function persistCanvasCinematicSessionContinuationEffect(input: {
 export type CanvasGenerationEffectInput = {
     projectId: string;
     effectKey: string;
+    completedTaskId?: string;
     imageBatchRootId?: string;
     previousNodes?: CanvasNodeData[];
     nodes?: CanvasNodeData[];
@@ -542,17 +544,20 @@ export async function persistCanvasGenerationEffect(input: CanvasGenerationEffec
                 const durable = parseCanvasStorageDocument(await storage.getItem(CANVAS_STORE_KEY), memoryProjects);
                 latestDurable = durable;
                 throwIfAborted(input.signal);
+                const baseProject = input.completedTaskId ? {
+                    ...delta.baseProject,
+                    nodes: completedGenerationObservationBase(delta.baseProject.nodes, delta.localProject.nodes, durable.state.projects.find((project) => project.id === input.projectId)?.nodes ?? [], input.completedTaskId, input.effectKey),
+                } : delta.baseProject;
                 const rebased = rebaseCanvasProjects({
                     document: durable,
-                    baseProjects: [delta.baseProject],
+                    baseProjects: [baseProject],
                     localProjects: [delta.localProject],
                     baseRevision,
                 });
-                if (rebased.conflicts.some((conflict) => conflict.reason === "concurrent-update")) {
-                    reconcileLiveOnFailure = true;
-                    throw new Error("画布生成副作用与并发修改冲突");
-                }
-                if (rebased.conflicts.length) {
+                // The rebaser already resolves concurrent fields in favor of the
+                // latest durable value and merges unrelated generated fields.
+                // Commit that final document instead of rejecting the whole result.
+                if (rebased.conflicts.some((conflict) => conflict.reason !== "concurrent-update")) {
                     reconcileLiveOnFailure = true;
                     throw new Error("画布生成副作用与已删除内容冲突");
                 }

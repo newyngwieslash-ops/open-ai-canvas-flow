@@ -40,7 +40,7 @@ func (s *Service) ValidateCanvasMediaAssets(userID string, raw json.RawMessage) 
 	resourceIDSet := make(map[string]struct{}, len(references)+len(allResourceReferences))
 	for _, reference := range references {
 		if reference.AssetID == "" {
-			return kernel.BadAuthRequest("画布媒体尚未进入素材库，请等待同步完成后重试")
+			return canvasMediaAssetsPendingError()
 		}
 		assetIDSet[reference.AssetID] = struct{}{}
 		resourceIDSet[reference.ResourceID] = struct{}{}
@@ -91,13 +91,19 @@ func (s *Service) ValidateCanvasMediaAssets(userID string, raw json.RawMessage) 
 	for _, reference := range references {
 		resourceIDs, assetExists := assetResources[reference.AssetID]
 		if !assetExists {
-			return kernel.BadAuthRequest("画布媒体尚未进入素材库，请等待同步完成后重试")
+			return canvasMediaAssetsPendingError()
 		}
 		if _, matches := resourceIDs[reference.ResourceID]; !matches {
-			return kernel.BadAuthRequest("画布媒体与素材库记录不一致，请重新同步")
+			return canvasMediaAssetsPendingError()
 		}
 	}
 	return nil
+}
+
+func canvasMediaAssetsPendingError() *kernel.AppError {
+	err := kernel.BadAuthRequest("画布媒体尚未进入素材库，正在重新对齐")
+	err.Reason = "canvas_media_assets_pending"
+	return err
 }
 
 func canvasResourcesMissingError(references []assets.DocumentResourceReference) *kernel.AppError {

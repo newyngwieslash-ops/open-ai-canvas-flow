@@ -32,6 +32,7 @@ import {
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { createCanvasRichTextExtensions, isSafeCanvasRichTextLink } from "@/lib/canvas/canvas-rich-text";
+import { canvasRichTextChangeMap, mergeCanvasRichText, mergeCanvasText } from "@/lib/canvas/canvas-text-merge";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import { CanvasTextLeaseIndicator, useCanvasTextLease } from "./use-canvas-text-lease";
@@ -44,20 +45,20 @@ type CanvasTextEditorModalProps = {
 };
 
 export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasTextEditorModalProps) {
-    const { message } = App.useApp();
     const theme = canvasThemes[useActiveTheme()];
     const [title, setTitle] = useState("");
     const [markdownContent, setMarkdownContent] = useState("");
     const markdownEditorRef = useRef<TextAreaRef | null>(null);
     const isMarkdown = node?.type === CanvasNodeType.Markdown;
     const textLease = useCanvasTextLease(node?.id || "");
+    const compositionRef = useRef<{ nodeId: string; content: string; richText: Record<string, unknown> } | null>(null);
     const draftRef = useRef({ node, title, markdownContent, onChange, textLease });
     draftRef.current = { node, title, markdownContent, onChange, textLease };
     const publish = (content: string, richText: Record<string, unknown>, nextTitle = draftRef.current.title) => {
         const current = draftRef.current;
         if (!current.node || current.node.metadata?.locked || !current.textLease.input()) return;
         void Promise.resolve().then(() => current.onChange(current.node!.id, nextTitle, content, richText)).catch((error) => {
-            message.error(error instanceof Error ? error.message : "草稿写回失败");
+            console.warn("文本草稿写回尚未完成", error);
         });
     };
     const publishRef = useRef(publish);
@@ -71,11 +72,35 @@ export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasT
                 class: "min-h-full px-8 py-7 text-[var(--fs-body-lg)] leading-7 outline-none sm:px-12 lg:px-16",
                 "aria-label": "文本节点富文本编辑区",
             },
+            handleDOMEvents: {
+                compositionstart: (view) => {
+                    const current = draftRef.current.node;
+                    if (current) compositionRef.current = { nodeId: current.id, content: view.state.doc.textContent, richText: view.state.doc.toJSON() };
+                    return false;
+                },
+                compositionend: () => {
+                    requestAnimationFrame(() => {
+                        const base = compositionRef.current;
+                        compositionRef.current = null;
+                        const current = draftRef.current.node, active = editorRef.current;
+                        if (!base || !active || active.isDestroyed || current?.id !== base.nodeId) return;
+                        const remote = current.metadata?.richText?.type === "doc" ? current.metadata.richText : plainTextDocument(current.metadata?.content || "");
+                        const merged = mergeCanvasRichText(base.richText, remote, active.getJSON());
+                        applyEditorContent(active, merged.richText);
+                        publishRef.current(merged.content, merged.richText);
+                    });
+                    return false;
+                },
+            },
         },
-        onUpdate: ({ editor: updated }) => publishRef.current(updated.getText({ blockSeparator: "\n" }).trimEnd(), updated.getJSON() as Record<string, unknown>),
+        onUpdate: ({ editor: updated }) => {
+            if (!compositionRef.current) publishRef.current(updated.getText({ blockSeparator: "\n" }).trimEnd(), updated.getJSON() as Record<string, unknown>);
+        },
     });
+    const editorRef = useRef(editor);
+    editorRef.current = editor;
 
-    const readOnly = textLease.blocked || Boolean(node?.metadata?.locked);
+    const readOnly = Boolean(node?.metadata?.locked);
     useEffect(() => { editor?.setEditable(!readOnly, false); }, [editor, readOnly]);
 
     useEffect(() => {
@@ -92,12 +117,12 @@ export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasT
     }, [editor, node?.id, node?.type, open]);
 
     useEffect(() => {
-        if (!open || !node || textLease.pending) return;
+        if (!open || !node || editor?.view.composing || compositionRef.current) return;
         setTitle(node.title || "");
         setMarkdownContent(node.metadata?.content || "");
         if (editor && node.type !== CanvasNodeType.Markdown) {
             const content = (node.metadata?.richText as JSONContent | undefined) || plainTextDocument(node.metadata?.content || "");
-            if (JSON.stringify(editor.getJSON()) !== JSON.stringify(content)) editor.commands.setContent(content, { emitUpdate: false });
+            if (JSON.stringify(editor.getJSON()) !== JSON.stringify(content)) applyEditorContent(editor, content);
         }
     }, [editor, node, open, textLease.pending]);
 
@@ -137,7 +162,7 @@ export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasT
                         aria-label="文本节点标题"
                     />
                     <span className="hidden shrink-0 text-[var(--fs-label)] sm:inline" style={{ color: theme.node.muted }}>{characterCount.toLocaleString("zh-CN")} 字 · {wordCount.toLocaleString("zh-CN")} 词</span>
-                    <span className="ml-auto hidden text-[var(--fs-label)] sm:inline" style={{ color: textLease.pending ? theme.accent.primary : theme.node.muted }}>{textLease.pending || textLease.error ? "草稿待同步" : "画布内容"}</span>
+                    <span className="ml-auto hidden text-[var(--fs-label)] sm:inline" style={{ color: theme.node.muted }}>画布内容</span>
                     <Tooltip title="关闭">
                         <Button size="small" type="text" icon={<X className="size-4" />} aria-label="关闭文本编辑器" onClick={close} />
                     </Tooltip>
@@ -164,7 +189,21 @@ export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasT
                                     if (readOnly) return;
                                     setMarkdownContent(event.target.value);
                                     draftRef.current.markdownContent = event.target.value;
+                                    if (compositionRef.current) return;
                                     publish(event.target.value, (node?.metadata?.richText as Record<string, unknown>) || {});
+                                }}
+                                onCompositionStart={(event) => {
+                                    if (node) compositionRef.current = { nodeId: node.id, content: event.currentTarget.value, richText: {} };
+                                }}
+                                onCompositionEnd={(event) => {
+                                    const base = compositionRef.current;
+                                    compositionRef.current = null;
+                                    if (!base) return;
+                                    const merged = mergeCanvasText(base.content, draftRef.current.node?.metadata?.content || "", event.currentTarget.value);
+                                    event.currentTarget.value = merged;
+                                    setMarkdownContent(merged);
+                                    draftRef.current.markdownContent = merged;
+                                    publish(merged, {});
                                 }}
                                 placeholder="输入 Markdown 内容…"
                                 autoSize={false}
@@ -183,6 +222,13 @@ export function CanvasTextEditorModal({ node, open, onClose, onChange }: CanvasT
             </section>
         </AppModal>
     );
+}
+
+function applyEditorContent(editor: Editor, content: JSONContent) {
+    const next = editor.schema.nodeFromJSON(content);
+    const mapping = canvasRichTextChangeMap(editor.state.doc, next);
+    const from = mapping.map(editor.state.selection.from, 1), to = mapping.map(editor.state.selection.to, 1);
+    editor.chain().setMeta("addToHistory", false).setContent(content, { emitUpdate: false }).setTextSelection({ from, to }).run();
 }
 
 function TextEditorToolbar({ editor }: { editor: Editor | null }) {

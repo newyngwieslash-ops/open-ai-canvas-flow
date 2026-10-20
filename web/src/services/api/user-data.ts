@@ -79,7 +79,7 @@ export function listRemoteCanvasProjectsPage(options: { page: number; pageSize: 
 }
 
 export function getRemoteUserDataSnapshot() {
-    return http.get<RemoteUserDataSnapshot>("/user-data/snapshot");
+    return http.get<RemoteUserDataSnapshot>("/user-data/snapshot", { timeout: 15_000 });
 }
 
 export function listRemoteAssets() {
@@ -123,15 +123,15 @@ export function moveRemoteAssetsToFolder(assetIds: string[], folderId = "") {
 }
 
 export function getRemoteAsset(id: string) {
-    return http.get<{ asset: Asset }>(`/assets/${encodeURIComponent(id)}`);
+    return http.get<{ asset: Asset }>(`/assets/${encodeURIComponent(id)}`, { timeout: 15_000 });
 }
 
 export function getRemoteAssetsByIds(ids: string[]) {
-    return http.post<{ assets: Asset[] }>("/assets/batch", { ids });
+    return http.post<{ assets: Asset[] }>("/assets/batch", { ids }, { timeout: 15_000 });
 }
 
 export function upsertRemoteAsset(asset: Asset) {
-    return http.put<{ asset: RemoteUserDataSummary }>(`/assets/${encodeURIComponent(asset.id)}`, { asset });
+    return http.put<{ asset: RemoteUserDataSummary }>(`/assets/${encodeURIComponent(asset.id)}`, { asset }, { timeout: 15_000 });
 }
 
 export function deleteRemoteAsset(id: string) {
@@ -148,11 +148,12 @@ export function listRemoteCanvasProjects() {
 
 export function getRemoteCanvasProject(id: string, knownProject?: CanvasProject) {
     if (!knownProject || knownProject.id !== id || !Number.isSafeInteger(knownProject.revision)) {
-        return http.get<{ project: CanvasProject }>(`/canvas-projects/${encodeURIComponent(id)}`).then((result) => ({ ...result, notModified: false }));
+        return http.get<{ project: CanvasProject }>(`/canvas-projects/${encodeURIComponent(id)}`, { timeout: 15_000 }).then((result) => ({ ...result, notModified: false }));
     }
     const etag = `"canvas-${knownProject.revision}"`;
     return http
         .get<{ project: CanvasProject } | { notModified: true }>(`/canvas-projects/${encodeURIComponent(id)}`, {
+            timeout: 15_000,
             headers: { "If-None-Match": etag },
             validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
             allowNotModified: true,
@@ -161,7 +162,7 @@ export function getRemoteCanvasProject(id: string, knownProject?: CanvasProject)
 }
 
 export function applyRemoteCanvasOperations(id: string, request: CanvasOperationsRequest) {
-    return http.patch<{ project: RemoteUserDataSummary & { revision: number }; mutationId: string }>(`/canvas-projects/${encodeURIComponent(id)}/operations`, request);
+    return http.patch<{ project: RemoteUserDataSummary & { revision: number }; mutationId: string }>(`/canvas-projects/${encodeURIComponent(id)}/operations`, request, { timeout: 15_000 });
 }
 
 export function getRemoteCanvasRevision(id: string, revision: number) {

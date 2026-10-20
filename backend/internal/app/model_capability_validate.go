@@ -38,6 +38,18 @@ func validateTextCapabilityConfig(value *TextCapabilityConfig) error {
 }
 
 func validateImageCapabilityConfig(value *ImageCapabilityConfig) error {
+	if value.ResponseFormat.Supported {
+		switch strings.ToLower(strings.TrimSpace(value.ResponseFormat.Default)) {
+		case "", "auto":
+			value.ResponseFormat.Default = "auto"
+		case "b64_json", "url":
+			value.ResponseFormat.Default = strings.ToLower(strings.TrimSpace(value.ResponseFormat.Default))
+		default:
+			return BadAuthRequest("图片响应格式默认值仅支持 auto、b64_json 或 url")
+		}
+	} else {
+		value.ResponseFormat.Default = "auto"
+	}
 	if value.References.PromptMaxChars < 1 || value.References.PromptMaxChars > 1000000 {
 		return BadAuthRequest("提示词最大字符数必须在 1-1000000 之间")
 	}
@@ -437,7 +449,7 @@ func validateImageTask(profile *ImageCapabilityConfig, input canvasGenerationInp
 			return newModelCapabilityArgumentError("size", "unsupported_value", err)
 		}
 	}
-	if profile.Quality.Supported && quality != "" && !strings.EqualFold(quality, "auto") && !strings.EqualFold(quality, "any") && !containsCapabilityString(profile.Quality.Values, quality) {
+	if profile.Quality.Supported && len(profile.Quality.Values) > 0 && quality != "" && !strings.EqualFold(quality, "auto") && !strings.EqualFold(quality, "any") && !containsCapabilityString(profile.Quality.Values, quality) {
 		return newModelCapabilityArgumentError("quality", "unsupported_value", BadAuthRequest("图片质量不在当前模型支持范围内"))
 	}
 	if err := validateImagePresetSelection(profile, qualityForImageValidation(selectionTier, firstNonEmpty(profile.Resolution.Default, profile.Quality.Default)), firstNonEmpty(resolvedRatio, input.Config.Size, profile.Size.Default)); err != nil {
@@ -507,7 +519,7 @@ func imageSizeValueForDeclaredPreset(profile *ImageCapabilityConfig, size string
 	if profile.Size.Parameter == "size" {
 		return strings.TrimSpace(preset.Size)
 	}
-	return normalizeDeclaredImageRatio(preset.Ratio)
+	return strings.TrimSpace(preset.Ratio)
 }
 
 // imageSizeRatioForDeclaredPreset 把已声明的 preset 像素值还原成它对应的比例。比例型线路
@@ -522,7 +534,7 @@ func imageSizeRatioForDeclaredPreset(profile *ImageCapabilityConfig, size string
 		return ""
 	}
 	if preset, ok := declaredImageSizePreset(profile.Size.Presets, value, imagePresetSelectionTier(profile, quality), imagePresetDefaultTier(profile)); ok {
-		return normalizeDeclaredImageRatio(preset.Ratio)
+		return strings.TrimSpace(preset.Ratio)
 	}
 	return ""
 }
@@ -646,7 +658,7 @@ func resolveImageTaskSize(profile *ImageCapabilityConfig, interfaceType string, 
 		return preset.Size
 	}
 	if profile.Size.Parameter == "aspect_ratio" {
-		return normalizeDeclaredImageRatio(preset.Ratio)
+		return strings.TrimSpace(preset.Ratio)
 	}
 	return size
 }

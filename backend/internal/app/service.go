@@ -81,6 +81,7 @@ type Service struct {
 	auth                     *auth.Service
 	sms                      *sms.Service
 	canvas                   *canvas.Service
+	canvasRealtime           *canvas.RealtimeHub
 	workbench                *workbench.Service
 	piRunnerMu               sync.Mutex
 	piRunnerWg               sync.WaitGroup
@@ -141,6 +142,8 @@ func New(repo *repository.Repository, dataDir string) *Service {
 
 func newService(repo *repository.Repository, dataDir string) *Service {
 	coordinator, err := platform.NewCoordinator(repo.Dialect())
+	canvasRealtime := canvas.NewRealtimeHub(coordinator.Redis())
+	repo = repo.WithCanvasChangeNotifier(canvasRealtime.Changed)
 	pluginRuntime, pluginRuntimeErr := newPluginRuntime(dataDir)
 	paymentRegistry, _ := payment.NewRegistry()
 	if pluginRuntime != nil {
@@ -161,6 +164,7 @@ func newService(repo *repository.Repository, dataDir string) *Service {
 	service.sms = service.newSMSDomain()
 	service.auth.SetSMSDelivery(service.sms)
 	service.canvas = canvas.New(service.repo, canvasHost{svc: service})
+	service.canvasRealtime = canvasRealtime
 	service.workbench = workbench.New(service.repo, workbenchAdminGate{svc: service}, workbenchAdminGate{svc: service})
 	service.platform = platform.New(service.repo, coordinator, platformHost{svc: service})
 	return service

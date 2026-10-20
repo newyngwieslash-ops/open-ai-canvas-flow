@@ -26,7 +26,7 @@ const browserEnvironment: PollingEnvironment = {
 
 // One request at a time, including foreground/network wakeups. Presence reads
 // never retry mutations; the caller retains drafts and durable save errors.
-export function startCanvasSyncPolling(poll: (signal: AbortSignal) => Promise<void>, env: PollingEnvironment = browserEnvironment) {
+export function startCanvasSyncPolling(poll: (signal: AbortSignal) => Promise<void>, env: PollingEnvironment = browserEnvironment, options: { interval?: () => number; listen?: (wake: () => void) => () => void } = {}) {
     let stopped = false;
     let failures = 0;
     let timer: Timer | undefined;
@@ -38,7 +38,7 @@ export function startCanvasSyncPolling(poll: (signal: AbortSignal) => Promise<vo
     };
     const schedule = () => {
         if (stopped || !env.online()) return;
-        const delay = Math.max(env.hidden() ? 15000 : 2000, failures ? Math.min(30000, 2000 * 2 ** (failures - 1)) : 0);
+        const delay = Math.max(env.hidden() ? 15000 : 0, options.interval?.() ?? 2000, failures ? Math.min(30000, 2000 * 2 ** (failures - 1)) : 0);
         timer = env.schedule(() => {
             timer = undefined;
             void run();
@@ -86,12 +86,14 @@ export function startCanvasSyncPolling(poll: (signal: AbortSignal) => Promise<vo
         else void run();
     };
     const unlisten = env.listen(wake);
+    const unlistenExternal = options.listen?.(wake);
     const stop = () => {
         stopped = true;
         wakePending = false;
         clearTimer();
         active?.abort();
         unlisten();
+        unlistenExternal?.();
     };
     void run();
     return stop;

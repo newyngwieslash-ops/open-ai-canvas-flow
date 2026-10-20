@@ -212,7 +212,9 @@ export function applyAgentEvent(
                   .map((field) => ({
                       id: String(field.id || "").trim(),
                       title: String(field.title || field.label || "").trim(),
-                      type: ["single_select", "segmented", "text", "textarea", "model_picker"].includes(String(field.type)) ? (String(field.type) as "single_select" | "segmented" | "text" | "textarea" | "model_picker") : "single_select",
+                      type: ["single_select", "multi_select", "segmented", "text", "textarea", "model_picker"].includes(String(field.type))
+                          ? (String(field.type) as "single_select" | "multi_select" | "segmented" | "text" | "textarea" | "model_picker")
+                          : "single_select",
                       options: Array.isArray(field.options)
                           ? (field.options as Array<Record<string, unknown>>)
                                 .map((option) => ({
@@ -223,7 +225,7 @@ export function applyAgentEvent(
                                 }))
                                 .filter((option) => option.label)
                           : undefined,
-                      defaultValue: field.defaultValue === undefined ? undefined : String(field.defaultValue),
+                      defaultValue: Array.isArray(field.defaultValue) ? field.defaultValue.map(String) : field.defaultValue === undefined ? undefined : String(field.defaultValue),
                       required: field.required === true,
                       allowCustom: field.allowCustom === true,
                       placeholder: field.placeholder === undefined ? undefined : String(field.placeholder),

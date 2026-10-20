@@ -10,6 +10,7 @@ import { useResolvedCanvasResourceReferences } from "./use-resolved-canvas-resou
 import { InlineReferencePreview, referencePreviewUrl, syncInlineMentionPreviews } from "./canvas-mention-chips";
 import { MentionMenu, clamp, mentionCaretRect } from "./canvas-mention-menu";
 import { getEditableSelection, renderEditableContent, serializeEditableValue, setEditableSelection } from "./canvas-mention-editable";
+import { mapCanvasTextOffset, mergeCanvasText } from "@/lib/canvas/canvas-text-merge";
 
 export { TOOL_ICON_MAP } from "./canvas-mention-chips";
 
@@ -73,6 +74,9 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const editorRef = useRef<HTMLDivElement | null>(null);
     const readOnly = Boolean(props.disabled || props.readOnly);
     const composingRef = useRef(false);
+    const compositionBaseRef = useRef("");
+    const [compositionValue, setCompositionValue] = useState<string | null>(null);
+    const plainSelectionRef = useRef<{ value: string; start: number; end: number } | null>(null);
     const pendingSelectionRef = useRef<number | null>(null);
     const pendingScrollTopRef = useRef<number | null>(null);
     const lastRenderedValueRef = useRef("");
@@ -133,7 +137,8 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             pendingSelectionRef.current = null;
             return;
         }
-        const selection = pendingSelectionRef.current ?? (isFocused ? getEditableSelection(editor)?.start ?? null : null);
+        const currentSelection = isFocused ? getEditableSelection(editor)?.start ?? null : null;
+        const selection = pendingSelectionRef.current ?? (currentSelection === null ? null : mapCanvasTextOffset(currentValue, value, currentSelection));
         const scrollTop = pendingScrollTopRef.current;
         renderEditableContent(editor, value, activeReferences);
         lastRenderedValueRef.current = value;
@@ -143,6 +148,14 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         if (scrollTop !== null) editor.scrollTop = scrollTop;
         pendingScrollTopRef.current = null;
     }, [activeReferences, reportContentSize, useRichEditor, value]);
+
+    useLayoutEffect(() => {
+        const editor = textareaRef.current, selection = plainSelectionRef.current;
+        if (useRichEditor || composingRef.current || !editor || !selection || document.activeElement !== editor) return;
+        const start = mapCanvasTextOffset(selection.value, value, selection.start), end = mapCanvasTextOffset(selection.value, value, selection.end);
+        editor.setSelectionRange(start, end);
+        plainSelectionRef.current = { value, start, end };
+    }, [useRichEditor, value]);
 
     useLayoutEffect(() => {
         const anchor = useRichEditor ? editorRef.current : textareaRef.current;
@@ -385,10 +398,16 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                     onInput={syncEditableValue}
                     onCompositionStart={(event) => {
                         composingRef.current = true;
+                        compositionBaseRef.current = serializeEditableValue(event.currentTarget);
                         props.onCompositionStart?.(event as unknown as React.CompositionEvent<HTMLTextAreaElement>);
                     }}
                     onCompositionEnd={(event) => {
+                        const local = serializeEditableValue(event.currentTarget);
+                        const cursor = getEditableSelection(event.currentTarget)?.start ?? local.length;
+                        const merged = mergeCanvasText(compositionBaseRef.current, value, local);
                         composingRef.current = false;
+                        renderEditableContent(event.currentTarget, merged, activeReferences);
+                        setEditableSelection(event.currentTarget, mapCanvasTextOffset(local, merged, cursor));
                         syncEditableValue();
                         props.onCompositionEnd?.(event as unknown as React.CompositionEvent<HTMLTextAreaElement>);
                     }}
@@ -520,27 +539,40 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                     if (typeof forwardedRef === "function") forwardedRef(node);
                     else if (forwardedRef) forwardedRef.current = node;
                 }}
-                value={value}
+                value={compositionValue ?? value}
                 className={`${className || ""} relative z-10`}
                 style={{ ...mergedStyle, height: "100%", minHeight: 0, maxHeight: "100%", overflowY: "auto", overflowX: "hidden" }}
                 onChange={(event) => {
                     if (readOnly) return;
                     const next = event.target.value;
+                    plainSelectionRef.current = { value: next, start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd };
+                    if (composingRef.current) { setCompositionValue(next); return; }
                     if (onChange(next) === false) { event.currentTarget.value = value; return; }
                     syncMention(next, event.target.selectionStart);
                     reportContentSize(event.currentTarget);
                 }}
                 onCompositionStart={(event) => {
                     composingRef.current = true;
+                    compositionBaseRef.current = event.currentTarget.value;
+                    setCompositionValue(event.currentTarget.value);
                     props.onCompositionStart?.(event);
                 }}
                 onCompositionEnd={(event) => {
+                    const local = event.currentTarget.value;
+                    const merged = mergeCanvasText(compositionBaseRef.current, value, local);
+                    const cursor = mapCanvasTextOffset(local, merged, event.currentTarget.selectionStart);
                     composingRef.current = false;
-                    syncMention(event.currentTarget.value, event.currentTarget.selectionStart);
+                    setCompositionValue(null);
+                    event.currentTarget.value = merged;
+                    event.currentTarget.setSelectionRange(cursor, cursor);
+                    plainSelectionRef.current = { value: merged, start: cursor, end: cursor };
+                    if (onChange(merged) === false) event.currentTarget.value = value;
+                    syncMention(merged, cursor);
                     props.onCompositionEnd?.(event);
                 }}
                 onSelect={(event) => {
                     const textarea = event.currentTarget;
+                    plainSelectionRef.current = { value: textarea.value, start: textarea.selectionStart, end: textarea.selectionEnd };
                     setAutoLinkCursor(textarea.selectionStart === textarea.selectionEnd ? textarea.selectionStart : null);
                     props.onSelect?.(event);
                 }}

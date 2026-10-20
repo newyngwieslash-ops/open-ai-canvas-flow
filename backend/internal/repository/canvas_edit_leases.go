@@ -13,7 +13,9 @@ import (
 var ErrCanvasEditLease = errors.New("节点正在其他窗口编辑，或编辑权限已过期；本地草稿已保留")
 
 func (r *Repository) WithCanvasEditProofs(proofs []model.CanvasEditProof) *Repository {
-	return &Repository{db: r.db, canvasEditProofs: proofs}
+	copy := *r
+	copy.canvasEditProofs = proofs
+	return &copy
 }
 
 func (r *Repository) CanvasEditLeases(userID, canvasID string, now time.Time) ([]model.CanvasEditLease, error) {
@@ -23,7 +25,12 @@ func (r *Repository) CanvasEditLeases(userID, canvasID string, now time.Time) ([
 }
 
 // Call inside a transaction after locking the parent canvas, including renew/release.
-func (r *Repository) ChangeCanvasEditLease(userID, canvasID string, proof model.CanvasEditProof, action, newToken string, now time.Time) (*model.CanvasEditLease, error) {
+func (r *Repository) ChangeCanvasEditLease(userID, canvasID string, proof model.CanvasEditProof, action, newToken string, now time.Time) (lease *model.CanvasEditLease, resultErr error) {
+	defer func() {
+		if resultErr == nil {
+			r.canvasChanged(userID, canvasID)
+		}
+	}()
 	var current model.CanvasEditLease
 	err := r.db.First(&current, "user_id = ? AND canvas_id = ? AND node_id = ?", userID, canvasID, proof.NodeID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {

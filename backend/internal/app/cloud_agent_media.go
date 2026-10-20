@@ -41,27 +41,15 @@ func (s *Service) cloudAgentModelList(intent *ModelRequestIntent) (any, error) {
 	}
 	for _, item := range items {
 		selection := item["selection"].(map[string]any)
-		defaults, _ := item["defaults"].(map[string]any)
 		arguments := map[string]any{"mode": normalizeCapability(stringValue(item["capability"]))}
 		for key, value := range selection {
 			arguments[key] = value
-		}
-		for _, key := range []string{"size", "quality", "imageResolution", "videoGenerateAudio"} {
-			if value, exists := defaults[key]; exists {
-				arguments[key] = value
-			}
-		}
-		if value, exists := defaults["videoSeconds"]; exists {
-			arguments["durationSeconds"] = value
-		}
-		if value, exists := defaults["vquality"]; exists {
-			arguments["quality"] = value
 		}
 		item["generationArguments"] = arguments
 	}
 	return map[string]any{
 		"source": catalog.Source, "models": items, "intent": intent,
-		"generationGuidance": "generate_media 使用 generationArguments 的顶层字段，再补 prompt、nodeId、title、referenceNodeIds；按本次创作选择支持的参数值。图片 mode 固定 image，尺寸字段固定 size；不要把 options 的 parameters、binding、count 或 image_to_image 操作名直接当作工具参数。",
+		"generationGuidance": "复制 generationArguments，补 prompt 和 referenceNodeIds 即可；续用草稿传 nodeId，新节点 ID/标题/连线交执行器。规格默认省略；用户本轮要求改变时传支持值与 configurationChange，其他已有配置继承。不要传 parameters、binding、count 或 image_to_image。",
 	}, nil
 }
 
@@ -116,31 +104,32 @@ func (s *Service) cloudAgentModelIntent(userID, canvasID, arguments string) (*Mo
 }
 
 type cloudAgentMediaArgs struct {
-	Prepared                   *cloudAgentPreparedMedia `json:"-"`
-	DraftRunID                 string                   `json:"-"`
-	CharacterVersions          map[string]string        `json:"-"`
-	CharacterLabels            []string                 `json:"-"`
-	Mode                       string                   `json:"mode"`
-	Prompt                     string                   `json:"prompt"`
-	LogicalModelID             string                   `json:"logicalModelId"`
-	ChannelID                  string                   `json:"channelId"`
-	ChannelModelKey            string                   `json:"channelModelKey"`
-	Duration                   int                      `json:"durationSeconds"`
-	Size                       string                   `json:"size"`
-	ImageResolution            string                   `json:"imageResolution"`
-	ImageParameters            string                   `json:"imageParameters,omitempty"`
-	Quality                    string                   `json:"quality"`
-	VideoGenerateAudio         *bool                    `json:"videoGenerateAudio"`
-	VideoWatermark             *bool                    `json:"videoWatermark"`
-	VideoArkPrivateAssetUpload *bool                    `json:"videoArkPrivateAssetUpload"`
-	VideoStartFrameNodeID      string                   `json:"videoStartFrameNodeId"`
-	VideoEndFrameNodeID        string                   `json:"videoEndFrameNodeId"`
-	SnapshotHash               string                   `json:"snapshotHash"`
-	NodeID                     string                   `json:"nodeId"`
-	Title                      string                   `json:"title"`
-	SourceNodeID               string                   `json:"sourceNodeId"`
-	ReferenceNodeIDs           []string                 `json:"referenceNodeIds"`
-	ReferenceTransientIDs      []string                 `json:"referenceTransientIds"`
+	ConfigurationChange        *cloudAgentMediaConfigurationChange `json:"configurationChange,omitempty"`
+	Prepared                   *cloudAgentPreparedMedia            `json:"-"`
+	DraftRunID                 string                              `json:"-"`
+	CharacterVersions          map[string]string                   `json:"-"`
+	CharacterLabels            []string                            `json:"-"`
+	Mode                       string                              `json:"mode"`
+	Prompt                     string                              `json:"prompt"`
+	LogicalModelID             string                              `json:"logicalModelId"`
+	ChannelID                  string                              `json:"channelId"`
+	ChannelModelKey            string                              `json:"channelModelKey"`
+	Duration                   int                                 `json:"durationSeconds"`
+	Size                       string                              `json:"size"`
+	ImageResolution            string                              `json:"imageResolution"`
+	ImageParameters            string                              `json:"imageParameters,omitempty"`
+	Quality                    string                              `json:"quality"`
+	VideoGenerateAudio         *bool                               `json:"videoGenerateAudio"`
+	VideoWatermark             *bool                               `json:"videoWatermark"`
+	VideoArkPrivateAssetUpload *bool                               `json:"videoArkPrivateAssetUpload"`
+	VideoStartFrameNodeID      string                              `json:"videoStartFrameNodeId"`
+	VideoEndFrameNodeID        string                              `json:"videoEndFrameNodeId"`
+	SnapshotHash               string                              `json:"snapshotHash"`
+	NodeID                     string                              `json:"nodeId"`
+	Title                      string                              `json:"title"`
+	SourceNodeID               string                              `json:"sourceNodeId"`
+	ReferenceNodeIDs           []string                            `json:"referenceNodeIds"`
+	ReferenceTransientIDs      []string                            `json:"referenceTransientIds"`
 }
 
 type cloudAgentMediaPlan struct {
@@ -508,6 +497,14 @@ func cloudAgentMediaDocument(repo *repository.Repository, userID, canvasID strin
 }
 
 func validateCloudAgentMediaArgs(a cloudAgentMediaArgs, state *cloudAgentRuntime) error {
+	a.Mode = strings.ToLower(strings.TrimSpace(a.Mode))
+	if err := validateCloudAgentMediaShape(a, state); err != nil {
+		return err
+	}
+	return validateCloudAgentMediaBudget(a, state)
+}
+
+func validateCloudAgentMediaShape(a cloudAgentMediaArgs, state *cloudAgentRuntime) error {
 	mode := strings.ToLower(strings.TrimSpace(a.Mode))
 	if !cloudAgentGenerationModeSupported(mode) {
 		return cloudAgentFieldError("mode", "invalid_value", "生成模式当前不受 Agent 支持；请使用工具 schema 中列出的模式")
@@ -582,10 +579,14 @@ func validateCloudAgentMediaArgs(a cloudAgentMediaArgs, state *cloudAgentRuntime
 	if state == nil {
 		return BadAuthRequest("Agent 状态无效")
 	}
+	return nil
+}
+
+func validateCloudAgentMediaBudget(a cloudAgentMediaArgs, state *cloudAgentRuntime) error {
 	if state.Request.Budget.MaxGenerationTasks > 0 && state.Generations >= state.Request.Budget.MaxGenerationTasks {
 		return BadAuthRequest("已达到本轮媒体生成次数上限")
 	}
-	if mode == "video" && state.Request.Budget.MaxVideoSeconds > 0 && state.VideoSeconds > state.Request.Budget.MaxVideoSeconds-a.Duration {
+	if a.Mode == "video" && state.Request.Budget.MaxVideoSeconds > 0 && state.VideoSeconds > state.Request.Budget.MaxVideoSeconds-a.Duration {
 		return BadAuthRequest("已超过本轮视频时长预算")
 	}
 	return nil
@@ -680,8 +681,23 @@ func (s *Service) prepareCloudAgentMedia(run *model.CloudAgentExecution, state *
 		return CreateTaskRequest{}, nil, cloudAgentJSONArgumentError(err)
 	}
 	a.Mode = strings.ToLower(strings.TrimSpace(a.Mode))
-	if err := validateCloudAgentModelSelection(call.Function.Arguments, a); err != nil {
-		return CreateTaskRequest{}, nil, err
+	if cloudAgentModelSelectionProvided(call.Function.Arguments) || run == nil || state == nil {
+		if err := validateCloudAgentModelSelection(call.Function.Arguments, a); err != nil {
+			return CreateTaskRequest{}, nil, err
+		}
+	}
+	if run == nil || state == nil {
+		return CreateTaskRequest{}, nil, BadAuthRequest("Agent 状态无效")
+	}
+	if a.NodeID == "" {
+		if call.ID == "" {
+			return CreateTaskRequest{}, nil, cloudAgentFieldError("nodeId", "required", "缺少工具调用身份，不能创建生成节点")
+		}
+		a.NodeID = cloudAgentID(run.UserID, run.ID+":media-node:"+call.ID)
+	}
+	titleOmitted := a.Title == ""
+	if titleOmitted {
+		a.Title = map[string]string{"image": "图片创作", "video": "视频创作", "audio": "音频创作"}[a.Mode]
 	}
 	a.DraftRunID = run.ID
 	if state.Approval != nil && state.Approval.Prepared != nil &&
@@ -695,11 +711,30 @@ func (s *Service) prepareCloudAgentMedia(run *model.CloudAgentExecution, state *
 	if err := s.fillCloudAgentMediaSnapshotHash(run.UserID, state.Request.CanvasID, &a); err != nil {
 		return CreateTaskRequest{}, nil, err
 	}
-	if err := validateCloudAgentMediaArgs(a, state); err != nil {
+	if err := validateCloudAgentMediaShape(a, state); err != nil {
 		return CreateTaskRequest{}, nil, err
 	}
 	canvas, doc, refs, err := cloudAgentMediaDocument(s.repo, run.UserID, state.Request.CanvasID, a, state.TransientReferences)
 	if err != nil {
+		return CreateTaskRequest{}, nil, err
+	}
+	if a.Prepared == nil && state.Approval == nil {
+		if err := s.resolveCloudAgentMediaConfiguration(&a, state, call.Function.Arguments, doc, refs); err != nil {
+			return CreateTaskRequest{}, nil, err
+		}
+		if titleOmitted {
+			for _, node := range creationMaps(doc["nodes"]) {
+				if stringValue(node["id"]) == a.NodeID && stringValue(node["title"]) != "" {
+					a.Title = stringValue(node["title"])
+				}
+			}
+		}
+	}
+	// Validate materialized values as well as the original tool shape.
+	if err := validateCloudAgentMediaShape(a, state); err != nil {
+		return CreateTaskRequest{}, nil, err
+	}
+	if err := validateCloudAgentMediaBudget(a, state); err != nil {
 		return CreateTaskRequest{}, nil, err
 	}
 	characters, err := cloudAgentMediaCharacters(s.repo, run.UserID, canvas.ProjectID, doc, a)
@@ -814,6 +849,15 @@ func applyCloudAgentResolvedMediaDefaults(req *CreateTaskRequest, plan *cloudAge
 	config, ok := input["config"].(map[string]any)
 	if !ok {
 		return BadAuthRequest("媒体生成未解析出模型配置，未提交生成任务")
+	}
+	// Compare against intent, not req.Input: task admission may normalize that
+	// map in place. Never erase an explicit or inherited choice before checking.
+	requested := cloudAgentMediaOptions(plan.Args).TaskConfig()
+	if plan.Args.VideoArkPrivateAssetUpload != nil {
+		requested["videoArkPrivateAssetUpload"] = strconv.FormatBool(*plan.Args.VideoArkPrivateAssetUpload)
+	}
+	if err := validateCloudAgentResolvedMediaOptions(requested, input); err != nil {
+		return err
 	}
 
 	plan.Args.Size = stringValue(config["size"])

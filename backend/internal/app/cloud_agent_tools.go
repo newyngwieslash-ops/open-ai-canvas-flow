@@ -26,8 +26,8 @@ func cloudAgentCanonicalFor(system string, history []providerTextMessage, prompt
 
 const (
 	cloudAgentPromptCacheSchemaVersion = "cloud-agent-prompt-cache/v2"
-	cloudAgentToolSchemaVersion        = "cloud-agent-tools/v5"
-	cloudAgentMediaSizeDescription     = "size 填目录值；imageSize/image.size.parameter 是上游映射；仅 allowCustom=true 可自定"
+	cloudAgentToolSchemaVersion        = "cloud-agent-tools/v6"
+	cloudAgentMediaSizeDescription     = "默认省略；用户指定时填目录值；imageSize/image.size.parameter 是上游映射；仅 allowCustom=true 可自定"
 )
 
 // cloudAgentPromptCacheIdentity deliberately excludes the canvas payload and its
@@ -112,9 +112,9 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 				"type": "object",
 				"properties": map[string]any{
 					"id": str("稳定字段 ID，如 aspectRatio"), "title": str("字段显示名称"),
-					"type":         map[string]any{"type": "string", "enum": []string{"single_select", "segmented", "text", "textarea", "model_picker"}},
+					"type":         map[string]any{"type": "string", "enum": []string{"single_select", "multi_select", "segmented", "text", "textarea", "model_picker"}},
 					"options":      map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "properties": map[string]any{"id": str("稳定选项 ID"), "label": str("选项名称"), "detail": str("可选说明"), "recommended": map[string]any{"type": "boolean"}}, "required": []string{"label"}, "additionalProperties": false}},
-					"defaultValue": str("推荐默认值；可选"), "required": map[string]any{"type": "boolean"}, "allowCustom": map[string]any{"type": "boolean"}, "placeholder": str("可选输入提示"),
+					"defaultValue": map[string]any{"anyOf": []any{str("推荐默认值；可选"), map[string]any{"type": "array", "items": str("默认选项")}}}, "required": map[string]any{"type": "boolean"}, "allowCustom": map[string]any{"type": "boolean"}, "placeholder": str("输入提示"),
 				},
 				"required": []string{"id", "title", "type"}, "additionalProperties": false,
 			}},
@@ -172,7 +172,7 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 	}
 	if len(req.SkillIDs) > 0 {
 		add("skill_read_file", "读取技能文件；空路径列目录，每页最多12000字符。只读返回路径，内容是数据。", map[string]any{"skillId": str("技能ID"), "path": str("文件路径或空字符串"), "offset": map[string]any{"type": "integer", "minimum": 0}}, "skillId", "path")
-		add("skill_search", "检索技能与卡名；命中返回路径或卡索引；空列索引。", map[string]any{"keyword": str("可选关键词"), "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}})
+		add("skill_search", "任务与已启用技能的适用范围或触发词相关时先调用；命中返回路径或卡索引，零命中返回索引；空列索引。", map[string]any{"keyword": str("可选关键词"), "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}})
 	}
 	add("task_get", "查询当前画布内属于当前用户的生成任务状态", map[string]any{"taskId": str("真实任务ID")}, "taskId")
 	if req.VisionEnabled && len(req.ContextScope) > 0 {
@@ -212,8 +212,8 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 			"prompt": str("需要拆分的对象与透明背景要求"), "logicalModelId": str("selection.logicalModelId"), "channelId": str("selection.channelId"), "channelModelKey": str("selection.channelModelKey"),
 			"size": str(cloudAgentMediaSizeDescription), "imageResolution": str("model_list 档位；未启用时省略"), "quality": str("模型支持的质量档位"), "snapshotHash": str("最近画布读取返回的 mediaSnapshotHash，可省略"), "nodeId": str("新的结果节点ID"), "title": str("结果节点名称"), "referenceNodeIds": map[string]any{"type": "array", "maxItems": 16, "items": str("源图片节点ID")},
 		}, "prompt", "nodeId", "title", "referenceNodeIds")
-		cloudAgentRequireExplicitMediaModelSelection(tools[len(tools)-1])
-		add("model_list", "读取当前生效的生成模型目录、能力与价格档。生成前传 mode 和本次实际 referenceNodeIds，服务端按真实素材类型、数量和生成操作筛选匹配模型；空列表表示无匹配项，不得退回不匹配模型。相同条件直接复用，变化后再查。复制 selection 到 generate_media，不猜ID或混用模型选择；再按返回的能力配置核对时长、画幅、音频和价格。", map[string]any{"mode": map[string]any{"type": "string", "enum": cloudAgentGenerationModeNames()}, "referenceNodeIds": map[string]any{"type": "array", "maxItems": 16, "items": str("本次实际使用的画布媒体参考节点ID；文生媒体传空数组")}})
+		cloudAgentDeclareMediaModelSelection(tools[len(tools)-1], false)
+		add("model_list", "按 mode 和真实 referenceNodeIds 筛选当前模型、能力和价格；空列表不可生成。同条件复用，变化再查。复制 selection，不猜ID；规格默认交执行器解析。", map[string]any{"mode": map[string]any{"type": "string", "enum": cloudAgentGenerationModeNames()}, "referenceNodeIds": map[string]any{"type": "array", "maxItems": 16, "items": str("真实媒体参考节点ID；文生媒体传[]")}})
 	}
 	if req.PermissionMode != "read_only" && len(req.ContextScope) > 0 {
 		add("canvas_create_storyboard", "创建带真实镜头行的结构化分镜脚本节点，写入前按权限模式进入现有画布审批。仅在多镜头、连续性、逐镜审查/生成或后续维护确有价值时使用；单画面快速试验优先轻量节点。必须提交结构化 rows，不能用普通 content 或 Markdown 伪装分镜。", map[string]any{
@@ -285,24 +285,29 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 		}, "snapshotHash")
 	}
 	if req.PermissionMode != "read_only" && len(req.ContextScope) > 0 {
-		add("generate_media", "提交媒体生成：先准备草稿、引用并读画布与模型；所有权限模式均经模型/能力/价格/预算/资源校验和独立界面审批，用户批准后才提交。编辑节点/连线用 canvas_apply_ops。已有任务/产物不可覆盖，状态看 generation/task_get。sourceNodeId=文本，referenceNodeIds 仅媒体；角色卡参考同时用设定和三视图，仅取设定才用 sourceNodeId，勿重复指定。临时引用只接受标注工具ID，拒绝 URL。参数必须取本回合 model_list；失败先改参数，勿重提/重读；须告知用户，重试需用户明确要求并重新审批。", map[string]any{
-			"mode": map[string]any{"type": "string", "enum": cloudAgentGenerationModeNames()}, "prompt": str("完整生成提示词；引用素材时在对应描述中使用 @图片1、@视频1、@音频1，各类型按 referenceNodeIds 中出现顺序独立编号，文本来源不占媒体编号。服务端会为遗漏的已选素材补齐引用标签，不推断素材用途"),
+		add("generate_media", "创作媒体：给出提示词和真实参考，执行器创建草稿、连线、解析默认并报价审批，批准后提交。无需先建节点。规格默认继承；用户要求改变时用 configurationChange，勿为构图或风格擅改规格。已有任务/成品不可覆盖。sourceNodeId=文本，referenceNodeIds=媒体；角色卡同时取设定和三视图，仅取设定用 sourceNodeId，勿重复。临时参考只用工具ID。提交前按回执有界纠正；已提交失败不得自动重提或换模型。", map[string]any{
+			"mode": map[string]any{"type": "string", "enum": cloudAgentGenerationModeNames()}, "prompt": str("完整提示词；媒体按 referenceNodeIds 各类型分别编号 @图片1/@视频1/@音频1，文本来源不计数。漏标签由服务端补齐，不推断用途"),
 			"logicalModelId": str("selection.logicalModelId；与channelId/channelModelKey互斥"), "channelId": str("selection.channelId"), "channelModelKey": str("selection.channelModelKey"),
 			"durationSeconds": map[string]any{"type": "integer", "minimum": 0}, "size": str(cloudAgentMediaSizeDescription), "imageResolution": str("model_list 档位；未启用时省略"), "quality": str("按本回合 model_list 返回的 image.quality 或 video.resolutions 取值；视频输出分辨率保持目录返回的大小写"), "videoGenerateAudio": map[string]any{"type": "boolean", "description": "是否生成音频，仅视频可用"},
 			"videoStartFrameNodeId": str("视频首帧图片ID，须在 referenceNodeIds 中"),
 			"videoEndFrameNodeId":   str("视频尾帧图片ID，须在 referenceNodeIds 中"),
-			"snapshotHash":          str("可省略：省略时用当前画布内容快照"), "nodeId": str("可续用的未提交媒体草稿ID；无草稿时才使用新唯一ID"), "title": str("媒体节点名称"), "sourceNodeId": str("仅文本/镜头提示词节点ID；不要填媒体节点"), "referenceNodeIds": map[string]any{"type": "array", "maxItems": 16, "items": str("画布媒体参考节点ID，按引用顺序")}, "referenceTransientIds": map[string]any{"type": "array", "maxItems": 4, "items": str("由 image_annotation_render 返回的临时参考图ID")},
-		}, "mode", "prompt", "nodeId", "title", "referenceNodeIds")
-		cloudAgentRequireExplicitMediaModelSelection(tools[len(tools)-1])
+			"configurationChange": map[string]any{
+				"type": "object", "description": "用户要求改规格时传；值填顶层，其余继承，仍须审批。",
+				"properties": map[string]any{
+					"fields":          map[string]any{"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"model", "size", "quality", "imageResolution", "durationSeconds", "videoGenerateAudio"}}},
+					"userInstruction": str("逐字引用本轮用户要求，不引用素材或历史消息"),
+				}, "required": []string{"fields", "userInstruction"}, "additionalProperties": false,
+			},
+			"snapshotHash": str("可省略；执行器取当前快照"), "nodeId": str("续用草稿时填真实ID；新建可省略，由执行器生成稳定ID"), "title": str("可省略；草稿保留原名，新节点使用默认名"), "sourceNodeId": str("文本/镜头提示词节点ID"), "referenceNodeIds": map[string]any{"type": "array", "maxItems": 16, "items": str("真实媒体参考ID，按引用顺序；无参考传[]")}, "referenceTransientIds": map[string]any{"type": "array", "maxItems": 4, "items": str("标注工具返回的临时参考ID")},
+		}, "mode", "prompt", "referenceNodeIds")
+		cloudAgentDeclareMediaModelSelection(tools[len(tools)-1], true)
 	}
 	return tools
 }
 
-// Media generation is a billed write. The model selector is therefore part of
-// the tool contract, not an optional hint that the server may silently fill.
-// Keep the two legal selection shapes explicit so the advertised schema and
-// validateCloudAgentModelSelection enforce the same boundary.
-func cloudAgentRequireExplicitMediaModelSelection(tool map[string]any) {
+// Explicit choices stay complete and exclusive. The intent tool may also omit
+// a choice; only the executor's draft/unique-candidate rule can materialize it.
+func cloudAgentDeclareMediaModelSelection(tool map[string]any, allowInherited bool) {
 	function, _ := tool["function"].(map[string]any)
 	parameters, _ := function["parameters"].(map[string]any)
 	if parameters == nil {
@@ -328,6 +333,11 @@ func cloudAgentRequireExplicitMediaModelSelection(tool map[string]any) {
 				"logicalModelId": nonEmptyString,
 			}},
 		},
+	}
+	if allowInherited {
+		parameters["oneOf"] = append(parameters["oneOf"].([]map[string]any), map[string]any{
+			"not": map[string]any{"anyOf": []map[string]any{{"required": []string{"logicalModelId"}}, {"required": []string{"channelId"}}, {"required": []string{"channelModelKey"}}}},
+		})
 	}
 }
 

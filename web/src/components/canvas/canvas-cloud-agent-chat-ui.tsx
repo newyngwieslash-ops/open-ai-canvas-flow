@@ -34,9 +34,9 @@ export type CloudAgentFormOption = { id?: string; label: string; detail?: string
 export type CloudAgentFormField = {
     id: string;
     title: string;
-    type: "single_select" | "segmented" | "text" | "textarea" | "model_picker";
+    type: "single_select" | "multi_select" | "segmented" | "text" | "textarea" | "model_picker";
     options?: CloudAgentFormOption[];
-    defaultValue?: string;
+    defaultValue?: string | string[];
     required?: boolean;
     allowCustom?: boolean;
     placeholder?: string;
@@ -54,8 +54,8 @@ export type CloudAgentUserQuestion = {
 export type CloudAgentFormAnswer = {
     type: "form_answer";
     questionId?: string;
-    answers: Record<string, string>;
-    displayAnswers?: Record<string, string>;
+    answers: Record<string, string | string[]>;
+    displayAnswers?: Record<string, string | string[]>;
     fieldTitles?: Record<string, string>;
     skippedFields?: string[];
     useRecommendedDefaults?: boolean;
@@ -121,10 +121,17 @@ const AGENT_FORM_VALUE_LABELS: Record<string, string> = {
     absurd: "荒诞",
 };
 
-function formAnswerRecord(value: unknown): Record<string, string> | undefined {
+function formAnswerRecord(value: unknown): Record<string, string | string[]> | undefined {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    const entries = Object.entries(value).filter(([, item]) => typeof item === "string" && item.trim());
-    return entries.length ? Object.fromEntries(entries.map(([key, item]) => [key, String(item)])) : undefined;
+    const entries: Record<string, string | string[]> = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (typeof item === "string" && item.trim()) entries[key] = item;
+        if (Array.isArray(item)) {
+            const values = item.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()));
+            if (values.length) entries[key] = values;
+        }
+    }
+    return Object.keys(entries).length ? entries : undefined;
 }
 
 export function parseCloudAgentFormAnswer(value: string): CloudAgentFormAnswer | undefined {
@@ -139,7 +146,10 @@ export function parseCloudAgentFormAnswer(value: string): CloudAgentFormAnswer |
             questionId: typeof record.questionId === "string" ? record.questionId : undefined,
             answers,
             displayAnswers: formAnswerRecord(record.displayAnswers),
-            fieldTitles: formAnswerRecord(record.fieldTitles),
+            fieldTitles:
+                record.fieldTitles && typeof record.fieldTitles === "object" && !Array.isArray(record.fieldTitles)
+                    ? Object.fromEntries(Object.entries(record.fieldTitles).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+                    : undefined,
             skippedFields: Array.isArray(record.skippedFields) ? record.skippedFields.filter((item): item is string => typeof item === "string") : [],
             useRecommendedDefaults: record.useRecommendedDefaults === true,
             additionalNotes: typeof record.additionalNotes === "string" ? record.additionalNotes : undefined,
@@ -159,7 +169,7 @@ function agentFormValueLabel(value: string) {
 
 function AgentFormAnswerCard({ answer, theme }: { answer: CloudAgentFormAnswer; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
     const values = answer.displayAnswers && Object.keys(answer.displayAnswers).length ? answer.displayAnswers : answer.answers;
-    const entries = Object.entries(values).filter(([, value]) => value.trim());
+    const entries = Object.entries(values).filter(([, value]) => (Array.isArray(value) ? value.length > 0 : value.trim()));
     return (
         <div className="agent-form-answer-card" style={{ color: theme.node.text }}>
             <div className="agent-form-answer-heading">已确认创作方向</div>
@@ -169,13 +179,21 @@ function AgentFormAnswerCard({ answer, theme }: { answer: CloudAgentFormAnswer; 
                     {entries.map(([key, value]) => (
                         <div className="agent-form-answer-row" key={key}>
                             <span className="agent-form-answer-label">{agentFormFieldLabel(key, answer.fieldTitles)}</span>
-                            <span className="agent-form-answer-value">{answer.displayAnswers?.[key] || agentFormValueLabel(value)}</span>
+                            <span className="agent-form-answer-value">{answer.displayAnswers?.[key] || (Array.isArray(value) ? value.map(agentFormValueLabel).join("、") : agentFormValueLabel(value))}</span>
                         </div>
                     ))}
-                    {answer.additionalNotes ? <div className="agent-form-answer-row"><span className="agent-form-answer-label">补充说明</span><span className="agent-form-answer-value">{answer.additionalNotes}</span></div> : null}
+                    {answer.additionalNotes ? (
+                        <div className="agent-form-answer-row">
+                            <span className="agent-form-answer-label">补充说明</span>
+                            <span className="agent-form-answer-value">{answer.additionalNotes}</span>
+                        </div>
+                    ) : null}
                 </div>
             ) : answer.additionalNotes ? (
-                <div className="agent-form-answer-row"><span className="agent-form-answer-label">补充说明</span><span className="agent-form-answer-value">{answer.additionalNotes}</span></div>
+                <div className="agent-form-answer-row">
+                    <span className="agent-form-answer-label">补充说明</span>
+                    <span className="agent-form-answer-value">{answer.additionalNotes}</span>
+                </div>
             ) : (
                 <div className="agent-form-answer-note">已确认，按推荐方案继续</div>
             )}
@@ -583,15 +601,7 @@ function useTypewriterText(targetText: string, shouldAnimate: boolean) {
             // Normal output remains visibly animated. Once stream chunks start
             // outrunning the renderer, increase the batch instead of queuing
             // every code point behind a fixed 16ms delay.
-            const revealCount = pendingCharacters > 384
-                ? pendingCharacters
-                : pendingCharacters > 192
-                    ? 32
-                    : pendingCharacters > 96
-                        ? 16
-                        : pendingCharacters > 24
-                            ? 8
-                            : 3;
+            const revealCount = pendingCharacters > 384 ? pendingCharacters : pendingCharacters > 192 ? 32 : pendingCharacters > 96 ? 16 : pendingCharacters > 24 ? 8 : 3;
             const nextText = targetCharacters.slice(0, currentCharacters.length + revealCount).join("");
             visibleRef.current = nextText;
             setVisibleText(nextText);
@@ -1013,8 +1023,16 @@ const EMPTY_QUESTION_FIELDS: CloudAgentFormField[] = [];
 export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }: { question: CloudAgentUserQuestion; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onAnswer: (answer: string) => void; disabled?: boolean }) {
     const fields = question.fields || EMPTY_QUESTION_FIELDS;
     const isForm = question.kind === "form" || fields.length > 0;
-    const fieldDefaultValue = (field: CloudAgentFormField) => field.defaultValue || field.options?.find((option) => option.recommended)?.id || field.options?.find((option) => option.recommended)?.label || "";
-    const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((field) => [field.id, fieldDefaultValue(field)])));
+    const fieldDefaultValue = (field: CloudAgentFormField): string | string[] => {
+        if (field.defaultValue !== undefined) {
+            if (field.type === "multi_select") return Array.isArray(field.defaultValue) ? field.defaultValue : [field.defaultValue];
+            return Array.isArray(field.defaultValue) ? field.defaultValue[0] || "" : field.defaultValue;
+        }
+        const recommended = field.options?.filter((option) => option.recommended).map((option) => option.id || option.label) || [];
+        if (field.type === "multi_select") return recommended;
+        return recommended[0] || "";
+    };
+    const [values, setValues] = useState<Record<string, string | string[]>>(() => Object.fromEntries(fields.map((field) => [field.id, fieldDefaultValue(field)])));
     const [customFields, setCustomFields] = useState<Record<string, boolean>>({});
     const [additionalNotes, setAdditionalNotes] = useState("");
     const [validation, setValidation] = useState("");
@@ -1027,16 +1045,28 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
     }, [question.questionId, fields]);
 
     const submitForm = (useDefaults = false) => {
-        const answers = useDefaults ? Object.fromEntries(fields.map((field) => [field.id, field.defaultValue || ""])) : values;
-        const missing = fields.find((field) => (field.required && !String(answers[field.id] || "").trim()) || (field.required && answers[field.id] === "other"));
+        const answers = useDefaults ? Object.fromEntries(fields.map((field) => [field.id, fieldDefaultValue(field)])) : values;
+        const missing = fields.find((field) => {
+            const value = answers[field.id];
+            const empty = Array.isArray(value) ? value.length === 0 : !String(value || "").trim();
+            return field.required && (empty || value === "other");
+        });
         if (missing) {
             setValidation(`请填写“${missing.title}”`);
             return;
         }
         setValidation("");
-        const displayAnswers: Record<string, string> = {};
+        const displayAnswers: Record<string, string | string[]> = {};
         for (const field of fields) {
-            const value = String(answers[field.id] || "").trim();
+            const rawValue = answers[field.id];
+            if (Array.isArray(rawValue)) {
+                const selected = rawValue.map((value) => String(value).trim()).filter(Boolean);
+                if (selected.length) {
+                    displayAnswers[field.id] = selected.map((value) => field.options?.find((item) => (item.id || item.label) === value)?.label || value);
+                }
+                continue;
+            }
+            const value = String(rawValue || "").trim();
             if (!value || value === "other") continue;
             const option = field.options?.find((item) => (item.id || item.label) === value);
             displayAnswers[field.id] = option?.label || value;
@@ -1060,7 +1090,11 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
         event.stopPropagation();
     };
     const updateValue = (field: CloudAgentFormField, value: string) => {
-        setValues((current) => ({ ...current, [field.id]: value }));
+        setValues((current) => {
+            if (field.type !== "multi_select") return { ...current, [field.id]: value };
+            const selected = Array.isArray(current[field.id]) ? (current[field.id] as string[]) : [];
+            return { ...current, [field.id]: selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value] };
+        });
         if (field.allowCustom && value === "other") setCustomFields((current) => ({ ...current, [field.id]: true }));
     };
 
@@ -1110,10 +1144,11 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
                                             onPointerDown={stop}
                                         />
                                     ) : (
-                                        <div className="agent-question-options" role="radiogroup" aria-label={field.title}>
+                                        <div className="agent-question-options" role={field.type === "multi_select" ? "group" : "radiogroup"} aria-label={field.title}>
                                             {options.map((option) => {
                                                 const optionId = option.id || option.label;
-                                                const selected = values[field.id] === optionId;
+                                                const selectedValues = values[field.id];
+                                                const selected = field.type === "multi_select" ? Array.isArray(selectedValues) && selectedValues.includes(optionId) : selectedValues === optionId;
                                                 return (
                                                     <button
                                                         key={optionId}
@@ -1153,7 +1188,9 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
                     })}
                 </div>
                 <div className="agent-question-field px-3 pb-2">
-                    <label className="agent-question-field-label" htmlFor="agent-question-additional-notes">补充说明</label>
+                    <label className="agent-question-field-label" htmlFor="agent-question-additional-notes">
+                        补充说明
+                    </label>
                     <textarea
                         id="agent-question-additional-notes"
                         rows={2}

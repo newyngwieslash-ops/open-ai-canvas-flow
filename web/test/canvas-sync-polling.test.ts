@@ -5,7 +5,7 @@ const settle = async () => {
     for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 
-function fixture(poll: (signal: AbortSignal) => Promise<void> = async () => {}, initiallyOffline = false) {
+function fixture(poll: (signal: AbortSignal) => Promise<void> = async () => {}, initiallyOffline = false, options: Parameters<typeof startCanvasSyncPolling>[2] = {}) {
     let now = 0;
     let hidden = false;
     let online = !initiallyOffline;
@@ -38,6 +38,7 @@ function fixture(poll: (signal: AbortSignal) => Promise<void> = async () => {}, 
                 timers.delete(timer as unknown as number);
             },
         },
+        options,
     );
     return {
         calls,
@@ -67,6 +68,32 @@ function fixture(poll: (signal: AbortSignal) => Promise<void> = async () => {}, 
         },
     };
 }
+
+test("healthy WebSocket reduces polling and invalidations wake it without overlapping", async () => {
+    let connected = true;
+    let invalidate: (() => void) | undefined;
+    let unsubscribed = false;
+    const f = fixture(async () => {}, false, {
+        interval: () => (connected ? 30000 : 2000),
+        listen: (wake) => {
+            invalidate = wake;
+            return () => {
+                unsubscribed = true;
+            };
+        },
+    });
+    await f.advance(10000);
+    expect(f.calls).toEqual([0]);
+    invalidate?.();
+    await settle();
+    expect(f.calls).toEqual([0, 10000]);
+    connected = false;
+    invalidate?.();
+    await f.advance(2000);
+    expect(f.calls).toEqual([0, 10000, 10000, 12000]);
+    f.stop();
+    expect(unsubscribed).toBe(true);
+});
 
 test("visible canvas polls every two seconds after the previous request completes", async () => {
     const f = fixture();

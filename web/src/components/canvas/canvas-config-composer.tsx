@@ -13,7 +13,7 @@ import { CanvasVideoPromptTools } from "./canvas-video-prompt-tools";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { getEditableSelection, setEditableSelection } from "./canvas-mention-editable";
 import { composerReferences, insertComposerPreset } from "./canvas-composer-references";
-import { CanvasTextLeaseIndicator, useCanvasTextLease } from "./use-canvas-text-lease";
+import { CanvasTextLeaseIndicator } from "./use-canvas-text-lease";
 
 type ComposerProps = {
     nodeId: string; canvasId: string;
@@ -24,8 +24,7 @@ type ComposerProps = {
 };
 
 export function CanvasConfigComposer({ nodeId, canvasId, value, inputs, skillReferences = [], generationMode = "image", metadata, onChange, onMetadataChange, onClose, workspaceMode = "professional" }: ComposerProps) {
-    const textLease = useCanvasTextLease(nodeId, canvasId);
-    const readOnly = textLease.blocked || Boolean(metadata?.locked);
+    const readOnly = Boolean(metadata?.locked);
     const theme = canvasThemes[useActiveTheme()];
     const container = useRef<HTMLDivElement>(null);
     const caret = useRef<{ start: number; end: number } | null>(null);

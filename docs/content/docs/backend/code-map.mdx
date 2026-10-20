@@ -5,6 +5,13 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## 画布实时会话
+
+- 传输入口：`backend/internal/handler/canvas_realtime.go` 校验登录与 Origin、管理 WebSocket；`app/canvas_realtime.go` 校验画布归属，`internal/canvas/realtime.go` 负责临时 Presence、房间隔离与 Redis 分发，`realtime_devices.go` 管理跨实例统一窗口编号及临时租期。
+- 提交通知：`repository/canvas_change_notifications.go` 与 `repository.go` 在外层事务提交后合并通知，回滚丢弃；operations、历史保存、租约、Agent 任务创建及任务结果回写沿用该边界。
+- 前端连接：`web/src/services/canvas-realtime-client.ts` 管理合并发送和重连，`canvas-realtime.ts` 按账号与画布共享窗口内连接；`pages/canvas/use-canvas-project-lifecycle.ts` 联动状态校验和独立租约维护。
+- 光标与拖拽：`components/canvas/canvas-collaboration-layer.tsx` 管理设备列表和多人事件采集，单窗口停止采集；`canvas-presence-renderer.ts` 负责按帧复用 DOM 投影远端图形，高频坐标不经过 React。`nginx.conf`、`web/vite.config.ts` 转发 WebSocket Upgrade。
+
 ## 用户登录日志
 
 - 持久化：`backend/internal/model/models_login_log.go`、`repository/login_logs.go`；会话与日志原子提交在 `repository/account.go`，schema v53 在 `database/migrations.go`。
@@ -86,7 +93,7 @@ Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` �
 | 页面装配和跨域动作协调 | `web/src/pages/canvas/project.tsx` |
 | 画布领域规则和生成协议 | `web/src/lib/canvas/canvas-project-domain.ts`、`canvas-project-generation.ts`、`produced-model.ts` |
 | 项目恢复、持久化和项目级动作 | `web/src/pages/canvas/use-canvas-project-lifecycle.ts` |
-| 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts`、`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
+| 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts` 协调快照和确认；`web/src/services/canvas-mutation-batches.ts` 按服务端 500 条上限顺序提交、先持久化后发送并保留重放 ID；`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
 | 内部资源保护与维护快照 | `backend/internal/canvas/canvas_history.go`、`repair_resources.go`、`backend/internal/repository/canvas_history.go`；仅供资源完整性维护和审计，不提供用户历史树、预览或恢复入口 |
 | Patch 历史、生成任务和重试控制 | `web/src/pages/canvas/use-canvas-history.ts`、`use-canvas-generation.ts`、`use-canvas-generation-executor.ts`、`use-canvas-generation-retry.ts` |
 | 文本、图片、视频和音频生成执行 | `web/src/pages/canvas/canvas-*-generation-executor*.ts` |
@@ -98,9 +105,16 @@ Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` �
 | 派生渲染模型和画布分层 | `web/src/pages/canvas/use-canvas-render-model.ts`、`canvas-project-world-layers.tsx`、`canvas-project-context-menu.tsx`、`canvas-project-status-dialogs.tsx` |
 | 顶栏、反馈和 screen-space 浮层 | `web/src/pages/canvas/canvas-project-top-bar.tsx`、`canvas-project-feedback.tsx`、`canvas-project-selection-toolbar.tsx`、`components/canvas/canvas-workspace-overlays.tsx` |
 | 媒体弹窗装配 | `web/src/pages/canvas/canvas-project-media-dialogs.tsx` |
-| 画布视口、拖拽、缩放和框选 | `web/src/components/canvas/canvas-viewport.tsx`、`web/src/lib/canvas/canvas-live-viewport.ts` |
+| 画布视口、拖拽、缩放和框选 | `web/src/components/canvas/canvas-viewport.tsx`、`web/src/lib/canvas/canvas-live-viewport.ts`；`pages/canvas/use-canvas-image-wheel-resize.ts` 合并单选图片 Ctrl 滚轮尺寸、历史和保存，`lib/canvas/canvas-wheel.ts` 识别离散滚轮，角点与滚轮共用 registry 最小尺寸规则 |
 | 节点渲染与节点工具 | `web/src/components/canvas/canvas-node.tsx`、`canvas-node-hover-toolbar.tsx`、`canvas-node-toolbar.tsx` |
 | 图片多角度、宫格切分与多选框 | `canvas-node-angle-dialog.tsx`、`canvas-angle-scene.tsx`、`canvas-grid-split-picker.tsx`、`web/src/lib/canvas/canvas-grid-split.ts`、`canvas-selection.ts` |
+| 图片自然比例与默认尺寸 | `web/src/lib/canvas/canvas-node-size.ts`；上传、生成结果和派生图片共用尺寸规则，节点调整继续使用现有角点入口 |
+| 图片编辑副本与工具菜单 | `web/src/lib/canvas/tool-registry/definitions/node-hover-tools.tsx` 声明入口；`web/src/pages/canvas/use-canvas-node-operations.ts` 负责带来源连线的复制；`web/src/components/canvas/canvas-node-toolbar.tsx` 与 `canvas-grid-split-picker.css` 共用菜单布局、滚动及子面板视口约束 |
+| 浮层可用区与小屏模式 | `web/src/lib/canvas/canvas-overlay-layout.ts` 计算侧栏/工具区边界并维护面板矩形通知；`canvas-workspace-overlays.tsx` 发布实测面板布局，`canvas-node-toolbar.tsx` 避让；`web/src/hooks/use-focus-mode.ts` 以用户明确偏好优先于小屏默认 |
+| 图片方向与资源保留 | `web/src/pages/canvas/use-canvas-image-rotation.ts` 协调首次副本、只读、锁定和异步提交；`web/src/lib/canvas/canvas-image-edit-copy.ts` 共用编辑副本创建、来源线及空位；`web/src/lib/canvas/canvas-image-rotation.ts` 更新节点与引用行状态；`web/src/services/canvas-image-rotation.ts` 从原图旋转、上传并复用方向资源；原图及派生资源由 `backend/internal/assets/references.go`、`web/src/services/user-data-sync-media.ts`、`canvas-missing-resources.ts` 收集 |
+| 批量表编辑与渲染 | `web/src/components/canvas/canvas-batch-table-node.tsx` 处理行编辑、内部滚动及添加/插入；`web/src/lib/canvas/canvas-batch-window.ts` 限定大表挂载行；`canvas-batch-row-equality.ts` 判断影响行展示的引用变化 |
+| 批量表参考图绑定 | `web/src/pages/canvas/use-canvas-batch-references.tsx` 协调选择、上传、替换确认和按列重置；`web/src/lib/canvas/canvas-batch-references.ts` 同步列默认、保留单格覆盖，维护稳定行/列句柄并筛除离屏格线绘制；`web/src/pages/canvas/use-canvas-batch-table.ts` 保留 AI 列表和既有列模式的行规则 |
+| 批量任务输入冻结 | `web/src/lib/canvas/canvas-batch-table-state.ts` 准备任务；`canvas-batch-input-snapshot.ts` 保存提示词及最小资源引用快照；`web/src/pages/canvas/use-canvas-generation-batches.ts` 持久化队列与重试，`use-canvas-generation-executor.ts` 以快照构建本次输入，不读取排队期间变更后的源图 |
 | 生成 Composer | `web/src/components/canvas/canvas-node-prompt-panel.tsx`、`canvas-config-composer.tsx` |
 | 风格中心、用户风格编辑与项目快照 | `web/src/components/canvas/canvas-style-picker-modal.tsx`、`style-profile-editor-modal.tsx`、`style-asset-binding-modal.tsx`、`web/src/lib/canvas/style-profile.ts`、`web/src/services/api/style-profiles.ts` |
 | 分镜脚本节点 | `web/src/components/canvas/canvas-script-node.tsx` |
@@ -209,3 +223,7 @@ HTTP 请求 -> handler -> service（稳定导入面 / 别名）-> app（组合�
 - `web/src/services/inspiration-catalog.ts`：全量目录与画廊池的运行时加载、内存缓存与失败退回。
 - `web/src/stores/use-inspiration-store.ts`：自建／覆盖／隐藏／收藏的本地持久化与导入导出。
 - `web/scripts/import-inspirations.mjs`：外部来源同步、等距抽取、缩略图生成与画廊池落盘；产物在 `web/public/inspirations/` 与 `web/public/inspiration-thumbs/`。
+
+## 画布外观
+
+`web/src/lib/canvas/canvas-appearance.ts` 管理预设快照、浅深记忆与默认偏好；`web/src/components/canvas/canvas-appearance-controls.tsx` 管理展开与微调；`web/src/components/canvas/canvas-toolbar.tsx` 限制外观和添加节点浮层尺寸。`web/src/stores/canvas/use-canvas-store.ts` 在创建时写入实际外观与线网格默认值，后续沿用画布持久化。
