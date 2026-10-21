@@ -5,6 +5,16 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## yuxibox minimax-h3-quality 视频协议（2026-10-21）
+
+- 已实现：新增独立插件 `yuxibox-minimax-h3-quality`（`POST /v1/videos` JSON、`GET /v1/videos/{{taskId}}` 轮询、`/content` 二进制回退），与 `yuxibox Seedance` 分开配置。参数：提示词 ≤20000 字符、时长 1–15 秒、分辨率 `480p`/`768p`（`720p` 归一为 `768p`）、比例 16:9/9:16/1:1、参考图 1–9 张公网 HTTPS、参考音频 0–3 条；**不支持参考视频**（`videos` 映射为 `unsupported`，准入阶段拒绝）。`seed` 通过 `providerOptions.yuxibox-minimax-h3-quality.seed` 传入。
+- 自动验证：`go test ./internal/protocol/` 全量通过，新增 4 项契约测试覆盖请求体逐字段（含 `720P → 768p` 别名、空 `audios` 省略、`seed` 透传）、11 项非法输入拒绝（含参考视频存在）、响应四态映射与 `video_url` 优先于 `download_url`、`/content` 下载端点与 Bearer 注入。`go build ./...` 通过。未调用真实上游。
+- 计费边界：按秒计费两档价（480p/768p）按高峰价配置；**空闲时段（00:00–08:00）差价当前无法自动生效**——价格档模型没有时间窗口选择器，需在管理后台按运营口径单独调整。
+- [ ] 用户验收：在系统渠道添加 `yuxibox minimax-h3-quality` 并填真实 Key，确认协议下拉可见、能力档位为 480P/768P、参考视频入口被拒。
+- [ ] 真实生成：分别验证 480p 与 768p、5 秒与 15 秒、单图与 9 图、带参考音频，确认成片保存到画布且 `video_url` 立即持久化。
+- [ ] 验证 `720P` 选择后实际请求 `resolution` 为 `768p`，并确认上游按 768p 规格计费。
+- [ ] 确认高峰/空闲两档实际账单，据实回填管理后台价目表（当前基础价只配了高峰档）。
+
 ## 平台级 Agent（单一面板，画布可选绑定）
 
 - 已实现：`CanvasCloudAgentPanel` 挂在 `UserLayout`，所有登录页面共用一个实例（跨路由不卸载）。画布编辑器只通过 `web/src/stores/use-global-agent-store.ts` 发布当前画布上下文（画布 ID、节点、选区、引用、预填），离开画布时撤回。发送时有画布就带 `canvasId` 和画布上下文，没有就不带。
