@@ -1,0 +1,261 @@
+backend\cmd\host-updater\main.go:17:2: cannot find package "yingce/backend/internal/hostupdate" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\hostupdate (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\hostupdate (from $GOPATH)
+backend\cmd\migrate-channel-model-price-tiers\main.go:20:2: cannot find package "gorm.io/gorm" in any of:
+	C:\Program Files\Go\src\gorm.io\gorm (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\gorm (from $GOPATH)
+backend\cmd\migrate-channel-model-price-tiers\main.go:15:2: cannot find package "yingce/backend/internal/database" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\database (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\database (from $GOPATH)
+backend\cmd\migrate-channel-model-price-tiers\main.go:16:2: cannot find package "yingce/backend/internal/model" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\model (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\model (from $GOPATH)
+backend\cmd\migrate-channel-model-price-tiers\main.go:17:2: cannot find package "yingce/backend/internal/repository" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\repository (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\repository (from $GOPATH)
+backend\cmd\migrate-channel-model-price-tiers\main.go:18:2: cannot find package "yingce/backend/internal/service" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\service (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\service (from $GOPATH)
+backend\cmd\migrate-schema\main.go:10:2: cannot find package "yingce/backend/internal/canvas" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\canvas (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\canvas (from $GOPATH)
+backend\cmd\migrate-sqlite-postgres\main.go:20:2: cannot find package "gorm.io/gorm/logger" in any of:
+	C:\Program Files\Go\src\gorm.io\gorm\logger (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\gorm\logger (from $GOPATH)
+backend\cmd\migrate-sqlite-postgres\main.go:21:2: cannot find package "gorm.io/gorm/schema" in any of:
+	C:\Program Files\Go\src\gorm.io\gorm\schema (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\gorm\schema (from $GOPATH)
+backend\cmd\payment-alipay\main.go:8:2: cannot find package "yingce/backend/payment-plugins" in any of:
+	C:\Program Files\Go\src\yingce\backend\payment-plugins (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\payment-plugins (from $GOPATH)
+backend\cmd\seed-metaso-channel-model\main.go:30:2: cannot find package "yingce/backend/internal/app" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\app (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\app (from $GOPATH)
+backend\cmd\server\main.go:26:2: cannot find package "github.com/gin-gonic/gin" in any of:
+	C:\Program Files\Go\src\github.com\gin-gonic\gin (from $GOROOT)
+	F:\goFrameLearn\src\github.com\gin-gonic\gin (from $GOPATH)
+backend\cmd\server\system_status.go:8:2: cannot find package "yingce/backend/internal/buildinfo" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\buildinfo (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\buildinfo (from $GOPATH)
+backend\cmd\server\main.go:20:2: cannot find package "yingce/backend/internal/handler" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\handler (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\handler (from $GOPATH)
+backend\cmd\server\main.go:21:2: cannot find package "yingce/backend/internal/logging" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\logging (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\logging (from $GOPATH)
+backend\cmd\server\main.go:24:2: cannot find package "yingce/backend/internal/updaterclient" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\updaterclient (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\updaterclient (from $GOPATH)
+backend\internal\agent\yingceagent\client.go:14:2: cannot find package "yingce/backend/internal/agent/runtime" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\agent\runtime (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\agent\runtime (from $GOPATH)
+backend\internal\app\resource_store.go:22:2: cannot find package "github.com/gabriel-vasile/mimetype" in any of:
+	C:\Program Files\Go\src\github.com\gabriel-vasile\mimetype (from $GOROOT)
+	F:\goFrameLearn\src\github.com\gabriel-vasile\mimetype (from $GOPATH)
+backend\internal\app\provider_protocol.go:13:2: cannot find package "github.com/google/uuid" in any of:
+	C:\Program Files\Go\src\github.com\google\uuid (from $GOROOT)
+	F:\goFrameLearn\src\github.com\google\uuid (from $GOPATH)
+backend\internal\app\admin_system_performance.go:20:2: cannot find package "github.com/redis/go-redis/v9" in any of:
+	C:\Program Files\Go\src\github.com\redis\go-redis\v9 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\redis\go-redis\v9 (from $GOPATH)
+backend\internal\app\storage_location.go:18:2: cannot find package "github.com/tencentyun/cos-go-sdk-v5" in any of:
+	C:\Program Files\Go\src\github.com\tencentyun\cos-go-sdk-v5 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\tencentyun\cos-go-sdk-v5 (from $GOPATH)
+backend\internal\app\provider_ark_private_assets.go:16:2: cannot find package "github.com/volcengine/volc-sdk-golang/base" in any of:
+	C:\Program Files\Go\src\github.com\volcengine\volc-sdk-golang\base (from $GOROOT)
+	F:\goFrameLearn\src\github.com\volcengine\volc-sdk-golang\base (from $GOPATH)
+backend\internal\app\project_workbench_read.go:6:2: cannot find package "golang.org/x/sync/errgroup" in any of:
+	C:\Program Files\Go\src\golang.org\x\sync\errgroup (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\sync\errgroup (from $GOPATH)
+backend\internal\app\system_metrics_windows.go:8:2: cannot find package "golang.org/x/sys/windows" in any of:
+	C:\Program Files\Go\src\golang.org\x\sys\windows (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\sys\windows (from $GOPATH)
+backend\internal\app\admin_system_performance.go:14:2: cannot find package "yingce/backend/internal/agent/yingceagent" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\agent\yingceagent (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\agent\yingceagent (from $GOPATH)
+backend\internal\app\cloud_agent_context_compaction.go:10:2: cannot find package "yingce/backend/internal/agentcontext" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\agentcontext (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\agentcontext (from $GOPATH)
+backend\internal\app\admin_storage.go:8:2: cannot find package "yingce/backend/internal/assets" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\assets (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\assets (from $GOPATH)
+backend\internal\app\auth_bridge.go:7:2: cannot find package "yingce/backend/internal/auth" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\auth (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\auth (from $GOPATH)
+backend\internal\app\cloud_agent_approval_preview.go:13:2: cannot find package "yingce/backend/internal/canvas/capability" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\canvas\capability (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\canvas\capability (from $GOPATH)
+backend\internal\app\cloud_agent_generation_contract.go:5:2: cannot find package "yingce/backend/internal/canvas/contract" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\canvas\contract (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\canvas\contract (from $GOPATH)
+backend\internal\app\cloud_agent_approval_preview.go:14:2: cannot find package "yingce/backend/internal/canvas/layout" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\canvas\layout (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\canvas\layout (from $GOPATH)
+backend\internal\app\generation_registry_bridge.go:6:2: cannot find package "yingce/backend/internal/generation" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\generation (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\generation (from $GOPATH)
+backend\internal\app\admin.go:8:2: cannot find package "yingce/backend/internal/kernel" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\kernel (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\kernel (from $GOPATH)
+backend\internal\app\outbound_alias.go:8:2: cannot find package "yingce/backend/internal/outbound" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\outbound (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\outbound (from $GOPATH)
+backend\internal\app\payment.go:16:2: cannot find package "yingce/backend/internal/payment" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\payment (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\payment (from $GOPATH)
+backend\internal\app\admin_system_performance.go:17:2: cannot find package "yingce/backend/internal/platform" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\platform (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\platform (from $GOPATH)
+backend\internal\app\cloud_agent_policy.go:9:2: cannot find package "yingce/backend/internal/prompts" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\prompts (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\prompts (from $GOPATH)
+backend\internal\app\channel_models.go:11:2: cannot find package "yingce/backend/internal/protocol" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\protocol (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\protocol (from $GOPATH)
+backend\internal\app\channel_model_catalog_plugin.go:10:2: cannot find package "yingce/backend/internal/provider" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\provider (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\provider (from $GOPATH)
+backend\internal\app\channel_model_catalog_plugin.go:11:2: cannot find package "yingce/backend/internal/provider/bailian" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\provider\bailian (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\provider\bailian (from $GOPATH)
+backend\internal\app\provider_catalog.go:18:2: cannot find package "yingce/backend/internal/providercatalog" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\providercatalog (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\providercatalog (from $GOPATH)
+backend\internal\app\service.go:23:2: cannot find package "yingce/backend/internal/skills" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\skills (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\skills (from $GOPATH)
+backend\internal\app\notifications_bridge.go:10:2: cannot find package "yingce/backend/internal/sms" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\sms (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\sms (from $GOPATH)
+backend\internal\app\settings.go:22:2: cannot find package "yingce/backend/internal/storage" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\storage (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\storage (from $GOPATH)
+backend\internal\app\service.go:25:2: cannot find package "yingce/backend/internal/tools" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\tools (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\tools (from $GOPATH)
+backend\internal\app\service.go:26:2: cannot find package "yingce/backend/internal/workbench" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\workbench (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\workbench (from $GOPATH)
+backend\internal\auth\auth.go:18:2: cannot find package "golang.org/x/crypto/bcrypt" in any of:
+	C:\Program Files\Go\src\golang.org\x\crypto\bcrypt (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\crypto\bcrypt (from $GOPATH)
+backend\internal\database\postgres_connection.go:12:2: cannot find package "github.com/jackc/pgx/v5" in any of:
+	C:\Program Files\Go\src\github.com\jackc\pgx\v5 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\jackc\pgx\v5 (from $GOPATH)
+backend\internal\database\database.go:11:2: cannot find package "github.com/jackc/pgx/v5/stdlib" in any of:
+	C:\Program Files\Go\src\github.com\jackc\pgx\v5\stdlib (from $GOROOT)
+	F:\goFrameLearn\src\github.com\jackc\pgx\v5\stdlib (from $GOPATH)
+backend\internal\database\database.go:12:2: cannot find package "gorm.io/driver/postgres" in any of:
+	C:\Program Files\Go\src\gorm.io\driver\postgres (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\driver\postgres (from $GOPATH)
+backend\internal\database\database.go:13:2: cannot find package "gorm.io/driver/sqlite" in any of:
+	C:\Program Files\Go\src\gorm.io\driver\sqlite (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\driver\sqlite (from $GOPATH)
+backend\internal\database\prefixed_ids.go:14:2: cannot find package "gorm.io/gorm/clause" in any of:
+	C:\Program Files\Go\src\gorm.io\gorm\clause (from $GOROOT)
+	F:\goFrameLearn\src\gorm.io\gorm\clause (from $GOPATH)
+backend\internal\handler\canvas_realtime.go:7:2: cannot find package "github.com/coder/websocket" in any of:
+	C:\Program Files\Go\src\github.com\coder\websocket (from $GOROOT)
+	F:\goFrameLearn\src\github.com\coder\websocket (from $GOPATH)
+backend\internal\handler\canvas_realtime.go:8:2: cannot find package "github.com/coder/websocket/wsjson" in any of:
+	C:\Program Files\Go\src\github.com\coder\websocket\wsjson (from $GOROOT)
+	F:\goFrameLearn\src\github.com\coder\websocket\wsjson (from $GOPATH)
+backend\internal\outbound\outbound.go:19:2: cannot find package "golang.org/x/net/http/httpproxy" in any of:
+	C:\Program Files\Go\src\golang.org\x\net\http\httpproxy (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\net\http\httpproxy (from $GOPATH)
+backend\internal\outbound\outbound.go:20:2: cannot find package "golang.org/x/net/proxy" in any of:
+	C:\Program Files\Go\src\golang.org\x\net\proxy (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\net\proxy (from $GOPATH)
+backend\internal\outbound\outboundtest\resolver.go:12:2: cannot find package "golang.org/x/net/dns/dnsmessage" in any of:
+	C:\Program Files\Go\src\golang.org\x\net\dns\dnsmessage (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\net\dns\dnsmessage (from $GOPATH)
+backend\internal\payment\types.go:5:2: cannot find package "yingce/backend/payment-sdk" in any of:
+	C:\Program Files\Go\src\yingce\backend\payment-sdk (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\payment-sdk (from $GOPATH)
+backend\internal\repository\email_identity.go:4:2: cannot find package "yingce/backend/internal/emailidentity" in any of:
+	C:\Program Files\Go\src\yingce\backend\internal\emailidentity (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\internal\emailidentity (from $GOPATH)
+backend\internal\skills\skills_builtin.go:14:2: cannot find package "yingce/backend/builtin" in any of:
+	C:\Program Files\Go\src\yingce\backend\builtin (from $GOROOT)
+	F:\goFrameLearn\src\yingce\backend\builtin (from $GOPATH)
+backend\internal\sms\service.go:15:2: cannot find package "github.com/casdoor/go-sms-sender" in any of:
+	C:\Program Files\Go\src\github.com\casdoor\go-sms-sender (from $GOROOT)
+	F:\goFrameLearn\src\github.com\casdoor\go-sms-sender (from $GOPATH)
+backend\internal\storage\s3.go:16:2: cannot find package "github.com/aws/aws-sdk-go/aws" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws (from $GOPATH)
+backend\internal\storage\s3.go:17:2: cannot find package "github.com/aws/aws-sdk-go/aws/awserr" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws\awserr (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws\awserr (from $GOPATH)
+backend\internal\storage\objects.go:11:2: cannot find package "github.com/aws/aws-sdk-go/aws/credentials" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws\credentials (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws\credentials (from $GOPATH)
+backend\internal\storage\s3.go:19:2: cannot find package "github.com/aws/aws-sdk-go/aws/request" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws\request (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws\request (from $GOPATH)
+backend\internal\storage\s3.go:20:2: cannot find package "github.com/aws/aws-sdk-go/aws/session" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws\session (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws\session (from $GOPATH)
+backend\internal\storage\objects.go:12:2: cannot find package "github.com/aws/aws-sdk-go/aws/signer/v4" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\aws\signer\v4 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\aws\signer\v4 (from $GOPATH)
+backend\internal\storage\s3.go:22:2: cannot find package "github.com/aws/aws-sdk-go/service/s3" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\service\s3 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\service\s3 (from $GOPATH)
+backend\internal\storage\objects.go:13:2: cannot find package "github.com/qiniu/go-sdk/v7/auth" in any of:
+	C:\Program Files\Go\src\github.com\qiniu\go-sdk\v7\auth (from $GOROOT)
+	F:\goFrameLearn\src\github.com\qiniu\go-sdk\v7\auth (from $GOPATH)
+backend\internal\storage\objects.go:14:2: cannot find package "github.com/qiniu/go-sdk/v7/storage" in any of:
+	C:\Program Files\Go\src\github.com\qiniu\go-sdk\v7\storage (from $GOROOT)
+	F:\goFrameLearn\src\github.com\qiniu\go-sdk\v7\storage (from $GOPATH)
+backend\payment-plugins\bill.go:16:2: cannot find package "golang.org/x/text/encoding/simplifiedchinese" in any of:
+	C:\Program Files\Go\src\golang.org\x\text\encoding\simplifiedchinese (from $GOROOT)
+	F:\goFrameLearn\src\golang.org\x\text\encoding\simplifiedchinese (from $GOPATH)
+backend\third_party\go-sms-sender\aliyun.go:22:2: cannot find package "github.com/aliyun/alibaba-cloud-sdk-go/services/dysmsapi" in any of:
+	C:\Program Files\Go\src\github.com\aliyun\alibaba-cloud-sdk-go\services\dysmsapi (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aliyun\alibaba-cloud-sdk-go\services\dysmsapi (from $GOPATH)
+backend\third_party\go-sms-sender\unisms.go:22:2: cannot find package "github.com/apistd/uni-go-sdk/sms" in any of:
+	C:\Program Files\Go\src\github.com\apistd\uni-go-sdk\sms (from $GOROOT)
+	F:\goFrameLearn\src\github.com\apistd\uni-go-sdk\sms (from $GOPATH)
+backend\third_party\go-sms-sender\aws.go:23:2: cannot find package "github.com/aws/aws-sdk-go/service/sns" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\service\sns (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\service\sns (from $GOPATH)
+backend\third_party\go-sms-sender\aws.go:24:2: cannot find package "github.com/aws/aws-sdk-go/service/sns/snsiface" in any of:
+	C:\Program Files\Go\src\github.com\aws\aws-sdk-go\service\sns\snsiface (from $GOROOT)
+	F:\goFrameLearn\src\github.com\aws\aws-sdk-go\service\sns\snsiface (from $GOPATH)
+backend\third_party\go-sms-sender\baidubce.go:21:2: cannot find package "github.com/baidubce/bce-sdk-go/services/sms" in any of:
+	C:\Program Files\Go\src\github.com\baidubce\bce-sdk-go\services\sms (from $GOROOT)
+	F:\goFrameLearn\src\github.com\baidubce\bce-sdk-go\services\sms (from $GOPATH)
+backend\third_party\go-sms-sender\baidubce.go:22:2: cannot find package "github.com/baidubce/bce-sdk-go/services/sms/api" in any of:
+	C:\Program Files\Go\src\github.com\baidubce\bce-sdk-go\services\sms\api (from $GOROOT)
+	F:\goFrameLearn\src\github.com\baidubce\bce-sdk-go\services\sms\api (from $GOPATH)
+backend\third_party\go-sms-sender\tencent.go:21:2: cannot find package "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common" in any of:
+	C:\Program Files\Go\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\common (from $GOROOT)
+	F:\goFrameLearn\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\common (from $GOPATH)
+backend\third_party\go-sms-sender\tencent.go:22:2: cannot find package "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile" in any of:
+	C:\Program Files\Go\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\common\profile (from $GOROOT)
+	F:\goFrameLearn\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\common\profile (from $GOPATH)
+backend\third_party\go-sms-sender\tencent.go:23:2: cannot find package "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111" in any of:
+	C:\Program Files\Go\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\sms\v20210111 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\tencentcloud\tencentcloud-sdk-go\tencentcloud\sms\v20210111 (from $GOPATH)
+backend\third_party\go-sms-sender\twilio.go:20:2: cannot find package "github.com/twilio/twilio-go" in any of:
+	C:\Program Files\Go\src\github.com\twilio\twilio-go (from $GOROOT)
+	F:\goFrameLearn\src\github.com\twilio\twilio-go (from $GOPATH)
+backend\third_party\go-sms-sender\twilio.go:21:2: cannot find package "github.com/twilio/twilio-go/rest/api/v2010" in any of:
+	C:\Program Files\Go\src\github.com\twilio\twilio-go\rest\api\v2010 (from $GOROOT)
+	F:\goFrameLearn\src\github.com\twilio\twilio-go\rest\api\v2010 (from $GOPATH)
+backend\third_party\go-sms-sender\ucloud.go:20:2: cannot find package "github.com/ucloud/ucloud-sdk-go/services/usms" in any of:
+	C:\Program Files\Go\src\github.com\ucloud\ucloud-sdk-go\services\usms (from $GOROOT)
+	F:\goFrameLearn\src\github.com\ucloud\ucloud-sdk-go\services\usms (from $GOPATH)
+backend\third_party\go-sms-sender\ucloud.go:21:2: cannot find package "github.com/ucloud/ucloud-sdk-go/ucloud" in any of:
+	C:\Program Files\Go\src\github.com\ucloud\ucloud-sdk-go\ucloud (from $GOROOT)
+	F:\goFrameLearn\src\github.com\ucloud\ucloud-sdk-go\ucloud (from $GOPATH)
+backend\third_party\go-sms-sender\ucloud.go:22:2: cannot find package "github.com/ucloud/ucloud-sdk-go/ucloud/auth" in any of:
+	C:\Program Files\Go\src\github.com\ucloud\ucloud-sdk-go\ucloud\auth (from $GOROOT)
+	F:\goFrameLearn\src\github.com\ucloud\ucloud-sdk-go\ucloud\auth (from $GOPATH)
+backend\third_party\go-sms-sender\ucloud.go:23:2: cannot find package "github.com/ucloud/ucloud-sdk-go/ucloud/config" in any of:
+	C:\Program Files\Go\src\github.com\ucloud\ucloud-sdk-go\ucloud\config (from $GOROOT)
+	F:\goFrameLearn\src\github.com\ucloud\ucloud-sdk-go\ucloud\config (from $GOPATH)
+backend\third_party\go-sms-sender\volcengine.go:22:2: cannot find package "github.com/volcengine/volc-sdk-golang/service/sms" in any of:
+	C:\Program Files\Go\src\github.com\volcengine\volc-sdk-golang\service\sms (from $GOROOT)
+	F:\goFrameLearn\src\github.com\volcengine\volc-sdk-golang\service\sms (from $GOPATH)
