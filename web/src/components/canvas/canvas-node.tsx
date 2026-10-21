@@ -4,7 +4,6 @@ import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, C
 
 import { useCanvasNodeActions } from "./canvas-node-action-context";
 import { CanvasImageLayerControls } from "./canvas-image-layer-controls";
-import { CanvasTextLeaseIndicator } from "./use-canvas-text-lease";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import type { CanvasNodeRenderLOD } from "@/lib/canvas/canvas-node-lod";
@@ -226,7 +225,6 @@ export const CanvasNode = React.memo(function CanvasNode({
                 onCommit={commitTitle}
                 onCancel={() => { setTitleDraft(data.title); setIsEditingTitle(false); }}
             /> : null}
-            {showChrome ? <div className="pointer-events-none absolute left-0 top-full pt-1"><CanvasTextLeaseIndicator nodeId={data.id} canvasId={drawingProjectId} /></div> : null}
             <div
                 className="canvas-node-shell relative h-full w-full overflow-visible rounded-[var(--node-radius)]"
                 data-node-state={nodeState}

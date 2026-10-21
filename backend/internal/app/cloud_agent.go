@@ -117,10 +117,12 @@ func validateCloudAgentRequest(req *CloudAgentRequest) error {
 	}
 	// IDs and protocol selectors are identifiers, not free-form text. Keep their
 	// validation in one place so byte/rune and Unicode handling cannot drift.
-	if err := validateCloudAgentID(req.CanvasID, "画布 ID", 80); err != nil {
-		return err
+	// 画布可选：不带画布的运行是平台级对话，只开放无画布工具（计划、提问、技能、记忆）。
+	if req.CanvasID != "" {
+		if err := validateCloudAgentID(req.CanvasID, "画布 ID", 80); err != nil {
+			return err
+		}
 	}
-	req.CanvasID = strings.TrimSpace(req.CanvasID)
 	if err := validateCloudAgentPrompt(req.Prompt, 16000); err != nil {
 		return err
 	}
@@ -205,8 +207,8 @@ func validateCloudAgentRequest(req *CloudAgentRequest) error {
 	if len(req.ContextScope) > 1 || (len(req.ContextScope) == 1 && req.ContextScope[0] != "canvas") {
 		return BadAuthRequest("当前仅支持已保存画布摘要，其他上下文尚未开放")
 	}
-	if len(req.ContextScope) == 1 && req.ContextScope[0] == "canvas" {
-		req.ContextScope[0] = "canvas"
+	if req.CanvasID == "" && (len(req.ContextScope) > 0 || len(req.FocusNodeIDs) > 0) {
+		return BadAuthRequest("未绑定画布的对话不能读取画布上下文或焦点节点")
 	}
 	if math.IsNaN(req.Budget.MaxCredits) || math.IsInf(req.Budget.MaxCredits, 0) || req.Budget.MaxCredits <= 0 || req.Budget.MaxCredits > 1000000 {
 		return BadAuthRequest("本轮积分上限必须大于 0 且不超过 1000000")
@@ -347,12 +349,17 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	if userID == "" {
 		return nil, kernel.Unauthorized("请先登录")
 	}
-	canvas, err := s.repo.CanvasProjectForUser(userID, req.CanvasID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, kernel.NotFound("画布不存在或尚未保存到服务端，请先完成画布同步")
+	// 画布是可选绑定：有画布时必须属于当前用户且已保存；无画布时是平台级对话。
+	var canvas *model.CanvasProject
+	if req.CanvasID != "" {
+		var err error
+		canvas, err = s.repo.CanvasProjectForUser(userID, req.CanvasID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, kernel.NotFound("画布不存在或尚未保存到服务端，请先完成画布同步")
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	// Resolve and freeze the effective preference document before idempotency
 	// lookup. A retry without an explicit revision must still refer to the same
@@ -393,9 +400,9 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 		if parentErr != nil {
 			return nil, parentErr
 		}
-		if parent.ProjectID != req.CanvasID {
-			return nil, kernel.Forbidden("不能跨画布追加 Agent 消息")
-		}
+		// 同一段对话可以跟随页面切换画布绑定（首页 → 画布 → 离开画布）。
+		// 归属已由 cloudAgentTask 按 userID 校验；换绑后旧画布的节点事实不再可用。
+		scopeChanged := parent.ProjectID != req.CanvasID
 		superseded := s.cloudAgentParentCanBeSuperseded(userID, parentID)
 		// 续轮收束要读上一轮**全部**事件（运行详情默认只返回尾部一窗）：长会话一旦被截断，
 		// 新轮就看不到上一轮改过哪些节点、提交过哪些任务，表现为"忘了自己做过什么"。
@@ -426,7 +433,9 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 		}
 		// 视觉事实跨轮继承：这一轮已经看过的画面与模型自己写下的观察随锚点带过来，
 		// 否则新轮会把看过的图重新标成"没有视觉识别证据"并再花一次视觉 token。
-		creativeAnchor = parentState.CreativeAnchor
+		if !scopeChanged {
+			creativeAnchor = parentState.CreativeAnchor
+		}
 		history = parentState.TextHistory
 		if history == nil {
 			history = cloudAgentLegacyHistory(parentState.Canonical.Messages, parent.Prompt)
@@ -443,6 +452,9 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 		if strings.TrimSpace(context) != "" {
 			history = append(history, providerTextMessage{Role: "user", Content: context, AgentContextSource: "continuation"})
 		}
+		if scopeChanged {
+			history = append(history, providerTextMessage{Role: "user", Content: cloudAgentScopeChangeNotice(parent.ProjectID, req.CanvasID), AgentContextSource: "continuation"})
+		}
 	}
 	history = trimCloudAgentTextHistory(history, cloudAgentHistoryKeepRounds, cloudAgentHistoryMaxBytes)
 	encodedHistory, err := json.Marshal(history)
@@ -456,9 +468,13 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	if creativeAnchor.Version > 0 {
 		inheritedAnchor = &creativeAnchor
 	}
-	creativeAnchor, err = cloudAgentCreativeAnchorForCanvas(s.repo, userID, canvas, req.Prompt, inheritedAnchor)
-	if err != nil {
-		return nil, err
+	if canvas != nil {
+		creativeAnchor, err = cloudAgentCreativeAnchorForCanvas(s.repo, userID, canvas, req.Prompt, inheritedAnchor)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		creativeAnchor = cloudAgentCreativeAnchor{Version: 2, UserPrompt: req.Prompt}
 	}
 	skillSnapshots, err := s.cloudAgentSkills(userID, req.SkillIDs)
 	if err != nil {
@@ -737,4 +753,20 @@ func cloudAgentCanvasSummary(canvas *model.CanvasProject, focusNodeIDs ...string
 		return "", err
 	}
 	return string(data), nil
+}
+
+// cloudAgentScopeChangeNotice 告诉模型本轮的画布绑定已变化。它是服务端事实，不是指令：
+// 上一轮读到的节点 ID、快照哈希都属于旧画布，不能在新范围内复用。
+func cloudAgentScopeChangeNotice(previousCanvasID, currentCanvasID string) string {
+	frame := map[string]any{"source": "server", "kind": "scope_change", "previousCanvasBound": previousCanvasID != "", "currentCanvasBound": currentCanvasID != ""}
+	switch {
+	case currentCanvasID == "":
+		frame["note"] = "用户已离开画布，本轮没有绑定画布：画布读写与生成工具不可用；之前提到的节点 ID、snapshotHash 都已失效。"
+	case previousCanvasID == "":
+		frame["note"] = "用户已进入一个画布，本轮绑定该画布：需要画布事实时先读取画布，不要沿用对话中的假设。"
+	default:
+		frame["note"] = "用户已切换到另一个画布：之前的节点 ID、snapshotHash 属于旧画布，均已失效，先读取当前画布。"
+	}
+	body, _ := json.Marshal(frame)
+	return cloudAgentRuntimeContextMarker + string(body)
 }

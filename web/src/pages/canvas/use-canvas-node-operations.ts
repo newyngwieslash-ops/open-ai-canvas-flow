@@ -201,9 +201,18 @@ export function useCanvasNodeOperations({
             return;
         }
 
-        const positions = layoutCanvasAuto(candidates, connectionsRef.current);
+        // 不参与整理但仍然可见的节点（框架、锁定节点、选区外节点）作为障碍，整理结果绕开它们。
+        const candidateIds = new Set(candidates.map((node) => node.id));
+        const nodeById = new Map(currentNodes.map((node) => [node.id, node]));
+        const obstacles = currentNodes.filter((node) => {
+            if (candidateIds.has(node.id) || isHiddenBatchChild(node, currentNodes)) return false;
+            const parent = node.parentId ? nodeById.get(node.parentId) : undefined;
+            // 框架子节点由框架外框代表；折叠框架里的子节点不可见。
+            return !parent || !isFrameNode(parent);
+        });
+        const positions = layoutCanvasAuto(candidates, connectionsRef.current, obstacles);
         commitNodes(currentNodes.map((node) => positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node));
-        message.success(hasSelection ? "已按媒体分类整理选中节点" : "已按媒体分类整理画布");
+        message.success(hasSelection ? "已整理选中节点" : "已整理画布");
     }, [commitNodes, connectionsRef, message, nodesRef, selectedNodeIdsRef]);
 
     const spreadSelectedNodes = useCallback(() => {

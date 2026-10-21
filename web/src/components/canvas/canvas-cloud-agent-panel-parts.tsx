@@ -171,7 +171,7 @@ export function AgentHeader({
     hasMessages: boolean;
     statusLabel: string;
     statusColor: string;
-    nodeCount: number;
+    nodeCount: number | null;
     onNew: () => void;
     onHistory: () => void;
     onSettings: () => void;
@@ -195,7 +195,7 @@ export function AgentHeader({
                     </span>
                 </div>
                 <div className="agent-panel-context">
-                    {appearance.agentName} · 当前画布 {nodeCount} 个节点
+                    {appearance.agentName} · {nodeCount === null ? "未在画布中，可对话；进入画布后自动关联" : `当前画布 ${nodeCount} 个节点`}
                 </div>
             </div>
             <div className="agent-header-actions flex items-center gap-0.5" style={{ color: theme.node.muted }}>
@@ -453,7 +453,7 @@ export function AgentConversation({
     approval: ApprovalState | null;
     approvalTargetGenerating?: CanvasNodeData;
     approvalSubmitting: boolean;
-    nodeCount: number;
+    nodeCount: number | null;
     onChooseSkill: () => void;
     onDraftPrompt: (prompt: string) => void;
     onFocusNode?: (nodeId: string) => void;
@@ -525,7 +525,7 @@ export function AgentConversation({
                         onReject={onReject}
                     />
                 ) : null}
-                {busy && !approval ? <AgentWorkingMessage theme={theme} label="正在处理当前画布" /> : null}
+                {busy && !approval ? <AgentWorkingMessage theme={theme} label="正在思考" /> : null}
             </div>
         </div>
     );

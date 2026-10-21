@@ -927,6 +927,9 @@
 @media (prefers-reduced-motion: reduce) {
     .app-product-workspace *,
     .app-product-overlays * { animation-duration: 1ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+    /* transition-property 默认为 all：1ms 会让浮层根节点的 left/top 也过渡，
+       rc-trigger 同帧改 left/top 后测量到的仍是 -1000vw/-1000vh 预隐藏坐标，浮层永远对齐到屏幕外。 */
+    :is(.app-product-workspace, .app-product-overlays) :is(.ant-popover, .ant-dropdown, .ant-select-dropdown, .ant-tooltip, .ant-picker-dropdown, .ant-cascader-dropdown, .ant-mentions-dropdown, .ant-tree-select-dropdown) { transition-duration: 0s !important; }
     .app-product-workspace .product-collection-card:hover,
     .app-product-workspace .library-card:hover,
     .app-product-workspace .task-grid-card:hover,

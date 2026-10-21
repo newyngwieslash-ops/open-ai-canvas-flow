@@ -2052,11 +2052,12 @@ components:
     CloudAgentRequest:
       type: object
       additionalProperties: false
-      required: [canvasId, prompt, permissionMode, contextScope, budget, idempotencyKey]
+      required: [prompt, permissionMode, contextScope, budget, idempotencyKey]
       properties:
         canvasId:
           type: string
           maxLength: 80
+          description: 可选。为空时是平台级对话：不占画布锁、只开放无画布工具，contextScope 和 focusNodeIds 必须为空。续轮可换绑画布，服务端会注入换绑说明。
         prompt:
           type: string
           description: 非空，最多 16000 字节

@@ -46,23 +46,24 @@ func (s *Service) buildEnhancedPiRequest(ctx context.Context, params EnhancedPiR
 	// 4. 构建 Memory 配置
 	memory := s.buildMemoryConfig(params.UserID, params.CanvasID)
 
-	// 5. 构建画布智能上下文（核心创新）
-	canvasIntelligence := s.NewCanvasIntelligence()
-	enhancedCanvas, err := canvasIntelligence.BuildEnhancedCanvasContext(ctx, params.UserID, params.CanvasID, params.FocusNodeIDs)
-	if err != nil {
-		return cloudAgentPiProcessRequest{}, fmt.Errorf("build canvas intelligence: %w", err)
+	// 5. 构建画布智能上下文（核心创新）。平台级对话没有画布：不传 canvas，权限全关。
+	var canvasData map[string]any
+	if params.CanvasID != "" {
+		canvasIntelligence := s.NewCanvasIntelligence()
+		enhancedCanvas, err := canvasIntelligence.BuildEnhancedCanvasContext(ctx, params.UserID, params.CanvasID, params.FocusNodeIDs)
+		if err != nil {
+			return cloudAgentPiProcessRequest{}, fmt.Errorf("build canvas intelligence: %w", err)
+		}
+		canvasData, err = s.marshalEnhancedCanvas(enhancedCanvas)
+		if err != nil {
+			return cloudAgentPiProcessRequest{}, fmt.Errorf("marshal canvas: %w", err)
+		}
+		slog.Debug("agent canvas intelligence", "nodes",
+			enhancedCanvas.Snapshot.TotalNodes,
+			"focus", len(enhancedCanvas.Snapshot.FocusNodes),
+			"relationships", len(enhancedCanvas.Snapshot.Relationships),
+			"clusters", len(enhancedCanvas.Snapshot.Layout.Clusters))
 	}
-
-	canvasData, err := s.marshalEnhancedCanvas(enhancedCanvas)
-	if err != nil {
-		return cloudAgentPiProcessRequest{}, fmt.Errorf("marshal canvas: %w", err)
-	}
-
-	slog.Debug("agent canvas intelligence", "nodes",
-		enhancedCanvas.Snapshot.TotalNodes,
-		"focus", len(enhancedCanvas.Snapshot.FocusNodes),
-		"relationships", len(enhancedCanvas.Snapshot.Relationships),
-		"clusters", len(enhancedCanvas.Snapshot.Layout.Clusters))
 
 	// 6. 构建 Features 配置
 	features := s.buildFeaturesConfig(params.RuntimeState)
@@ -174,9 +175,16 @@ func (s *Service) buildFeaturesConfig(state *cloudAgentRuntime) map[string]any {
 // userID 是登录账号，canvasID 是画布 ID（不是所属项目 ID）；查询失败时拒绝访问。
 func (s *Service) buildPermissionsConfig(userID, canvasID string) map[string]any {
 	// 与画布读写工具共用账号归属查询，不访问旧的 Canvas 扩展模型。
-	_, err := s.repo.CanvasProjectForUser(userID, canvasID)
-	if err != nil {
-		log.Printf("[Agent] failed to get canvas for permissions: %v", err)
+	// 平台级对话（无画布）直接走最小权限集，不是错误。
+	allowed := false
+	if canvasID != "" {
+		if _, err := s.repo.CanvasProjectForUser(userID, canvasID); err != nil {
+			log.Printf("[Agent] failed to get canvas for permissions: %v", err)
+		} else {
+			allowed = true
+		}
+	}
+	if !allowed {
 		// 返回最小权限集
 		return map[string]any{
 			"canReadCanvas":      false,

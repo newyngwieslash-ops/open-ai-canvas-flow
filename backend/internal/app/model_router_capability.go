@@ -656,7 +656,7 @@ func isCapabilityOptionFor(capability string, name string) bool {
 	case "image":
 		return name == "size" || name == "quality" || name == "imageResolution" || name == "transparentBackground" || name == "count"
 	case "video":
-		return name == "size" || name == "videoSeconds" || name == "vquality" || name == "videoGenerateAudio" || name == "videoWatermark"
+		return name == "size" || name == "videoSeconds" || name == "vquality" || name == "videoGenerateAudio" || name == "videoWatermark" || name == "fpsBand"
 	case "audio":
 		return name == "audioVoice" || name == "audioFormat" || name == "audioSpeed" || name == "audioInstructions"
 	case "text":

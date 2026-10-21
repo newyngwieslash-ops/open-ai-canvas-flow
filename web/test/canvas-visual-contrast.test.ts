@@ -36,7 +36,7 @@ describe("canvas visual contrast", () => {
         expect(canvasThemes.dark.canvas.line).toBe("rgba(255,255,255,.32)");
 
         const source = await Bun.file(new URL("../src/components/canvas/canvas-viewport.tsx", import.meta.url)).text();
-        expect(source).toContain('opacity: mode === "dots" ? 0.34 : 0.46');
+        expect(source).toContain('opacity: mode === "dots" ? 0.62 : 0.4');
     });
 
     test("keeps the original transparent edge for standard canvas nodes", async () => {

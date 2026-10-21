@@ -65,7 +65,7 @@ export type CanvasGenerationBatchStatus = "queued" | "running" | "partial_failed
 export type CanvasGenerationBatchItemStatus = "waiting" | "submitting" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type CanvasImageGenerationType = "generation" | "edit";
 export type CanvasWorkflowKind = "free" | "script" | "story_input" | "character" | "scene" | "storyboard" | "shot" | "final" | "styleboard" | "reference_set" | "reference_video" | "action_board";
-export type CanvasVideoEditOperation = "text_to_video" | "image_to_video" | "reference_to_video" | "extend" | "inpaint" | "replace_element" | "camera_motion" | "style_transfer" | "audio_to_video" | "compare_versions" | "concat";
+export type CanvasVideoEditOperation = "text_to_video" | "image_to_video" | "reference_to_video" | "extend" | "inpaint" | "replace_element" | "camera_motion" | "style_transfer" | "audio_to_video" | "compare_versions" | "concat" | "enhance";
 export type CanvasSkillCategory = "writing" | "storyboard" | "image" | "video" | "utility";
 export type CanvasSkillOutputMode = "text" | "json" | "image_prompt" | "workflow";
 export type StoryboardColumn =
@@ -494,6 +494,15 @@ export type CanvasNodeMetadata = {
         effectKey?: string;
     };
     sessionId?: string;
+    /** 视频画质增强任务参数；重试按这里重建请求，而不是沿用源节点的生成配置。 */
+    videoEnhance?: {
+        sourceNodeId: string;
+        model: string;
+        resolution: string;
+        fps?: number;
+        bitrateLevel?: "low" | "medium" | "high";
+        bitrate?: number;
+    };
     videoEditOperation?: CanvasVideoEditOperation;
     arkPrivateAssetUpload?: string;
     videoCameraMoveId?: string;
@@ -514,6 +523,7 @@ export type CanvasNodeMetadata = {
     previsShotId?: string;
     previsPreviewNodeId?: string;
     previsDepthNodeId?: string;
+    previsDepthVideoNodeId?: string;
     previsNormalNodeId?: string;
     previsClayVideoNodeId?: string;
     subtitleEntries?: SrtEntry[];

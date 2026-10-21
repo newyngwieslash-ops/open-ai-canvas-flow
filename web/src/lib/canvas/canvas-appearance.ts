@@ -45,7 +45,7 @@ export type ResolvedCanvasAppearance = {
 };
 
 export const DEFAULT_CANVAS_BACKGROUND_MODE: CanvasBackgroundMode = "dots";
-export const NEW_CANVAS_BACKGROUND_MODE: CanvasBackgroundMode = "lines";
+export const NEW_CANVAS_BACKGROUND_MODE: CanvasBackgroundMode = "dots";
 
 const CANVAS_APPEARANCE_DEFAULT_KEY = "yingce:canvas-appearance-default";
 const HEX_COLOR_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
