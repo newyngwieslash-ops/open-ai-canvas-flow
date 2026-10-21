@@ -1,0 +1,47 @@
+---
+title: yuxibox minimax-h3-quality 视频生成
+description: 宇熙Box minimax-h3-quality 渠道配置、参考素材、分辨率档位与计费说明
+---
+
+# yuxibox minimax-h3-quality 视频生成
+
+在渠道页面添加 `yuxibox minimax-h3-quality` 协议，默认地址为 `https://yuxibox.cn`，模型名称为 `minimax-h3-quality`。协议由显式配置决定，不根据域名或模型名猜测。该协议与 `yuxibox Seedance` 相互独立：Seedance 支持参考视频，本协议不支持，两者请分别配置渠道模型。
+
+协议使用 OpenAI Video 风格的异步合同：创建 `POST /v1/videos`（`application/json`），查询 `GET /v1/videos/{{taskId}}`，结果为 MP4 二进制时回退 `GET /v1/videos/{{taskId}}/content`（需带令牌并跟随重定向）。
+
+## 参数范围
+
+| 参数 | 支持范围 |
+| --- | --- |
+| 模型 | 精确名称 `minimax-h3-quality` |
+| 提示词 | 非空，最多 20000 字符 |
+| 时长 | 整数 1–15 秒，默认 5 |
+| 分辨率 | `480p`、`768p`，默认 `768p`；`720p` 作为 `768p` 别名 |
+| 画幅比例 | `16:9`、`9:16`、`1:1`，默认 `9:16` |
+| 参考图 | 至少 1 张，最多 9 张公网 HTTPS 地址 |
+| 参考音频 | 0–3 条公网 HTTPS 地址，支持 MP3、WAV、MP4、FLAC |
+| 参考视频 | **不支持**，携带时在准入阶段拒绝 |
+| 随机种子 | 可选，通过 `providerOptions.yuxibox-minimax-h3-quality.seed` 传入 |
+
+首帧与参考图在请求体中统一按 `reference_images` 数组提交，不区分 role。`requiresPublicMediaUrls=true`，本地文件会先上传为公网可读地址再提交。
+
+## 结果与有效期
+
+轮询响应状态：`queued` 与 `in_progress` 归一为进行中，`completed` 取 `video_url`（缺失时回退 `download_url`），`failed` 呈现上游错误信息。响应中的媒体地址标记为临时链接，由宿主立即下载持久化；本站 `/v/` 短链自带签名，有效期 7 天。部分成片使用 HEVC 编码，播放器需支持该编码。
+
+## 计费
+
+按请求秒数计费（`per_second`）：
+
+| 时段（北京时间） | 480p | 768p |
+| --- | --- | --- |
+| 高峰 08:00–24:00 | 0.040 元/秒 | 0.060 元/秒 |
+| 空闲 00:00–08:00 | 0.030 元/秒 | 0.050 元/秒 |
+
+跨时段完成不改变该任务已锁定的单价。当前价格档模型没有时间窗口选择器，**基础价目按高峰档配置**；空闲时段差价需在管理后台按实际运营口径单独调整。最终费用还受令牌分组倍率影响，以宇熙Box 计费页为准。
+
+## 创建与恢复
+
+同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建。创建响应缺失任务 ID 时按「结果不确定」失败上抛，不自动重发；上游未提供取消接口。
+
+真实 Key 的付费生成尚待用户验收，见 [待测试](/docs/progress/pending-test)。
