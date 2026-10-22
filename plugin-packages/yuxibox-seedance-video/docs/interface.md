@@ -76,7 +76,7 @@
 
 ## 兼容边界
 
-yuxibox（yuxibox.cn）中转 seedance2.5-yx-count：OpenAI Videos 风格异步合同，创建 POST /v1/videos JSON、查询 GET /v1/videos/{task_id}。模型名称精确为 seedance2.5-yx-count，时长 4–30 秒整数默认 30，输出固定 720P，七档比例（adaptive/16:9/9:16/1:1/4:3/3:4/21:9）统一走 ratio 单字段（不发 size）。参考素材 JSON 数组：reference_images ≤ 30、videos ≤ 10、audios ≤ 10，须为公网 HTTPS 或 data URL；不发 multipart input_reference。seconds 以字符串发送（上游示例 "seconds": "30"）。按条计费基础价 4.5 元/条，最终费用受令牌分组倍率及请求规格影响，以 yuxibox 控制台为准。同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。上游未提供取消接口。真实 Key 的付费生成尚待用户验收。
+yuxibox（yuxibox.cn）Seedance 家族：OpenAI Videos 风格异步合同，创建 POST /v1/videos JSON、查询 GET /v1/videos/{task_id}。该端点按请求体 model 路由到上游不同计费模型（seedance2.5-yx-count、seedance-2.5（YX）、seedance-2.5（YX）-按次、seedance-2.0（YX）等），协议形状一致，因此插件不锁定单一模型名，模型可用性由上游 /v1/models 与渠道分组决定。时长上限 30 秒整数、输出固定 720P、七档比例（adaptive/16:9/9:16/1:1/4:3/3:4/21:9）统一走 ratio 单字段（不发 size）；各模型的实际时长档位（2.0（YX）为 5/10/15 秒、2.5（YX）为 5–30 秒、按次固定 30 秒、yx-count 为 10–30 秒）由渠道模型的 capabilityConfig 与上游校验共同决定。参考素材 JSON 数组上限：reference_images 30、videos 10、audios 10，须为公网 HTTPS 或 data URL；不发 multipart input_reference。seconds 以字符串发送（上游示例 "seconds": "30"）。计费按上游模型广场公布的按秒或按条价格与令牌分组倍率结算，以 yuxibox 控制台为准。同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。上游未提供取消接口。
 
 <!-- YINGCE_MANIFEST_CONTRACT_START -->
 ## Manifest 完整接口定义
@@ -257,17 +257,6 @@ yuxibox（yuxibox.cn）中转 seedance2.5-yx-count：OpenAI Videos 风格异步�
           }
         ],
         "validations": [
-          {
-            "assert": {
-              "$eq": [
-                {
-                  "$ref": "request.model"
-                },
-                "seedance2.5-yx-count"
-              ]
-            },
-            "message": "yuxibox 渠道模型必须为 seedance2.5-yx-count。"
-          },
           {
             "assert": {
               "$and": [

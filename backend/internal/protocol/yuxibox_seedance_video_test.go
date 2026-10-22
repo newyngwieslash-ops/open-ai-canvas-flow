@@ -13,6 +13,36 @@ func yuxiboxRequest() GenerationRequest {
 	return GenerationRequest{Model: "seedance2.5-yx-count", Prompt: "少女在雨巷中转身回望。", Duration: 30, AspectRatio: "16:9"}
 }
 
+// 该插件的上游 /v1/videos 由多个 seedance 模型共用同一套 OpenAI Videos 异步合同
+//（yuxibox 的 seedance2.5-yx-count、seedance-2.5（YX）、seedance-2.5（YX）-按次、
+// seedance-2.0（YX）都走这个端点）。因此本地校验不得写死单一模型名：写死会让
+// 同协议的其它真实模型在发出请求前就被本地拒绝。上游模型清单以 yuxibox /v1/models
+// 为准，模型可用性由上游回答，本地只保证请求形状正确。
+func TestYuxiboxSeedanceAcceptsEveryUpstreamModel(t *testing.T) {
+	adapter := officialPackageAdapter(t, "yuxibox-seedance-video.yingce-plugin", "yuxibox-seedance-video")
+	models := []string{
+		"seedance2.5-yx-count",
+		"seedance-2.5（YX）",
+		"seedance-2.5（YX）-按次",
+		"seedance-2.0（YX）",
+		// 该名字由上游任务插件认领但当前 Key 没有可用渠道；本地不应替上游判定它不存在。
+		"seedance-2.5-yx-second",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			request := yuxiboxRequest()
+			request.Model = model
+			spec, err := adapter.BuildCreate(context.Background(), RequestContext{Request: request})
+			if err != nil {
+				t.Fatalf("upstream model %q rejected by local validation: %v", model, err)
+			}
+			if body := manifestTestBody(t, spec); body["model"] != model {
+				t.Fatalf("create body model = %#v, want %q", body["model"], model)
+			}
+		})
+	}
+}
+
 func TestYuxiboxSeedancePackage(t *testing.T) {
 	packagePath := filepath.Join("..", "..", "..", "plugin-packages")
 	archive, err := os.ReadFile(filepath.Join(packagePath, "yuxibox-seedance-video.yingce-plugin"))
@@ -102,7 +132,6 @@ func TestYuxiboxSeedanceValidation(t *testing.T) {
 		name   string
 		mutate func(*GenerationRequest)
 	}{
-		{"model renamed", func(r *GenerationRequest) { r.Model = "seedance2.5" }},
 		{"prompt empty", func(r *GenerationRequest) { r.Prompt = "  " }},
 		{"prompt too long", func(r *GenerationRequest) { r.Prompt = string(make([]byte, 16001)) }},
 		{"duration low", func(r *GenerationRequest) { r.Duration = 3 }},
