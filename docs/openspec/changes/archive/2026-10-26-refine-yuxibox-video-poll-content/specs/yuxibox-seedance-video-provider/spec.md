@@ -4,7 +4,7 @@
 
 ### Requirement: 异步任务查询与结果归一
 
-系统 SHALL 以 `GET /v1/videos/{task_id}` 轮询任务状态，将上游 `status` 归一为本系统状态（`queued`/`pending`/`in_progress` 等为等待或处理中，`succeeded`/`completed` 为成功，`failed`/`cancelled` 为失败），成功时按 `video_url`、`download_url` 及兼容字段顺序提取视频地址并持久化；成片地址缺失时系统 SHALL 以 `GET /v1/videos/{task_id}/content`（Bearer 鉴权）下载二进制内容作为兜底。系统 MUST NOT 为同一视频重复提交创建请求：恢复任务已有任务 ID 时只查询不重建。创建响应缺失任务 ID 时 MUST 按"结果不确定"处理，不得引导用户直接重发付费任务。
+系统 SHALL 以 `GET /v1/videos/{task_id}` 轮询任务状态，将上游 `status` 归一为本系统状态（`queued`/`pending`/`in_progress` 等为等待或处理中，`succeeded`/`completed` 为成功，`failed`/`cancelled` 为失败），成功时按 `video_url`、`download_url` 及兼容字段顺序提取视频地址并持久化，失败时向上呈现上游错误消息；成片地址缺失时系统 SHALL 以 `GET /v1/videos/{task_id}/content`（Bearer 鉴权）下载二进制内容作为兜底。系统 MUST NOT 为同一视频重复提交创建请求：恢复任务已有任务 ID 时只查询不重建。创建响应缺失任务 ID 时 MUST 按"结果不确定"处理，不得引导用户直接重发付费任务。
 
 #### Scenario: 创建与轮询
 
