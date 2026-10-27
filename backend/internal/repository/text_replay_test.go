@@ -16,7 +16,7 @@ func TestTextReplayLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Task{}, &model.TaskTextDelta{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Task{}, &model.TaskTextDelta{}); err != nil {
 		t.Fatal(err)
 	}
 	task := model.Task{

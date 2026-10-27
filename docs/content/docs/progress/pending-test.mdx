@@ -5,6 +5,153 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 章节分镜资产自动绑定：生成、预览与追加待验收
+
+- 已实现完整候选分页、服务端可信摘要/允许集合、确定性 `projectAssetRefs` 解析、只读 `resolve-generated`、真实任务基线与逐行脚本同事务保存复核，以及存量镜头只读 `POST /shot-asset-bindings/preview`、受并发基线与 `WithStoryboardAssetOwners` 锁保护的原子 `POST /shot-asset-bindings/append`（含选择性 `stale` 失效与精确后态幂等重放）和章节/单镜“匹配镜头资产”抽屉（`ChapterAssetBindingDrawer`）。
+- [ ] 真实章节页及 workflow/storyboard 路由：目录加载/分页失败与取消、24 KiB 及完整上下文超限、非法 ID 不兜底、同名歧义、对白/普通提及不默认视觉绑定、缺图与缺版本提示。
+- [ ] 超过 6 个合法版本时可从全部候选选择含第 7 个在内的任意至多 6 个，取消零写入；任务运行/完成未保存时按 `taskId` 刷新恢复；坏任务明确放弃后重生；并发修改拒绝旧基线。
+- [ ] 存量镜头单镜与整章批量“匹配镜头资产”：在分镜脚本、画面生成、视频生成阶段打开 `ChapterAssetBindingDrawer`，核验现有引用、剩余容量 `remainingCapacity`、增量候选与诊断问题；确认追加后仅发生真实新增引用的镜头（`addedCount > 0`）上全部非 `failed` 产物置为 `status = "stale"` 且 `selected = false`（取消当前选中，`failed` 产物保持 `failed` 且 `selected = false`，历史产物记录与媒体文件保留），未新增引用的镜头产物保持原状；遇 `409` 点击“重新预览”刷新基线，遇 `503`/网络错误保留原 `{ baseline, selections }` 直接重试并验证精确后态幂等重放（返回 `unchanged: true, addedCount: 0`）。
+- [ ] 使用旧绑定版本且资产当前 head 已更新时，镜头仍显示绑定版本原图；该版本缺图时不回退 head。验证真实权限隔离、下游生图/生视频请求 payload 注入与真实收费模型输出，尚无真实浏览器 E2E 或真实模型验收。
+- 已有定向自动化证据：任务 4（生成与保存）PostgreSQL 28 叶、SQLite 29 叶、HTTP 1 叶、Bun 35 项/107 assertions、tsc exit 0；任务 6–10（预览、追加、owner 协调锁与前端抽屉）SQLite 与隔离 PostgreSQL（`data-resume3` 端口 `3691`）定向矩阵全部通过（含 `TestStoryboardAssetOwnerCoordinationMatrix`、`TestAppendStoryboardShotAssetBindingsMatrix`、`TestStoryboardAssetBindingConcurrencyAndLifecycleMatrix` 36 子测试及 N+1 预加载回归），HTTP handler 定向矩阵（`project_asset_binding_test.go`、`project_asset_binding_preview_test.go` 覆盖 `preview`/`append` 的 `200`/`400`/`401`/`404`/`409`/`42201`/`42202`/`503` 及篡改基线拒绝），前端 `web/test/chapter-asset-binding-drawer.test.tsx`（6 项/45 assertions）与 `web/test/workflow-asset-binding-entry.test.tsx`（3 项/28 assertions）全部 PASS；任务 12（3.1 首次章节生成到参考图全链路 E2E 验收与两项生产必修修复）已完成 SQLite 与隔离 PostgreSQL（`data-resume3` 端口 `3691`）双库全链路验收（`TestStoryboardAssetE2EGeneratedFullChain`、`TestStoryboardAssetGeneratedNotFoundMapping` 10 子测试、`TestProjectUnitShotAssetBindingsGeneratedAndReplaceRoutesNotFound` 12 路由子测试，以及 `TestStoryboardAsset*` / `TestReplaceProjectUnitShots*` 全矩阵）和前端联合专项（`web/test/chapter-generated-asset-binding.test.ts` 16 项、`workflow-shot-references.test.ts`、`workflow-shot-generation.test.ts`、`canvas-storyboard-output-contract.test.ts` 共 22 项测试、`bun run lint`、`bunx tsc --noEmit` 全部 PASS）。全链路自动测试已覆盖：81+ 多页候选目录自动分页（`pageSize=50` 跨 2 页无静默截断）→ `chapterAssetContext` 注入与服务端重建可信候选提示词 → 捕获真实上游文本模型 prompt 与结构化 `projectAssetRefs` 响应 → `POST /shot-asset-bindings/resolve-generated` 解析（含精确 `assetId`、仅名称回退、跨页同名歧义识别及 `selected` 子集范围下不绕过全目录重名歧义检测、`missing_image` / `missing_primary_version` 诊断）→ `PUT /units/:unitId/shots` 原子保存与 `ShotAssetReference` 三分类（角色/场景/道具）持久化 → 资产后续切换新主版本后 `ProjectUnitWorkspace` 及下游生图（`/images/generations`）/生视频（`/videos`）请求仍严格注入原绑定历史版本 `data:image/png;base64,...` 而不混入新 head 版本或跨版本回退图 → 全量非法/篡改/超限/并发冲突注入前后五表（`ProjectUnit`、`ProjectShot`、`ShotAssetReference`、`Asset`、`AssetVersion`）快照零脏写，以及共享画布文本分镜/生图/生视频与自由生成不带 `chapterAssetContext` 回归。HappyDOM/受控上游 HTTP 为测试替身，历史整包超时及旧包级失败仍未关闭，不能据此宣称全包通过或替代真实浏览器与真实收费模型验收。
+- 待后续核验：非常规数值的 Go/JS 转换（例如 `0x10` 时长、`1e-7` 文本）可能误拒绝；当前不承诺完整 ECMAScript Number/String 等价。以上实现未经用户确认，保留待验收。
+- 任务 12/final 两项生产合同缺口已修复并经 RED/GREEN 验证关闭：（1）章节生成保存网络重试的原输入保留（`web/src/pages/projects/detail/chapter-storyboard-production.ts` 与 `workflow.tsx`）：`saveGeneratedChapterStoryboard` 在 `replaceProjectUnitShots` 遭遇网络/瞬时错误（非 `AbortError` 且非 `400`/`404`/`409`/`422` 终态业务拒绝）时，按 `(projectId, unitId, taskId)` 在 `pendingGeneratedStoryboardSaves` 中缓存已准备完毕的 `{ shots, expectedShotIds, generatedBinding: { taskId, baseline, rowIndices }, issues }`，同任务重试直接向 `PUT /units/:unitId/shots` 重放原 `shots`、`expectedShotIds`、`baseline` 与 `rowIndices`，不再重调 `resolve-generated` 或重复弹窗确认；保存成功、遇到 `400`/`404`/`409`/`422` 终态错误或显式放弃任务（`clearPendingGeneratedStoryboardSave`）时立即清理缓存；（2）`resolve-generated` 与 `PUT /units/:unitId/shots` 的仓储 `gorm.ErrRecordNotFound` 404 映射（`backend/internal/app/project_asset_binding_generated.go` 与 `project_shot.go`）：缺失或跨用户的 `project`、`unit`、`task` 统一经 `mapStoryboardBindingNotFoundError` 映射为 `ErrProjectNotFound`（HTTP `404` / `reason: "not_found"`），不再经 `failService` 落入 `500 / internal`。
+- 任务 13（3.2 旧章多镜头与并发全链路验收）已完成 SQLite 与隔离 PostgreSQL（`data-resume3` 端口 `3691`）双库全链路验收及前端抽屉多镜头 E2E 联合验证：新增并通过 `TestStoryboardAssetE2ELegacyMultiShotFullChain`（`backend/internal/app/project_asset_binding_e2e_test.go`）、`TestStoryboardAssetConcurrencyLegacyAppendAllEntryOrders`（`backend/internal/app/project_asset_binding_concurrency_test.go`，覆盖脚本修订、引用添加/删除、分镜整章替换、镜头删除、项目资产取消关联、跨项目共享资产版本切换与分类更新、管理员目标资源 owner 删除及资源删除/清理 Outbox 共 11 类竞争入口在 `competitor` 先胜与 `append` 先胜双向屏障顺序下的 44 个双库子场景）、`TestStoryboardAssetIdempotencyLegacyMultiShotDisconnectAndDrift`（`backend/internal/app/project_asset_binding_idempotency_test.go`）、`TestProjectUnitShotAssetBindingsLegacyMultiShotFullChainHTTP`（`backend/internal/handler/project_asset_binding_test.go`）与 `ChapterAssetBindingDrawer` 旧章多镜头完整流测试（`web/test/chapter-asset-binding-drawer.test.tsx`）。验证确认：（1）三镜头旧章批量预览与取消零写库——后端夹具（`TestStoryboardAssetE2ELegacyMultiShotFullChain` 的 `shot-leg-1`/`shot-leg-2`/`shot-leg-3` 及 `TestProjectUnitShotAssetBindingsLegacyMultiShotFullChainHTTP` / `TestStoryboardAssetIdempotencyLegacyMultiShotDisconnectAndDrift` 的 `s1`/`s2`/`s3`）中，`shot-leg-1` / `s1` 为实际新增引用 `D != ∅` 且已含同一 `assetVersionId`（`v-sangruo-1` / `v-old`）跨 `character`+`reference` 双角色去重计 `existingVersionCount = 1, remainingCapacity = 5`（HTTP 夹具另在 `s1` 覆盖 `5 + 2` 容量超限与 `5 + 1 = 6` 裁剪，单测夹具亦在 `shot-leg-2` 覆盖 `5 + 2` 容量与诊断断言），`shot-leg-2` / `s2` 为全部匹配版本均已绑定 `D = ∅`，`shot-leg-3` / `s3` 为自由文本叙述/台词提及 `mention`/`speaker` 默认 `defaultSelected = false`；前端抽屉 3 镜头夹具（`web/test/chapter-asset-binding-drawer.test.tsx` 的 `shot-1`/`shot-2`/`shot-3`，对应旧章三镜 `shot-leg-1`/`shot-leg-2`/`shot-leg-3` 场景映射）中，`shot-1` 为 `D != ∅` 已有 5 个不同 `assetVersionId` + 2 个新增视觉候选触发 `capacity_exceeded` 并手动缩减至 `5 + 1 = 6`、`shot-2` 为全部已有 `D = ∅` 且同一 `assetVersionId` 跨 `character`+`reference` 双角色去重计 `existingVersionCount = 1, remainingCapacity = 5`、`shot-3` 为 `mention`/`speaker` 默认 `defaultSelected = false`（抽屉专项另覆盖 `missing_version` 禁选与 `missing_image` 可选提示）；（2）未裁剪直接提交 `5 + 2` 整批原子拒绝返回 `422 / code: 42202 / reason: "storyboard_asset_binding_capacity_exceeded"`，裁剪至 `5 + 1 = 6` 后原子追加成功（仅 `addedCount > 0` 的镜头非 `failed` 产物变为 `status = "stale", selected = false`、`failed` 产物保持 `failed` 且 `selected = false`，`addedCount == 0` 的镜头现有引用与产物 `status`/`selected`/`updatedAt` 100% 保持不变）；（3）已提交断线重放同一 `{ baseline, selections }` 命中有锁精确后态 `isStrictExpectedPostState`，返回 `200 { unchanged: true, addedCount: 0 }` 且 `businessWrites == 0`，若重放前任一镜头或目录发生额外漂移则严格返回 `409 / storyboard_asset_binding_conflict`；（4）全链路 `Task`、`ApiCallLog`、`CreditLedgerEntry` 与上游 HTTP 请求均为 0，资源删除/清理仅写入 Outbox（`ResourceDeletionIntent`/`ResourceDeletionJob`），分镜预览与追加本身产生 0 条 Outbox 记录且不误删物理文件。真实浏览器交互与真实收费模型联调仍保留在本页待人工验收。
+- 任务 14（3.3 规范—实现—证据一致性与交付）已完成全部 14 项任务（`1.1`–`3.3`）与 `openspec/changes/storyboard-asset-auto-binding/specs/storyboard-asset-binding/spec.md` 全部 9 项 Requirement / 19 个 Scenario 的测试命令、环境（文件型 SQLite、隔离 PostgreSQL `data-resume3:3691`、Gin HTTP、Bun）与执行结果核对，同步 `openapi.yaml`、`http-api.mdx`、`features.mdx`、`code-map.mdx` 与本页一致，并通过 `openspec validate storyboard-asset-auto-binding --strict`（exit 0）。保留边界与回退约定：（1）任务 4 Minor `N1`（`validateGeneratedStoryboard` 对 `0x10`、`1e-7` 等非常规数值字面量做保守拒绝，不破坏数据或放行非法输入）、任务 7 历史 `go test ./internal/repository` 整包 300s `MigrateSchema` 元数据超时与旧包级无关失败（仅宣称定向矩阵全绿，不宣称整包全绿）；（2）两项已生效的跨变更 `A` 裁定保持不变：`purge`/清空回收站沿用当前统一活跃引用保护（有分镜或业务引用拒绝删除），已入队远端删除作业缺少合法生产者结算证据时由真实 worker 在远端 `DELETE` 前安全拒绝、保留对象与记录并安排重试，完整远端物理结算闭环由后续变更 `add-remote-storage-physical-settlement` 承接；（3）回退边界：若需回退本变更，仅撤下新增 HTTP 入口（`POST /preview`、`POST /append`、`POST /resolve-generated`）、前端 `ChapterAssetBindingDrawer` 及章节专用生成/保存适配，不删除已持久化的合法 `ShotAssetReference` 行或历史 `ShotArtifact` 记录，不将已置为 `stale` 的产物恢复为 `selected = true`，也不用整章替换（`ReplaceProjectUnitShots`）回滚旧镜头追加绑定。上方 `- [ ]` 真实浏览器与真实收费模型联调项在获用户确认前保持未勾选。
+
+## 资产参考图档案分析：收敛范围与当前待验收
+
+用户已明确批准收敛本change，保留分析、审阅、选择采用、CAS/恢复/授权、历史基准和媒体版本身份，以及已完成的安全修复与审查。当前最终Verify只覆盖这些主功能及分析来源引用保护、保守删除：有引用拒绝；物理失败/部分完成保留资产、历史、未完成资源与持久删除意图；共享alias受保护；unknown、旧对象无证据、playback/远端义务未结算时继续拒绝物理清理及最终业务记录清理。不承诺本change完成全部生产者恢复或使所有对象最终可删，迁出项不算验收通过。
+
+- 完整生产者恢复（Linux C2-A真实OS、C2-B产品接入及Windows全部控制者丢失恢复）、远端物理结算、旧数据证据维护分别由 `add-resource-producer-full-recovery`、`add-remote-storage-physical-settlement`、`add-legacy-resource-evidence-maintenance` 后续change承接，各自环境/操作授权仍独立；当前不新增schema、不启用新产品入口、不操作业务库、不push或调用收费模型。
+- 已完成专项、真实应用受控mock页面、P1/P2/P3-B、有限Windows C1/媒体补验及C2-A临时账本成果保留；真实付费模型视觉质量、供应商取消/费用及真实部署未验证，不以mock或构建代替。
+- 本轮最终Verify和独立集成审查以[正式验证报告](../../../superpowers/reports/2026-10-24-add-asset-image-profile-analysis-verify.md)的实际结果及Comet Guard为准，本段不代替通过证明。下方本功能各历史阶段的“5.2未完成/Verify pending/完整恢复阻塞”仅记录当时状态，不能作为收敛后的额外门槛，也不能覆盖真实失败记录。真实付费模型与当前业务部署仍待各自授权和验收。
+
+## P3-C Windows C1（历史证据；完整恢复移至后续change）
+
+用户追加允许下载ffmpeg后，私有Windows9.0.2构建经发布方SHA256核对，系统编码器和全局PATH未改。新增显式验收build-tag工厂，正常产品入口不启用。Windows C1四组真实上传→受控转码→账本结算→HTTP/Range→完整解码通过（156.504s，含浏览器等待）；实际Gin签名资源的原生浏览器播放、3秒跳转与暂停通过。Linux普通链四组4.87s、固定binary独立见证5.95s通过，无skip。首轮测试初始化503及小素材浏览器交互缺口保留，原C1十二源未改。完整控制者丢失恢复仍未知，C2缺可写委派；P4/P5与业务库边界不变，5.2未完成、最终Verify pending。以下保留上一实施阶段证据，“媒体未验收/编码器缺失”为当时状态。
+
+已完成 Windows 原句柄控制的最小隔离接入、三列及迁移61、启动门与恢复入口。最终冻结SQLite app21.012s/database2.348s、独立PostgreSQL app123.095s/database31.858s通过；PG含真实C1升级/重复/回滚，混合组的P1Migration仍为SQLite。P1/P2/P3-B/C1与普通playback联合回归68.164s、后端完整构建通过。初审恢复入口缺口真实RED/GREEN修复后唯一1/1独立复核PASS，独立app13.405s/database1.677s，首轮PG与环境失败日志保留。真实认证资源路由合成字节六例通过，仅证明GET/206/Range/鉴权，不是编码器或浏览器播放验收。测试组合根启用不代表正常产品启用。Stop/Query权限故障为真实API，deadline为wrapper边界注入，硬链接只证明启动前拒绝。全部控制句柄丢失且终态未提交仍unknown，现有Windows编码器缺libx264，完整崩溃恢复、媒体与浏览器验收未完成。未操作业务库、替换编码器或改变P4/P5授权；5.2继续未完成，最终Verify pending。
+
+## P3-B 事务接入（历史限定验证成果保留）
+
+已复用现有生产者操作记录、规范化物理身份和删除意图，完善 playback 发布令牌、删除屏障与受限控制接口；不新增 schema。最终冻结P1/P2/P3联合回归32.300s、SQLite专项24.944s、独立PostgreSQL专项146.347s通过；PG两个方向均观察到真实55P03，补充三个进程退出窗口的worker重入与故障/租约接管测试，后端完整构建通过。初审三项问题集中修复后唯一1/1定向复核通过，审查者独立SQLite专项9.578s通过。自产PG已停止。未运行后端全量测试或本轮Linux/真实ffmpeg矩阵。测试控制器不代表操作系统停写证明；未经验证的 OS 控制不启用，业务库不操作，P3-C 平台接入、P4 真实远端终态与 P5 旧数据接管边界保持。5.2 仍未完成。
+
+## 生产者恢复 P3/P4/P5 隔离能力验证（历史；后续change承接缺口）
+
+已获准执行隔离实验及独立审查，尚未接入产品恢复协议。Windows Job实测可在终止且成员归零后接收新进程，不能代替持久启动屏障；全部控制句柄丢失后的恢复身份未证明。当前Windows ffmpeg缺libx264，Linux非特权容器缺可写cgroup委派；Linux现有构建普通MP4转码探针通过，但不代替产品播放/Range验收。
+
+候选账本的SQLite/隔离PG真实锁冲突与失败保留实验通过，模拟终止不作OS证据。实际四家上传helper的本地丢响应/重试反例、旧缩略图及跨用户alias保护路径已测试；真实云端终态、可信旧manifest及业务维护未验收。最终独立核证与详细限制以Comet的producer-p345-capability-results.md为准。5.2仍未完成，不操作业务库或既有服务。
+
+## 对象存储出站放行与存储错误归类（2026-10-22）
+
+- 问题：画布图片生成报「参考素材上传到对象存储失败，请检查对象存储配置后重试」。真实原因是任务日志里的 `读取任务参考资源失败：七牛云 Kodo 读取失败：Get "https://yingce-dev.s3.cn-south-1.qiniucs.com/...": 不允许访问本机、内网或链路本地地址`——本机 Clash 类代理的 fake-IP 把七牛源站解析到 `198.18.0.0/15` 与 `fdfe::/16`，被 `internal/outbound` 的 SSRF 校验拒绝。上传走七牛 SDK 不经过这层校验，所以表现为"上传成功、读取失败"，而错误文本里的"七牛云"又被归类成上传失败。
+- 已实现：`CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS` 支持 `*.example.com` 子域后缀（按标签边界匹配、不含裸域，`*` 不构成 allow-all）；`scripts/restart-local.ps1` 预置对象存储域名，并在后端默认端口 `8178` 被 Windows 保留而无法绑定时自动回退到备用端口 `18178`；`cloud_agent_user_errors.go` 与 `generation-error.ts` 同步新增"读取失败"和"出站拦截"两类归类，先于上传规则判断。
+- 自动验证：`go test ./internal/outbound/ ./internal/storage/ ./internal/assets/` 通过，新增通配边界用例与"未放行拒绝 / 放行通过"回归用例；`go test ./internal/app/ -run TestUserFacingTaskError` 通过；`bun test test/generation-error-details.test.ts` 通过；`bun run build` 通过。用真实七牛签名 URL 经 `OutboundHTTPClient` 验证：未放行复现原报错，放行后 `status=200` 读回 PNG 字节。
+- `internal/app` 全量测试存在 Windows 环境预存失败（`sync C:\...\Temp\...: Access is denied`），已用 HEAD 版本对照确认与本次改动无关。
+- [ ] 用户验收：重启本地后端后，在画布重新生成之前失败的那张图，确认节点不再报“对象存储上传失败”。
+- [ ] 确认画布节点上出站拦截的提示文字不再是“上传失败”，且不包含上游 URL。
+- [ ] 生产或多实例部署若遇到同类报错，按 `docs/content/docs/backend/local-development.mdx` 把对象存储域名加进 `.env` 并重新创建后端容器。
+
+## 参考图档案分析 P2 本地生产者锁（历史隔离成果；部署未验收）
+
+用户已批准并完成新协议本地 Go 原件的跨进程锁、受限恢复及隔离测试。Windows/Linux真实子进程及临时SQLite、隔离PostgreSQL覆盖迟到启动、写中退出、结算/发布窗口、恢复回滚、别名及worker竞争。Windows精确回归app 29.220s、repository 7.126s、database 1.746s；Linux普通用户/overlayfs专项app 6.244s、repository 5.571s；隔离PG的app矩阵117.264s通过。独立代码初审通过，四项发现关闭。释放错误测试为真实锁/SQLite加受控错误注入，不声称制造内核故障。
+
+扩大筛选的11个旧生命周期fixture因缺少P1生产者证据失败，已逐项独立核证并保留，不宣称全量测试通过。P3–P5、旧记录接管、公告/ReplaceAssets恢复和现有服务部署均不在本包范围；NFS/SMB、跨主机及旧二进制混跑未验收。5.2仍未完成，最终Verify尚未进行；未操作业务库或既有服务。
+
+## 参考图档案分析 P1 生产者记录（历史限定实施成果）
+
+- 已实现私有生产者操作表及 schema 60 迁移代码、写前原子记录、一次性启动与物理结算记录；业务 failed/ready 不代表物理写入停止。旧对象无证据、远端返回仍不确定时保留记录并拒绝删除；没有旧数据回填或 provider 禁用。
+- 临时 SQLite、临时文件及受控 HTTP 专项通过：app 13.546s、database 1.643s；覆盖双连接竞争、迟到物化、持久化故障、重试不洗白和共享别名保留。三家 delete-marker 18 子例通过。未运行完整后端测试，未完成 PostgreSQL、真实 provider 或 ffmpeg 崩溃恢复验收。
+- 本段记录 P1 当时范围；后续 P2 跨进程锁另获批准，见上节。ffmpeg 控制、新远端协议及旧数据维护仍待批准。未操作业务库、重启服务或调用收费模型。任务仍为 12/13，5.2 未完成，最终 Verify 尚未进行。
+
+- P1 独立初审发现的 canonical 活别名误删已修复，唯一一次定向复核通过；复核专项 app 4.776s、database 1.698s。这不是最终集成审查或完整删除验收。
+
+## 参考图档案分析完整实施续行（P1实施前历史）
+
+- Codex明确恢复后，launcher按实际按钮/文字/徽标占用避让，独立唯一定向复查PASS；Modal关闭改为原生退场后卸载，解决键盘回焦点，32项组件测试通过并独立初审PASS。官方IAB已在真实React路由、隔离登录态及内存mock完成三分类普通点击、成功单字段采用、真实刷新恢复、取消、安全失败、403与409保草稿，明暗主题、长文本滚动、390px窄屏、Tab/Shift+Tab、Escape回焦点和Enter原生激活通过。最新前端完整构建通过。下方“4.1未通过”是此前记录，最新证据见change验证报告。
+- 三家对象存储显式delete-marker（含404）返回失败，18个本地HTTP/真实SDK子例通过且独立审查PASS；这不证明无标记响应已清空全部版本。媒体恢复写前共享CAS已修复并专项/独立审查PASS；两项旧恢复测试的Windows目录Sync失败在HEAD单文件对照同样复现，未称全绿。后端完整构建通过。当前12/13，仅5.2未完成：远端未知writer、崩溃后终止证明及未知旧缩略图仍未解决；不宣称最终Verify或完整恢复通过。未调用付费模型或访问业务库，当前运行服务未升级。
+
+- 原前端参考图fixture失败已修复：真实远端会话初始化、按ID权威素材响应和确认状态等待，保留删除保护及原业务断言。实际RED17通过/1失败；修后18通过/171断言，独立重跑18通过并窄审PASS。
+- 分镜调用仅删除不属于callee类型的多余status属性，完整目录与scope逻辑不变，独立窄审PASS。章节相邻18项通过，当前完整前端TypeScript/Vite构建通过（仅chunk/plugin timing警告）；分析加参考图六文件联合65项/418断言通过，下方TS2353及fixture失败为历史，不作为当前缺陷。
+- 后端合同矩阵、owner最外层重试与真实完成回调、来源删除双实例竞争已专项通过并分别独立审查PASS。矩阵联合34主项90子项通过（另6个PG场景跳过不算通过）；owner最新SQLite/PG两轮app48.047s、repository3.962s无跳过；来源竞争SQLite/PG三轮36叶场景94.282s无跳过。合法基准在竞争期间保持引用，两种锁先后均应拒删，不把删除先取得锁说成删除成功。专项与构建补验及未验证项汇总后，4.2已通过Runtime验收，当前权威11/13，仅4.1/5.2未完成；不重置旧审查历史。
+- 主会话已用官方IAB在隔离真实React/Vite路由及fail-closed内存mock验证成功单字段采用、关闭+真实刷新恢复、取消、安全失败、403和409保草稿/当前值；不连接业务后端或收费模型。4.1仍未通过：1280×720三卡布局浮动Agent按钮曾遮挡道具入口；筛选后可点击，但不替代遮挡验收。键盘分发/焦点结果未确认，完整明暗视觉及滚动仍待验证，不用截图文件或DOM存在代替视觉通过。
+- 最后联合专项曾因未传隔离PG DSN触发明确fail gate，失败证据保留；核验专用测试集群后原命令补验通过：app33.163s、repository4.253s、database18.228s。相同范围JSON补证194个父子PASS事件、0跳过/0失败；handler无匹配测试，不算路由验收。冷恢复后前后端完整构建重新通过，前端仍有插件耗时/重复动态导入/chunk大小警告。专用PG在确认其他客户端为0后安全停止，未接触业务库。专项及构建不替代4.1或5.2。
+- 5.2的生产者崩溃终止证明、远端迟到PUT及未知物化缩略图仍阻塞；producer/staging/variant新数据流草案未批准，不能以超时放行或推定用户选择。仅已批准范围的安全保留，不宣称完整恢复。没有最终Verify、合并或归档；未迁移/删除业务数据、重启既有服务或调用付费模型。
+
+## 参考图档案分析收尾对账（历史）
+
+- 当前仍在Build，未进入最终Verify或归档。分析界面专项35项全部通过，3.1界面/API与3.2恢复/取消/冲突已补记完成，5.3历史基准保持完成；共3/13。此前四项删除安全缺陷、两项扩大回归失败仍已关闭，下方相关未通过描述仅为历史。
+- 当前后端最小专项 `TestProfileAnalysis|TestProfileReview|TestMediaIdentity|TestMediaDeletionSchema|TestProfileWriteNestedRetry` 通过（app8.366s、repository1.019s、database1.499s），不等于当前PostgreSQL双实例或全功能验收。外层owner事务遇BUSY/40001/40P01未重试完整事务，以及真实任务完成callback在lifecycle事务内进入新owner事务的整合，需要专门验证和修复；不移除任何一侧锁。
+- 本轮前端联合65项为64通过/1失败，失败定位于参考图测试未初始化远端会话、且按ID权威素材响应为空，未满足删除保护新增的确认前刷新合同；不删除保护或延长sleep来掩盖。完整build仍失败：分镜`project-chapter-ai.ts:100`传入类型不接受的`status`（TS2353）。
+- 后端build程序两次exit0，但期间并发会话改变输入，Comet拒绝两次证据复用；不将可执行程序成功等同于当前稳定树验收通过。
+- 待闭合：生产者崩溃后的可靠终止/恢复、未知已物化缩略图身份、准入/schema/取消终态/字段完整保留与回滚/独立来源引用保护矩阵，以及真实登录项目资产路由受控mock完整链路及明暗主题、键盘、滚动。当前仅有IAB且无网络拦截接口；未向业务页面注入不完整mock，未新启测试服务。
+- 相邻参考图单文件复现17通过/1失败；已定位远端会话与权威响应fixture缺失。随后修正与独立复核均被当前账号额度策略阻断，尚无修正GREEN或独立PASS；保持失败证据，不切换账号/模型或绕过限制。
+- 未执行现有业务库迁移/删除、付费模型调用、服务重启、提交、推送、合并或归档；不以组件测试或独立HTML替代真实页面验收。
+
+## 删除引用扩大回归两项修复（已验证）
+
+- 原先两个失败已解决，定位为测试夹具与当前生产入口合同不一致，而非需要放宽生产锁：补齐真实归属Project；竞争测试遵守owner→lifecycle→行写入顺序。保留并发独立SQLite/WAL连接与双向获胜顺序，精确断言删除中/被引用错误、失败无写入、项目revision不变、获胜引用不丢和删除意图/对象/作业计数。
+- 原始失败已实际复现（5.675s）；修复后的两测试20轮通过（32.281s），`-race`通过（10.325s）。此前失败的四项补修加`TestReferenceAdmission`扩大回归现为app213.443s、repository3.353s通过；相邻物理删除失败/删除中媒体测试3.474s通过，后端build通过。
+- 独立审查PASS，并重跑两项测试3轮通过（8.398s）。本次仅修改测试文件；保留另一会话同期加入的基础夹具/锁顺序调整，再加强断言，未改生产锁协议或放宽条件。
+- 这两项不再是阻塞；下方“扩大回归失败”条目保留为历史。整个档案分析功能的其他验收边界不因此自动关闭：本轮没有PostgreSQL重验、完整产品/浏览器验收，也未完成生产者崩溃恢复或未知缩略图对象合同。未操作业务数据、重启服务、付费调用、提交或归档。
+
+## 删除安全四项补修（已专项验证，整体集成仍有限制）
+
+- 用户指定的四项问题均完成修复并经独立定向审查关闭：真实嵌套外观头像引用；迟到播放生产者共享对象清理；普通任务/结果/日志等已盘点发布路径；写入准入与文档删除扫描对称。
+- 播放身份在claim时预留，迟到生产者不直接删文件，统一交给持久删除对象worker；普通保存不能在processing或ready/failed后清空生产者身份。任务终态不豁免结果/日志引用。已盘点raw写入有类型化校验，其他已列明资源模型要求专用写入口，不宣称任意新模型或直接GORM写入自动安全。
+- 工作台能力/指南/停用封面/预设、创作批准画布、声音模型文档、模板、镜头修订与Ark绑定补齐对称扫描。task/log移除原始字符串LIKE预筛选，验证JSON转义资源ID与1/100/101候选边界。扫描更多历史文档的性能尚未压测。
+- 加密恢复检查点原子保存受任务生命周期约束的资源引用；合法空投影有独立版本标记，不阻止无关删除。未知旧密文或损坏标记仍保守阻止同账号资源删除；不新增表、不保存明文密钥或伪造资源ID。
+- 最终四项范围专项 `TestDeletionP1|TestPlaybackCompletedReservation|TestResourcePublication|TestDeletionLifecycle|TestDeletionConcurrency|TestDeleteGeneratedAssetTaskReferences|TestUploadReservation`：app **212.677s通过**、repository **5.161s通过**；`go -C backend build ./...`通过。新增缺陷均有真实行为RED/GREEN；最终独立定向复查49.675s通过，四项均CLOSED。测试使用隔离SQLite/WAL，本轮未重跑PostgreSQL。
+- 扩大到`TestReferenceAdmission`的最终联合测试仍失败（app208.259s、repository4.319s通过）：关联测试缺少Project，当前owner wrapper在删除状态检查之前返回record not found；竞争测试在ResourceLifecycleTransaction内进入要求新外层事务的storyboard wrapper，被拒绝。未删锁、改断言或覆盖另一会话代码；不能宣称当前整树集成通过。
+- 生产者崩溃恢复、未知物化缩略图fail-closed、完整前后端及真实浏览器验收仍不是本次四项关闭的交付范围。未操作业务数据库、启动或重启服务、调用收费模型、提交或归档。下方旧阻塞条目是历史过程，四项缺陷状态以上述最新结论为准。
+
+## 参考图档案分析（实施中，验收阻塞）
+
+- **最新整合结果优先于下方历史专项记录**：后端完整构建通过，但档案/媒体/引用准入联合测试失败。repository、database 专项通过；app 中角色媒体注册/复制因外层 storyboard-owner 事务协议冲突失败，SQLite/PostgreSQL 档案采用并发用例超时，另有 PostgreSQL 死锁。较早的独立并发通过记录不能代表当前整合实现通过；另一会话的锁协议未被移除或覆盖。
+- **删除安全复查未通过，已达到本轮上限**：嵌套外观 avatar 引用漏扫；未登记播放身份的迟到转码清理绕过共享对象保护；普通任务结果/日志等引用生产者覆盖不足；工作台文档与创作批准画布的写入准入和删除扫描不对称。四项 P1 均未接受，不应发布或执行真实业务删除。生产者崩溃恢复仍不完整。
+- 前端删除中生命周期的两项初审问题已修复并通过唯一一次独立定向复查：按用户记录远端独有素材的删除受理标记，拦截陈旧缓存引用；删除中图片恢复缓存不执行上传。真实RED5项，修复后扩展专项73通过、3项既有跳过；独立复查另运行专项23通过、3项既有跳过。此结论不解除后端删除安全和锁协议整合阻塞。
+- 本轮隔离 PostgreSQL 测试集群已停止；未操作既有业务数据库、重启既有服务或调用付费模型。尚未提交、归档或完成真实浏览器验收。
+
+- 实施状态：专用 API、可信视觉文本模型准入、严格草稿、安全投影、恢复/取消及真实资产审阅弹窗已完成初版代码。前端初轮专项与首版回归共 50 项通过，前后端 build 通过；后端专项 app 通过，但 repository/handler 命令没有匹配测试，不能称这两包专项通过。独立初审的 1 项 P1 和 8 项 P2 均已修复并经唯一一轮定向复查关闭。修复后前端合并专项 61 项通过，完整 TypeScript/Vite 构建通过；后端评审回归及相邻 app/canvas/repository/handler 专项、相关服务构建通过。较宽的 canvas/repository 测试另有临时 Redis 启动和 Windows SQLite 文件占用清理失败，不能宣称全量通过。
+- 复查新增取消诊断 P2 已在用户明确要求继续后修复：保留可信 cancellation/task_cancelled 标记，不提前改变状态或 CAS。新增直接读取数据库诊断的断言先复现失败，再经取消、账务及诊断专项验证通过（10.062s），追加独立窄范围审查 PASS；此前标准复查 1/1 历史保持不变。其余设计阻塞仍在，功能尚未验收或发布。
+- 已批准的媒体修订正在实施：取消全局 `(TaskID, Role)` 唯一索引，保留版本内唯一及原任务来源，配套前向迁移与注册/候选重放校验。正向采用回归已在旧实现上实际失败；待修订后的通过证据和独立审查，不能将安全 409 当成功。
+- 删除方案 A 核心已实现但未完成验收：包括清空/强制清除的入口采用引用保护和两阶段记录保留，新增意图/对象完成状态、共享别名/播放身份保护、迟到worker墓碑、上传/转码发布栅栏。核心生命周期及SQLite WAL专项通过（128.324s），隔离PostgreSQL并发通过（11.769s），仓储准入专项通过（2.273s）。独立初审发现的普通引用写入竞争等问题正在补全；通过核心专项不代表全部入口安全已验收。
+- 删除剩余阻塞：上传或转码进程崩溃后，没有可靠的生产者终止证明，当前安全地保留阻塞状态而不盲目超时删除；未知已生成缩略图因缺少真实对象身份而拒绝删除。完整崩溃恢复、跨意图别名及整合审查仍未完成，不把永久卡住当作可重试已交付。本轮不执行真实业务删除或现有数据库迁移。
+- 详情合同修订已完成专项与独立初审：仅专用详情返回授权历史基准 `baseline={versionId,fields}`，分类白名单保留 JSON 类型及缺失/null，列表和通用任务不暴露。缺失/损坏基准禁止首次采用；既有收据精确重放优先。后端5个顶层基准测试（18个子测试）通过；前端helper/API/真实modal共35项、188断言通过，独立审查PASS。浏览器验收仍未完成。
+- 新增真实并发证据：SQLite文件WAL和全新隔离PostgreSQL14临时集群均通过同键字段重排重放、同键异字段、异键同任务及双任务同基准竞争。随后新增人工编辑与采用竞争，SQLite实际暴露原写路径返回原始`database is locked`；相关写路径已改为读取前获取写锁并重试整个短事务，修复后100轮通过（15.182s），PostgreSQL对应场景通过。媒体迁移/并发注册及相邻调用专项在SQLite和PostgreSQL均通过（database21.804s/app13.554s），独立审查进行中。删除竞争与完整验收仍不能据此提前勾选。
+- 本轮前端完整构建遇到另一会话`project-chapter-ai.ts:100`的TS2353（`status`不属于目标类型），未修改该文件；已通过的专项不等于当前整树构建通过。
+- [ ] 三分类来源/权限/旧版本、可信模型能力和字节预算、通用任务伪造及重路由拒绝均有实际专项证据。
+- [ ] 严格 JSON、重复键、字段类型、32 KiB/2,000 rune 边界、非法控制字符及全部空字段；任务中心、流、诊断不泄露原文或摘要。
+- [ ] 取消先胜、完成先胜、旧租约迟到、重复取消、终态恢复/游标与引用保护通过测试。
+- [ ] 字段子集、原 JSON 类型、声音/表现/真实媒体任务来源、Prompt/Note、关联项目 revision、收据防注入及完整事务回滚通过测试。
+- [ ] SQLite 文件/WAL 双连接与 PostgreSQL 双实例分别验证同键/异参/人工编辑/删除竞争；没有实际 PostgreSQL 环境不得用 SQLite 结果替代。
+- [ ] 任务清理后历史原始采用重放、继承收据判别、来源阻止删除及物理删除失败保留记录均有证据。
+- [ ] 真实组件覆盖模型同步、字段差异、未知禁选、历史类型提示、写失败、响应不确定重试、换账号与迟到响应隔离；并解决历史基准读取缺口。
+- [ ] 真实登录路由使用可控 mock 检查成功、失败、取消、权限和冲突，以及明暗主题、焦点和滚动。组件测试不替代此项。最新浏览器检查仅有 IAB，无网络路由拦截接口；新开目标路由后 DOM 两次返回空，截图准备超时，未能取得当前页面验收证据。未重启服务、提交表单或调用模型。
+- [ ] 相关 Go/Bun 专项与构建、独立审查通过；收费视觉质量/供应商取消与费用结果仅在另获授权后验证，本轮不调用真实收费模型。
+
+## 项目参考图资产首版（实施中，待验证）
+
+- 实施状态：角色、场景、道具的单图直用与参考生成，原图/候选/成品分离，任务中心恢复及显式采用已完成初版实现，处于独立审查修复与回归收尾，不表示最终验收通过。合同见 [HTTP API](/docs/backend/http-api) 与[后端数据库](/docs/backend/backend-database)；不新增表，不扩展多图、批量、拆分或 AI 反推设定。
+- 前端自动验证：最终 18 项弹窗测试与 18 项 API/helper/既有回归，共 36 项通过（含不支持参考模型拒绝提交、账号切换缓存隔离）；`bun run --cwd web build` 通过，仅有 chunk 大小警告，前端 diff check exit 0。原两项前端发现已复审通过；后续 P2（活动任务摘要缺少可选 `metadata.nodeId` 被前端误过滤）已修复，四项真实 TaskSummary 结构回归先红后绿，已独立复核关闭。原四项后端、两项前端及新增投影 P2 均已关闭；审查关闭不等同 PostgreSQL 或真实端到端验收通过。
+- 后端自动验证：原八组新增专项、五组 review 回归及 `TestRegisterTaskOutputFromTask` 等旧回归合并执行，app/repository/handler 均通过，耗时分别为 57.548 / 2.939 / 4.372 秒。`go -C backend build ./...` 与后端 diff check 均 exit 0；原四项后端安全发现已复审关闭。此前原专项三包为 33.153 / 0.747 / 3.036 秒，五项新增 review 回归为 5.438 秒。另补三分类创建事务回滚、MIME/尺寸、越权候选游标/账号、目标/结果伪造及采用保留声音测试；`go -C backend test ./internal/app -run 'TestProjectReference|TestProjectImageCandidate' -count=1` 通过（3.987 秒），仅测试变化，diff check exit 0。专项通过不等同全库测试或所有场景通过。
+- 浏览器部分验证：真实登录态页面已通过 DOM 与截图检查新建弹窗、角色/场景/道具下拉可见、场景选择成功、参考生成切换直用成功、空输入提交禁用及原图/成品分区。语义 locator 工具连续超时后改用 DOM/CUA 操作；未提交、未上传、未调用付费模型，已另观察到暗色弹窗截图可读，但滚动工具超时、滚动未确认，窄屏和完整交互仍未验收，不作完整暗色或端到端通过声明。
+- 运行态限制：只读读取本地后端 `/api/openapi.yaml` 返回 HTTP 200、`application/yaml`、72293 字节，包含 OpenAPI 但不含 `image-candidates` / `assetImageCandidates`，说明当前运行后端尚未加载新接口。本轮未重启，真实前后端联调需重启后端后再进行。
+- 待验收边界：SQLite 已覆盖确定性交错 CAS、双候选、回滚及引用复检；未验证 PostgreSQL 或多实例真实并发，未执行真实付费生成。以下清单保留待用户/环境验收状态，自动验证不能替代真实交互与端到端验收。
+- [ ] 三类资产分别验证手动创建、文字设定、本地上传与素材库选择；名称仅空白、无效目录或创建事务失败时不留半个实体/版本/项目关联。
+- [ ] 普通角色照片直用仅产生 `primary`，无生成请求；明确选择三视图才用同一张图绑定 `primary` 和 `turnaround_sheet`。角色生成只产出单张三视图，场景/道具只绑定单张主图。
+- [ ] 设置或替换原图要求非空 `resourceId`、`expectedVersionId`，创建新版本而不覆盖当前成品；拒绝清除、未上传完成、非图片、无效尺寸/MIME、他人资源及跨项目资产。
+- [ ] 原图、当前成品、无参考三种生成来源准确；选择当前成品不修改保存的原图。系统模型和自定义渠道不支持参考或能力未知时，在入队/上游调用前拒绝；多参考、多输出及未知 `adoptionMode` 不得静默降级。
+- [ ] `manual` 成功后候选为 `pending_confirmation`，资产主版本及原图/成品不变；失败、取消、媒体恢复、项目读取补偿都不误自动采用。未传模式或显式 `auto` 的旧调用行为不变。
+- [ ] 关闭弹窗并刷新后，可从 `GET /api/tasks` 找回待确认及已采用候选；超过一页和默认最近任务数量仍不遗漏。核对 `projectId` 必填、可选 `assetId`、`pageSize` 1–100/默认 50、`beforeTaskId` 末条游标、相同创建时间下 ID 倒序与 `TaskSummary[]` 安全投影及预览地址；拒绝与 `activeOnly` 组合、非法及越权游标。
+- [ ] 刷新期间通过独立 `GET /api/tasks?projectId=...&activeOnly=true&assetId=...&pageSize=1` 检测在途任务并轮询完成；服务端先校验用户/项目/资产关联，再在 `limit` 前筛选目标，不以全项目最近 100 条前端过滤替代。活动查询与成功候选 keyset 分开，终态后重查候选且不把空活动列表当成成功。
+- [ ] 采用校验同用户/项目/目标资产、成功 `manual` 任务、唯一就绪结果；不能伪造资源、采用失败任务或读取他人候选。采用创建一个新版本，保留原图和其他定义，候选变为 `adopted` 并关联采用版本。
+- [ ] 双候选竞争、编辑与采用并发、过期基准返回 HTTP 409 / `project_asset_version_changed`，不覆盖最新资产、不自动重发收费生成；同任务重复采用仅返回当前摘要，不重复建版，也不把最新资产回退。
+- [ ] 角色名称/文字编辑不丢原图、声音和未修改表现；通用 `definition` 无法注入或清除受保护原图。事务写入失败整体回滚，无半绑定版本或提前标记 adopted。
+- [ ] 当前和历史版本原图均受资源删除保护并返回引用来源；SQLite/PostgreSQL 分别验证引用新增与删除竞争，不能仅凭引用扫描代码存在视为通过。
+- [ ] 登录态真实页面验收三分类入口、模型能力提示、候选预览/采用/冲突反馈、重复提交、明暗主题、窄屏、弹窗滚动和键盘焦点；不得用独立 HTML 或未登录页代替。
+- [ ] 获得真实模型条件与费用授权后，再验证单次生成、结果保存、采用与刷新恢复，并记录实际调用范围；无条件时继续标为未验证。
+
 ## yuxibox minimax-h3-quality 视频协议（2026-10-21）
 
 - 已实现：新增独立插件 `yuxibox-minimax-h3-quality`（`POST /v1/videos` JSON、`GET /v1/videos/{{taskId}}` 轮询、`/content` 二进制回退），与 `yuxibox Seedance` 分开配置。参数：提示词 ≤20000 字符、时长 1–15 秒、分辨率 `480p`/`768p`（`720p` 归一为 `768p`）、比例 16:9/9:16/1:1、参考图 1–9 张公网 HTTPS、参考音频 0–3 条；**不支持参考视频**（`videos` 映射为 `unsupported`，准入阶段拒绝）。`seed` 通过 `providerOptions.yuxibox-minimax-h3-quality.seed` 传入。
@@ -3050,7 +3197,7 @@ PR #507 核心能力已按主分支实现保留，并补齐小视口尺寸约束
 剧情章节的分镜入口已从“在画布中分镜”纠正为“生成到分镜制作”；生成结果直接写入镜头脚本，并在本章已有分镜时执行显式替换确认。以下场景仍需使用真实项目与已安装技能确认：
 
 - [x] 章节正文、项目画风、当前角色版本和项目资产统一进入 `agent_storyboard_rows` 任务；分镜生成继续经过 `Skill Runtime` 的 `shortDrama` profile，并记录实际技能版本和引用文件。
-- [x] 本章待确认角色也会进入分镜上下文；模型在 `characterIds` 中返回角色名称时，已确认角色自动映射到真实资产版本，待确认或未知角色降级为仅名称引用，不再触发结构修复请求或报废整份分镜。后端专项测试、前端映射测试与生产构建通过。
+- 历史 `characterIds` 前端名称映射曾有专项测试与构建记录；当前章节生成改由服务端解析 `projectAssetRefs` 并复核真实任务，不能沿用旧映射测试证明新合同通过。待确认角色提示与名称文本可保留，但不替代完整资产目录和有效版本绑定；当前验收见本页“章节分镜资产自动绑定”。
 - [x] 分镜任务结果映射到镜头画面、动作、对白、景别、机位、运镜、图片/动态提示词与接戏备注；模型返回的项目资产关联随镜头在同一替换事务中保存。
 - [x] 本章无分镜时直接写入“分镜制作”并跳转到分镜图阶段；已有分镜时展示镜头、脚本版本、资产引用、生成产物和候选资产影响数量，生成失败不修改旧数据。
 - [x] 技能多选框占满弹窗内容宽度；专项测试、TypeScript 检查、后端服务测试和前端生产构建通过。

@@ -40,6 +40,7 @@ type ShotRevisionInput struct {
 type ReplaceProjectUnitShotsRequest struct {
 	Shots           []ReplaceProjectUnitShotInput `json:"shots"`
 	ExpectedShotIDs []string                      `json:"expectedShotIds"`
+	GeneratedBinding *GeneratedBindingInput `json:"generatedBinding,omitempty"`
 }
 
 type ReplaceProjectUnitShotInput struct {
@@ -68,6 +69,16 @@ type CreateAssetCandidatesRequest struct {
 const assetCandidateSourceChapterCharacter = "chapter_character_extract"
 
 func (s *Service) CreateProjectShot(userID string, projectID string, req CreateProjectShotRequest) (model.Shot, error) {
+	var result model.Shot
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		var err error
+		result, err = (&Service{repo: repo}).createProjectShotLocked(userID, projectID, req)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) createProjectShotLocked(userID string, projectID string, req CreateProjectShotRequest) (model.Shot, error) {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return model.Shot{}, err
 	}
@@ -123,12 +134,27 @@ func (s *Service) CreateProjectShot(userID string, projectID string, req CreateP
 }
 
 func (s *Service) ReplaceProjectUnitShots(userID string, projectID string, unitID string, req ReplaceProjectUnitShotsRequest) ([]model.Shot, error) {
+	var result []model.Shot
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		var err error
+		result, err = (&Service{repo: repo}).replaceProjectUnitShotsLocked(userID, projectID, unitID, req)
+		return err
+	})
+	return result, mapStoryboardBindingNotFoundError(err)
+}
+
+func (s *Service) replaceProjectUnitShotsLocked(userID string, projectID string, unitID string, req ReplaceProjectUnitShotsRequest) ([]model.Shot, error) {
+	if req.GeneratedBinding != nil {
+		if err := s.validateGeneratedStoryboard(userID, projectID, unitID, req); err != nil {
+			return nil, mapStoryboardBindingNotFoundError(err)
+		}
+	}
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
-		return nil, err
+		return nil, mapStoryboardBindingNotFoundError(err)
 	}
 	unitID = strings.TrimSpace(unitID)
 	if _, err := s.repo.ProjectUnit(projectID, unitID); err != nil {
-		return nil, err
+		return nil, mapStoryboardBindingNotFoundError(err)
 	}
 	if len(req.Shots) == 0 || len(req.Shots) > 200 {
 		return nil, BadAuthRequest("章节分镜数量必须在 1 到 200 之间")
@@ -168,7 +194,11 @@ func (s *Service) ReplaceProjectUnitShots(userID string, projectID string, unitI
 		}
 	}
 	// 章节级重生成是一个整体写操作，旧镜头与引用必须和新镜头在同一事务中替换。
-	if err := s.repo.ReplaceProjectUnitShots(projectID, unitID, shots, revisions, references, req.ExpectedShotIDs); err != nil {
+	var validators []func(*repository.Repository) error
+	if req.GeneratedBinding != nil {
+		validators = append(validators, func(repo *repository.Repository) error { return (&Service{repo:repo}).validateGeneratedStoryboard(userID,projectID,unitID,req) })
+	}
+	if err := s.repo.ReplaceProjectUnitShots(projectID, unitID, shots, revisions, references, req.ExpectedShotIDs, validators...); err != nil {
 		if errors.Is(err, repository.ErrProjectUnitShotsChanged) {
 			return nil, BadAuthRequest("本章分镜已发生变化，请刷新后重新确认")
 		}
@@ -178,6 +208,18 @@ func (s *Service) ReplaceProjectUnitShots(userID string, projectID string, unitI
 }
 
 func (s *Service) CreateShotRevision(userID string, projectID string, shotID string, input ShotRevisionInput) (model.Shot, model.ShotRevision, error) {
+	var shot model.Shot
+	var revision model.ShotRevision
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		writer := &Service{repo: repo}
+		var err error
+		shot, revision, err = writer.createShotRevisionLocked(userID, projectID, shotID, input)
+		return err
+	})
+	return shot, revision, err
+}
+
+func (s *Service) createShotRevisionLocked(userID string, projectID string, shotID string, input ShotRevisionInput) (model.Shot, model.ShotRevision, error) {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return model.Shot{}, model.ShotRevision{}, err
 	}
@@ -201,6 +243,12 @@ func (s *Service) CreateShotRevision(userID string, projectID string, shotID str
 }
 
 func (s *Service) DeleteProjectShot(userID string, projectID string, shotID string) error {
+	return s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		return (&Service{repo: repo}).deleteProjectShotLocked(userID, projectID, shotID)
+	})
+}
+
+func (s *Service) deleteProjectShotLocked(userID string, projectID string, shotID string) error {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return err
 	}
@@ -255,6 +303,16 @@ func validShotStatus(status string) bool {
 }
 
 func (s *Service) LinkShotAsset(userID string, projectID string, shotID string, req LinkShotAssetRequest) (model.ShotAssetReference, error) {
+	var result model.ShotAssetReference
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		var err error
+		result, err = (&Service{repo: repo}).linkShotAssetLocked(userID, projectID, shotID, req)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) linkShotAssetLocked(userID string, projectID string, shotID string, req LinkShotAssetRequest) (model.ShotAssetReference, error) {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return model.ShotAssetReference{}, err
 	}
@@ -278,6 +336,12 @@ func (s *Service) LinkShotAsset(userID string, projectID string, shotID string, 
 }
 
 func (s *Service) UnlinkShotAsset(userID string, projectID string, shotID string, referenceID string) error {
+	return s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		return (&Service{repo: repo}).unlinkShotAssetLocked(userID, projectID, shotID, referenceID)
+	})
+}
+
+func (s *Service) unlinkShotAssetLocked(userID string, projectID string, shotID string, referenceID string) error {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return err
 	}

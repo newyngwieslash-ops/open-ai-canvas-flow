@@ -53,6 +53,10 @@ func ClientAssetPayload(asset model.Asset) json.RawMessage {
 		payload["updatedAt"] = formatClientAssetTime(asset.UpdatedAt)
 	}
 	if data, ok := payload["data"].(map[string]any); ok {
+		if definition, ok := data["definition"].(map[string]any); ok {
+			// Adoption receipts are durable internal replay credentials, not client data.
+			delete(definition, "_profileAnalysisAdoption")
+		}
 		kind, _ := payload["kind"].(string)
 		if kind == "image" || kind == "video" || kind == "audio" || kind == "model" {
 			// 资源元数据使用 size；素材合同使用 bytes，直接使用已记录的真实大小。

@@ -142,6 +142,10 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if input.Mode == "" && strings.HasPrefix(taskType, "video_") {
 		input.Mode = "video"
 	}
+	var admissionInput map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &admissionInput); err != nil {
+		return nil, err
+	}
 	promptTemplateOperation := metadataString(input.Metadata, "promptTemplateOperation")
 	// 视频节点的最终 Prompt 只取输入框内容，不能被分镜模板替换；图片和文本仍沿用模板能力。
 	if input.Mode != "video" && promptTemplateOperation != "" {
@@ -155,22 +159,35 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if strings.TrimSpace(input.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
-	// 将 @[tool:type:ID:label:icon] 令牌替换为对应工具的提示词文本
-	resolved, err := s.ResolveToolMentionTokens(userID, input.Mode, input.Prompt)
-	if err != nil {
-		return nil, err
+	// 章节摘要在 admission 前已解析正文工具；目录名称只能作为数据，不能再次展开工具令牌。
+	if admissionInput["chapterAssetContext"] == nil {
+		resolved, err := s.ResolveToolMentionTokens(userID, input.Mode, input.Prompt)
+		if err != nil {
+			return nil, err
+		}
+		input.Prompt = resolved
 	}
-	input.Prompt = resolved
 	config, err := s.resolveProviderConfig(input.Config)
 	if err != nil {
 		return nil, err
 	}
 	input.Config = config
+	if admissionInput["chapterAssetContext"] != nil {
+		if err := s.prepareStoryboardPromptExecution(&input); err != nil {
+			return nil, err
+		}
+	}
 	if input.Mode == "text" && input.Config.CapabilityConfig != nil && input.Config.CapabilityConfig.Text != nil {
 		// The same capability contract drives provider output limits, billing
 		// estimates and Agent context budgeting. Never silently fall back to a
 		// transport-specific fixed token count when the model declares one.
 		input.MaxOutputTokens = input.Config.CapabilityConfig.Text.MaxOutputTokens
+	}
+	profileAnalysis := metadataString(input.Metadata, "operation") == profileAnalysisOperation
+	if profileAnalysis {
+		var admission map[string]any
+		if err := json.Unmarshal([]byte(rawInput), &admission); err != nil { return nil, err }
+		if err := s.validateProfileModel(userID, admission, nil); err != nil { return nil, err }
 	}
 	var textPublisher *taskTextStreamPublisher
 	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") {
@@ -178,7 +195,7 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 		supportsStream := input.Config.CapabilityConfig == nil || input.Config.CapabilityConfig.Text == nil || input.Config.CapabilityConfig.Text.Streaming == nil || *input.Config.CapabilityConfig.Text.Streaming
 		input.StreamText = requestedStream && supportsStream
 	}
-	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") && input.StreamText {
+	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") && input.StreamText && !profileAnalysis {
 		textPublisher = newTaskTextStreamPublisher(s, userID, taskExecutionID(ctx))
 		if input.AgentRequests != nil {
 			textPublisher = newCloudAgentStreamPublisher(s, userID, taskExecutionID(ctx), "assistant_delta")

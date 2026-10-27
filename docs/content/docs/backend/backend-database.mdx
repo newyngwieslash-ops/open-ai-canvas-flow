@@ -45,6 +45,8 @@ Schema 45 新增 `upload_reservations`：`id`、`user_id`、`size`、`day`、`ex
 
 资源引用快照同时读取素材表现的 `resource_id` 和 `metadata_json`（包括嵌套资源字段）；不能先按 `resource_id` 过滤表现记录，否则仅在 metadata 中引用的共享资源会漏检。素材批量删除保留其他素材仍引用的资源；管理员删除也复用这一引用边界。
 
+任务及日志资源扫描按 JSON 解码后的语义识别引用，不以原始文本是否包含资源 ID 子串作为候选过滤；JSON Unicode 转义不能绕过引用保护。工作台能力/指南/预设、创作批准画布、工作流模板、镜头修订、声音模型文档及 Ark 绑定均需保持写入准入与删除扫描一致；停用记录不等于解除持久引用。
+
 ## 结构迁移与版本
 
 版本 52 `user_avatar_presets` 为 `users` 新增 `avatar_preset`，保存系统头像的稳定标识：`person`、`director`、`camera`、`cat`、`rabbit`、`robot`、`rocket`、`sparkles`。系统头像由前端共享组件渲染；选择时原子更新 default 模式、预设标识并清除上传图片。上传个人头像保留上次系统头像偏好，后续可以再次选择；未知标识被拒绝，不保存客户端提供的任意图片地址。
@@ -63,6 +65,7 @@ Schema 45 新增 `upload_reservations`：`id`、`user_id`、`size`、`day`、`ex
 
 - 使用原任务主键、计费订单及现有 worker 租约，不新增执行批次或第二套队列。`media_stage` 为 `download | upload | local_save | register | checkpoint | completed`，表示当前结果的保存阶段，不改变上游生成日志的成功状态。
 - `media_recovery_json` 使用已有 settings-key 加密，记录媒体地址、暂存文件名、资源 ID 和有界重试计数；不保存媒体 base64，不向任务 JSON/摘要返回该字段。数据库与 `.settings-key` 必须一起备份；该字段计入任务存储用量。
+- 恢复检查点的资源引用与任务 CAS 原子保存：非空引用使用 `cloud_agent_resource_leases` 的保留 `task-media:` 命名空间，只记录真实资源 ID，保护期绑定对应任务的非空检查点，不受普通到期清理影响。普通 Agent 租约接口不能写入此命名空间；检查点清空或任务删除后释放保护。合法空引用使用 `media_recovery_json` 内的版本化 `task-media:empty:v1:` 标记包裹原密文，不增加表、伪造资源 ID 或暴露明文。未知旧密文或损坏标记缺少可靠投影时保守阻止同用户资源删除，直到通过正规恢复路径重新保存或清除检查点。
 - 下载前写入恢复记录，下载后记录暂存文件，上传后记录资源。通过任务 ID 和输出索引生成稳定的资源上传键、素材 ID；任务成功、结果记录及素材登记在同一数据库事务提交，登记失败则不发布任务成功。
 - 记录保留在终态任务中，成功后清理对应暂存文件；任务的既有保留/删除策略不变。结构迁移只增加列，不扫描日志，不修改历史任务、结果或账单。没有恢复记录的历史失败任务不会自动变为可恢复。
 
@@ -211,6 +214,34 @@ docker compose -f docker-compose.deploy.yml up -d backend web
 
 短剧项目状态以这些领域表为准。自由画布可以承载探索节点，但画布 metadata 不作为生产完成度、镜头版本或交付可用性的真相源。
 
+### 项目参考图与手动图片候选 JSON 合同（首版实施中）
+
+本节记录已完成初版实现、处于独立审查修复与回归收尾的合同；已有自动验证结果见待测试专题，不代表最终验收通过，PostgreSQL 并发仍未验证。复用既有 `assets`、`asset_versions`、`asset_representations`、`project_asset_links`、`tasks` 和 `resources`，**不新增表、列、DDL 或数据回填**；图片候选不写入用于章节提取确认的 `project_asset_candidates`。
+
+- **原图**：`AssetVersion.DefinitionJSON`（`asset_versions.definition_json`）增加可选 `referenceImage: { resourceId }`。只存经服务端校验的资源 ID，不存浏览器临时 URL；这是原始参考，不是 `primary` 表现。设置或替换原图创建不可变新版本，保留当前表现、声音及其他定义。通用角色设定编辑不得注入或清除此受保护字段。本版不支持清除原图。
+- **历史保护**：当前和历史版本中的嵌套 `referenceImage.resourceId` 都属于资源引用；不因原图未出现在表现表中就允许删除。事务内检查资源归属、就绪状态与删除竞争；历史版本仍引用的原图不能被物理误删，删除应返回引用来源。
+- **任务输入**：`Task.InputJSON` 的 `metadata` 固化 `adoptionMode=manual|auto`（缺省 `auto`）、`referenceSource=original|current|none` 与 `projectAssetVersionId`。原图、当前成品或无参考由服务端按基准版本解析，选当前成品不改原图。
+- **任务结果**：`Task.ResultJSON` 保存手动模式的 `assetImageCandidate={ assetId, baseVersionId, state, adoptedVersionId? }`，其中 `state` 为 `pending_confirmation` 或 `adopted`。成功但未采用只保留任务结果及资源，不提前推进资产版本。候选通过任务中心恢复，不新增独立候选存储。
+- **采用事务**：沿用表现中的任务关联和版本关联判定同任务是否已采用；采用状态与版本/表现提交保持一致，不先单独写 `adopted`。首次采用以旧主版本条件 CAS 推进；角色编辑也需使用版本条件，保留声音与未编辑表现。并发失败或事务异常不留半绑定版本。
+- **幂等重放**：同任务重复采用不再建版，返回当前资产摘要并保留原采用版本关联，不将最新资产回退。冲突返回 `project_asset_version_changed`，不重新生成、不覆盖新版本。
+- **图片角色**：普通照片直用默认 `portrait`，仅绑定 `primary`；用户明确声明三视图时可让同一图片同时作为 `primary` 与 `turnaround_sheet`。角色生成仍只产出单张三视图，不增加肖像生成或拆分；场景/道具成品使用 `primary`。
+
+本次没有结构迁移，但回退程序仍须评估任务语义：不能让不认识 `manual` 的旧 worker 接手未完成的手动候选，否则可能误走自动绑定。保留原图、任务和版本数据，不以清理数据替代回退控制。字段与查询合同见 [HTTP API](/docs/backend/http-api)，待验收项见[待测试](/docs/progress/pending-test)。
+
+### 参考图档案分析 JSON 合同（实施中，待验证）
+
+分析草稿和采用收据复用 `tasks`、`assets`、`asset_versions` 和既有表现/声音关系，不新增专用分析表。已确认的阻塞解除修订另含媒体表现索引前向迁移及严格两阶段删除所需的持久化结构；与后续批量生成提案的两张表无关。以下为正在实施的目标合同，专项及并发证据见[待测试](/docs/progress/pending-test)。迁移代码的临时库验证不表示现有业务库已升级。
+
+- 前向迁移 58 `asset_media_version_identity` 删除全局 `idx_asset_representations_task_role` 唯一索引；保留版本内 `(asset_version_id, role)` 唯一和任务查询索引。多个版本可以保留同一个真实媒体任务来源。复制记录产生后不能直接重建旧全局唯一索引；升级须与修订后的注册/重放逻辑一起部署，不能改写历史迁移校验和。
+- 前向迁移 59 `resource_deletion_intents` 新增 `resource_deletion_intents`（用户、资产/资源 ID 集合、状态、时间）和 `resource_deletion_objects`（意图、资源别名集合、变体、冻结存储身份、状态、时间）。对象完成状态独立于可移除的队列作业保留；不保存存储凭据，已完成意图不视为业务引用。失败时保留资产、版本、表现和资源；必要对象全部完成后才原子清理。详细行为仍以当前增量的验证结果为准。
+- `Task.InputJSON` 固定 `mode=text`，metadata 的 `operation=asset_image_profile_analysis`，并保存 `profileAnalysis={ schemaVersion:1, projectId, assetId, category, baseVersionId, source:{resourceId}, promptVersion:1 }`。图片 storageKey 为 `resource:<id>`，来源引用使用扫描器可识别的嵌套 `resourceId`，不持久化临时 URL 或客户端能力声明。
+- `Task.ResultJSON` 成功时仅保存 `{ mode:"text", assetProfileAnalysis:{ schemaVersion:1, assetId, category, baseVersionId, source:{resourceId}, draft, adoption } }`。无第二份原始文本、reasoning 或 canvas_ops；失败原文和未经校验的流不成为可恢复草稿。
+- 采用在 `AssetVersion.DefinitionJSON._profileAnalysisAdoption` 写入受保护收据，并在任务结果 `adoption` 镜像。收据包含 schemaVersion、operation、taskId、taskCreatedAt、projectId、assetId、baseVersionId、adoptedVersionId、source、selectedFields、idempotencyKeyHash、requestDigest、draftDigest、adoptedAt。摘要使用 SHA-256，幂等键作用域为用户与任务，选中字段排序后参与请求摘要；不向公开视图输出内部摘要。
+- 普通定义写入不得注入、删除或篡改收据。版本可继承收据，但仅 `receipt.adoptedVersionId == version.ID` 是原始采用记录；新分析写新收据，旧采用事实仍留在历史版本。
+- 单事务先核对收据重放，再核对基准 CAS；首次采用只替换明确选中字段。复制所有表现为新行但保留真实媒体 `TaskID`，保留声音、未选字段的原 JSON 类型、版本 Prompt/Note 和资产媒体 payload。任务收据、版本及所有关联项目 revision 同时提交或回滚。
+- PostgreSQL 按资产、任务、排序后的资源、排序后的关联项目加锁；SQLite 文件/WAL 通过读取前资产条件自赋值更新取得写锁，BUSY/序列化类失败重试整个短事务。不能用进程 mutex 或单连接内存库声称跨实例验证通过。
+- 未采用草稿随任务保存，不另建 TTL。任务清理后不恢复列表或草稿详情；原始历史采用收据仅用于完全匹配的幂等重放。有效任务、草稿和历史来源仍保护资源。资源删除失败保留记录的既有合同需要独立实测，不能以存在删除 outbox 代替证据。
+
 ### 长篇项目读取边界
 
 短剧工作台不再通过单个项目详情响应下载全部章节正文、镜头历史、产物、画布和资产。读取按页面职责拆分：
@@ -310,7 +341,16 @@ schema v27 为 `channel_model_price_tiers` 和 `billing_orders` 添加 `cost_con
 | --- | --- | --- |
 | `resources` | 保存资源元数据和实际存储位置引用 | `user_id + upload_key` 唯一约束保证逻辑上传幂等；S3 资源必须通过 `storage_setting_id` 固定绑定创建时的位置；浏览器默认经同源接口读取 |
 | `storage_locations` | 保存平台或个人 S3 位置版本、加密凭据和连接测试摘要 | Endpoint、Bucket、Region、PathStyle、PathPrefix、Provider 组成不可变位置；同位置只轮换凭据，位置变化创建新记录 |
-| `resource_deletion_jobs` | 在业务记录删除后可靠清理物理对象 | 固化资源的存储位置与对象键；删除失败保留任务并重试，S3 404 按幂等成功处理 |
+| `resource_deletion_jobs` | 驱动严格两阶段物理清理 | 固化对象身份；失败保留作业、资产、历史及资源，必要对象完成后才清理业务记录 |
+| `resource_producer_operations` | P1私有生产者操作与停写证据 | 每次写入前记录不可变操作ID、资源/用户/变体、完整位置与namespace/key、规范身份摘要及协议版本；物理状态与业务结果独立，未知操作阻止物理删除完成，不通过公共资源JSON输出 |
+
+P1前向迁移60仅新增操作表并纳入统一模型清单，不为旧资源回填可信结算。操作ID同时作为本次结算令牌；`fenced`与`physical_state`正交，`outcome`记录该调用的业务成功/失败，`proof`只保存有界的结算依据类别及时间，不保存凭据或上游响应。记录保留全部尝试，后续成功不得覆盖先前unknown；同物理身份的别名也需要完整证据。写入记录与首次资源创建保持事务一致，结算不能顺带恢复ready。完整跨进程恢复、远端终态协议与旧数据维护不属于P1。
+
+P2修订复用此表，不增加迁移版本：`local-go-lock-v1`仅标记遵守跨进程锁的本地Go原件写入，旧`producer-accounting-v1`不自动升级。受保护的删除准入可在取得同物理身份锁后，在原事务内将新协议中断操作fence并记录`local-lock-recovered`，业务成功无法证明时只允许失败/清理，不能恢复ready。恢复和删除登记一起回滚；业务发布令牌校验、配额与状态更新必须同事务。平台及并发运行验收状态见待测试清单，协议字段不代表既有服务已部署此能力。
+
+P3-B同样不新增表、字段或迁移版本。playback物理结算与业务发布在一个事务内校验操作令牌；删除屏障后的操作不能重新发布ready。`controlled-playback-v1`仅是受限接口的协议标记，默认产品启动器不登记该协议，不能根据旧行或请求参数自动赋予控制权。隔离测试为具体操作注入控制能力，停止失败保留原有pending意图、对象墓碑与未决操作；只有全部必要证据通过复核才允许物理结算，逻辑记录仍在物理清理成功后删除。此标记不代表已实现OS崩溃恢复，具体测试状态见待测试清单。
+
+P3-C Windows C1 在前向迁移61增加三列：`control_owner`（长度36）、`control_phase`（长度24）和 `control_result`（长度16）均非空、默认空串。新控制实例绑定不可复用的操作代际；阶段只允许 armed→attempted→closed→stopped，未尝试的 armed 可在启动门下原子封闭；stopped 的 success/failed/unknown 与物理终态独立核对，unknown 不能发布 ready。迁移只增加列，不升级旧协议、不填充停写证据；旧行空值保持保守处理。当前只在临时 SQLite 和独立 PostgreSQL 运行迁移，正常产品入口未启用，业务库未迁移；最终测试及审查状态见待测试清单。
 
 `storage_locations.value_json` 中的 Secret Key 和 Session Token 使用后端设置密钥加密。启用 S3 前，关键位置字段和凭据摘要必须与最近一次 Put、Range Get、Delete 连接测试结果一致；历史资源继续按绑定的位置读取和删除，不随当前配置切换。
 
@@ -318,7 +358,7 @@ schema v27 为 `channel_model_price_tiers` 和 `billing_orders` 添加 `cost_con
 
 个人画布中的图片、视频和音频采用 `Asset -> Resource` 所有权约束：前端先提交素材，再提交带 `assetId` 的画布节点或时间线直连媒体；后端保存画布前校验资源属于当前用户、状态为 `ready`、素材存在且引用同一资源。素材更新、全量替换和删除也会反向检查已有画布，不能把仍在使用的资源从素材库中移除或替换成其他资源。登录历史账号时，前端会按资源键补建缺失素材并回写 `assetId`。这项修复复用现有表和 Outbox，不新增结构迁移。
 
-账号文件容量只统计 `ready` 资源，并按 Provider、Endpoint、Bucket、ObjectKey 对同一物理对象去重。上传中或失败记录不占用已存储容量。后台每小时检查资源生命周期：超过 1 小时的 `pending/failed` 记录，以及超过 24 小时仍没有任何素材、画布、任务或其他业务引用的 `ready` 记录，会在再次校验引用后删除数据库记录并写入 `resource_deletion_jobs`，由幂等 Worker 清理物理对象。
+账号文件容量只统计 `ready` 资源，并按 Provider、Endpoint、Bucket、ObjectKey 对同一物理对象去重。上传中或失败记录不占用已存储容量。后台生命周期扫描使用年龄条件筛选候选，但超时不是停写证明；候选仍需通过引用、生产者结算与身份检查，进入持久删除意图后由Worker清理物理对象，最后再清理业务记录。旧无证据的ready/failed及未决writer不会因年龄达到阈值自动删除。
 
 素材状态为 `archived` 时进入回收站。后台按“资源与请求策略”中的 `recycleBinRetentionDays` 定期扫描过期项；`0` 表示永久保留。自动清理与用户手动彻底删除复用同一 service 引用校验和 `resource_deletion_jobs` Outbox，仍被画布、项目、任务或其他业务记录引用的素材不会被删除。
 

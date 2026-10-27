@@ -266,18 +266,33 @@ func (s *Service) storeTaskMediaFile(task *model.Task, index int, path, mimeType
 	}()
 	var resource *model.Resource
 	if existing == nil {
-		resource, _, err = s.storeResourceWithWriter(task.UserID, kind, "generated."+extensionFromMimeType(mimeType), mimeType, info.Size(), width, height, durationMs, file, mediaUploadKey(task.ID, index), false, s.storeTaskMediaObject)
+		resource, _, err = s.storeResource(task.UserID, kind, "generated."+extensionFromMimeType(mimeType), mimeType, info.Size(), width, height, durationMs, file, mediaUploadKey(task.ID, index), false)
 	} else {
 		// Reuse the same object key after a failed upload; no orphan per retry.
 		resource = existing
 		if resource.UserID != task.UserID || resource.Size != info.Size() || resource.MimeType != mimeType {
 			return nil, errors.New("恢复文件与原始资源不一致")
 		}
+		// Claim the live row before I/O; a stale failed snapshot must not write
+		// through deletion or another producer's pending reservation.
+		claimed, claimErr := s.repo.ClaimFailedResourceUpload(task.UserID, resource.ID)
+		if claimErr != nil {
+			return nil, claimErr
+		}
+		if !claimed {
+			return nil, resourceUploadInProgress()
+		}
+		resource.Status, resource.Error = model.ResourceStatusPending, ""
 		resource.DurationMs = durationMs
-		resource.ETag, err = s.storeTaskMediaObject(resource, "generated."+extensionFromMimeType(mimeType), file)
+		var operation *model.ResourceProducerOperation
+		resource.ETag, operation, err = s.writeStoredResourceProduction(resource, nil, "generated."+extensionFromMimeType(mimeType), file)
 		if err == nil {
 			resource.Status, resource.Error, resource.UpdatedAt = model.ResourceStatusReady, "", time.Now()
-			err = s.saveResourceWithinStorageLimit(resource, "")
+			err = s.publishResourceProduction(resource, operation, "")
+		}
+		if err != nil {
+			resource.Status, resource.Error, resource.UpdatedAt = model.ResourceStatusFailed, err.Error(), time.Now()
+			err = errors.Join(err, s.publishResourceProduction(resource, operation, ""))
 		}
 	}
 	if err != nil {
@@ -312,15 +327,8 @@ func probeMediaDurationMs(path string) int64 {
 
 // Unlike ordinary uploads, generated output preserves an OSS failure for
 // explicit recovery instead of silently changing the storage destination.
-func (s *Service) storeTaskMediaObject(resource *model.Resource, _ string, body io.Reader) (string, error) {
-	if resource.Provider == "local" {
-		return "", writeLocalResourceObject(filepath.Join(s.dataDir, "resources", filepath.FromSlash(resource.ObjectKey)), body)
-	}
-	setting, err := s.ossSettingForResource(resource.UserID, resource)
-	if err != nil {
-		return "", err
-	}
-	return putOSSObject(s.storageSettingWithRuntimePolicy(setting), resource.ObjectKey, resource.MimeType, resource.Size, body)
+func (s *Service) storeTaskMediaObject(resource *model.Resource, fileName string, body io.Reader) (resourceWriteResult, error) {
+	return s.storeResourceObject(resource, fileName, body)
 }
 
 // Cleanup is best effort only after durable completion. Expired leftovers are

@@ -14,6 +14,10 @@ const completeImage = {
 };
 
 describe("parseAssetRecord", () => {
+    test("preserves deleting while rejecting unknown states", () => {
+        expect(parseAssetRecord({ ...completeImage, status: "deleting" }).status).toBe("deleting");
+        expect(() => parseAssetRecord({ ...completeImage, status: "deleted" })).toThrow();
+    });
     test("accepts a complete image asset", () => {
         expect(parseAssetRecord(completeImage).tags).toEqual(["角色"]);
     });

@@ -17,6 +17,10 @@ func TestRegisterCanvasAPIExposesOpenAPIAndProjects(t *testing.T) {
 	RegisterCanvasAPI(router.Group("/api"), &service.Service{})
 
 	wanted := map[string]bool{
+		"POST /api/projects/:id/asset-entities":                                 false,
+		"PUT /api/projects/:id/assets/:assetId/reference-image":                 false,
+		"POST /api/projects/:id/assets/:assetId/image-candidates/:taskId/adopt": false,
+		"GET /api/tasks":                    false,
 		"GET /api/openapi.yaml":             false,
 		"GET /api/workbench/tools":          false,
 		"GET /api/workbench/tasks":          false,

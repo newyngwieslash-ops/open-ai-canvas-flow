@@ -116,8 +116,14 @@ func (r *Repository) CreditLedgerReferenceExists(referenceKey string) (bool, err
 }
 
 func (r *Repository) CreateTaskWithCreditReservation(task *model.Task, order *model.BillingOrder, activeTaskLimit int) error {
-	return r.Transaction(func(repo *Repository) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
 		tx := repo.db
+		if err := repo.RequireProfileSource(task, true); err != nil {
+			return err
+		}
+		if err := repo.requireLiveDocumentResources(task.UserID, task.InputJSON); err != nil {
+			return err
+		}
 		if err := New(tx).requireExclusiveCanvasAgent(task); err != nil {
 			return err
 		}
@@ -141,8 +147,14 @@ func (r *Repository) CreateTaskWithCreditReservation(task *model.Task, order *mo
 }
 
 func (r *Repository) CreateTaskWithActiveLimit(task *model.Task, activeTaskLimit int) error {
-	return r.Transaction(func(repo *Repository) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
 		tx := repo.db
+		if err := repo.RequireProfileSource(task, true); err != nil {
+			return err
+		}
+		if err := repo.requireLiveDocumentResources(task.UserID, task.InputJSON); err != nil {
+			return err
+		}
 		if err := New(tx).requireExclusiveCanvasAgent(task); err != nil {
 			return err
 		}
@@ -165,7 +177,11 @@ func (r *Repository) CreateTaskWithActiveLimit(task *model.Task, activeTaskLimit
 func (r *Repository) RetryTaskWithBilling(userID string, prepared *model.Task, order *model.BillingOrder, activeTaskLimit int) (*model.Task, error) {
 	var task model.Task
 	taskID := prepared.ID
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireLiveDocumentResources(userID, prepared.InputJSON); err != nil {
+			return err
+		}
+		tx := repo.db
 		if err := enforceActiveTaskLimit(tx, userID, activeTaskLimit); err != nil {
 			return err
 		}

@@ -18,8 +18,15 @@ export type GenerationTaskOutput = {
     materializationErrorCode?: string;
 };
 
+export type AssetImageCandidate = { assetId: string; baseVersionId: string; state: "pending_confirmation" | "adopted"; adoptedVersionId?: string };
+
+export function listAssetImageCandidateTasks(projectId: string, options: { assetId?: string; beforeTaskId?: string; signal?: AbortSignal } = {}) {
+    return http.get<GenerationTask[]>("/tasks", { params: { projectId, assetImageCandidates: true, assetId: options.assetId, pageSize: 50, beforeTaskId: options.beforeTaskId }, signal: options.signal });
+}
+
 export type GenerationTask = {
     id: string;
+    assetImageCandidate?: AssetImageCandidate;
     clientOperationId?: string;
     retryOf?: string;
     attemptGroupId?: string;
@@ -141,11 +148,12 @@ export type GenerationTaskPageRequest = {
     limit: number;
     projectId?: string;
     activeOnly: boolean;
+    assetId?: string;
     cursor?: string;
 };
 
 type GenerationTaskPage<T> = { tasks: T[]; nextCursor?: string };
-type GenerationTaskListOptions = { projectId?: string; activeOnly?: boolean };
+type GenerationTaskListOptions = { projectId?: string; activeOnly?: boolean; assetId?: string };
 type GenerationTaskListDependencies = {
     listBackend?(limit: number, options?: GenerationTaskListOptions, signal?: AbortSignal): Promise<GenerationTask[]>;
     listBackendPage?(request: GenerationTaskPageRequest, signal?: AbortSignal): Promise<GenerationTaskPage<GenerationTask>>;
@@ -154,19 +162,20 @@ type GenerationTaskListDependencies = {
 const defaultGenerationTaskListDependencies: GenerationTaskListDependencies = {
     listBackendPage: async (page, signal) => ({
         tasks: await http.get<GenerationTask[]>("/tasks", {
-                params: { pageSize: Math.min(page.limit, 100), projectId: page.projectId, activeOnly: page.activeOnly || undefined },
+                params: { pageSize: Math.min(page.limit, 100), projectId: page.projectId, activeOnly: page.activeOnly || undefined, ...(page.assetId ? { assetId: page.assetId } : {}) },
                 signal,
             }),
     }),
 };
 
-export async function listGenerationTasks(limit = 30, options?: { projectId?: string; activeOnly?: boolean }, dependencies: GenerationTaskListDependencies = defaultGenerationTaskListDependencies, signal?: AbortSignal) {
+export async function listGenerationTasks(limit = 30, options?: { projectId?: string; activeOnly?: boolean; assetId?: string }, dependencies: GenerationTaskListDependencies = defaultGenerationTaskListDependencies, signal?: AbortSignal) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(10_000, Math.trunc(limit))) : 30;
     const baseRequest = {
         limit: Math.min(100, boundedLimit),
         ...(options?.projectId ? { projectId: options.projectId } : {}),
         activeOnly: options?.activeOnly === true,
+        ...(options?.assetId ? { assetId: options.assetId } : {}),
     } satisfies GenerationTaskPageRequest;
     const backendPageReader =
         dependencies.listBackendPage ??
@@ -177,6 +186,7 @@ export async function listGenerationTasks(limit = 30, options?: { projectId?: st
                     {
                         ...(page.projectId ? { projectId: page.projectId } : {}),
                         activeOnly: page.activeOnly,
+                        ...(page.assetId ? { assetId: page.assetId } : {}),
                     },
                     pageSignal,
                 )) ?? [],

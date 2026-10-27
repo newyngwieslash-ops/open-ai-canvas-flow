@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -31,6 +32,18 @@ func replaceableAssetCategories() map[model.AssetCategory]struct{} {
 // ReplaceProjectAssetRepresentations 把图片资源绑定为资产新版本（primary 表现），
 // 并把首张图写入 payload 的 data.storageKey 以驱动列表与预览展示。
 func (s *Service) ReplaceProjectAssetRepresentations(userID string, projectID string, assetID string, req ReplaceAssetRepresentationsRequest) (ProjectAssetSummary, error) {
+	var result ProjectAssetSummary
+	err := s.repo.WithStoryboardAssetWrite(projectID, strings.TrimSpace(assetID), func(repo *repository.Repository) error {
+		writer := *s
+		writer.repo = repo
+		var err error
+		result, err = writer.replaceProjectAssetRepresentationsLocked(userID, projectID, assetID, req)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) replaceProjectAssetRepresentationsLocked(userID string, projectID string, assetID string, req ReplaceAssetRepresentationsRequest) (ProjectAssetSummary, error) {
 	if _, err := s.repo.ProjectForUser(userID, projectID); err != nil {
 		return ProjectAssetSummary{}, err
 	}
@@ -104,7 +117,7 @@ func (s *Service) ReplaceProjectAssetRepresentations(userID string, projectID st
 	}
 	nextAsset.PayloadJSON = payload
 
-	if err := s.repo.SaveCharacterVersion(projectID, &nextAsset, &next, representations, nil); err != nil {
+	if err := s.repo.SaveCharacterVersion(projectID, &nextAsset, &next, representations, nil, asset.PrimaryVersionID); err != nil {
 		return ProjectAssetSummary{}, err
 	}
 	return s.projectAssetSummary(userID, projectID, &nextAsset)

@@ -8,6 +8,10 @@ type VisualImageInput = {
     projectId: string;
     asset: ProjectAsset;
     config: AiConfig;
+    adoptionMode?: "manual";
+    referenceSource?: "original" | "current" | "none";
+    referenceImages?: import("@/types/image").ReferenceImage[];
+    onTaskCreated?: (task: GenerationTask) => void;
     projectStyle?: { id: string; title: string; prompt: string; profile?: StyleProfileSnapshot };
 };
 
@@ -16,7 +20,7 @@ export function projectVisualTaskAssetId(task: Pick<GenerationTask, "clientConte
     return nodeId.startsWith("project-asset-image:") ? nodeId.slice("project-asset-image:".length) : "";
 }
 
-export function projectVisualImageRequest({ projectId, asset, config, projectStyle }: VisualImageInput): Parameters<typeof runBackendCanvasGenerationTask>[0] {
+export function projectVisualImageRequest({ projectId, asset, config, projectStyle, adoptionMode, referenceSource, referenceImages, onTaskCreated }: VisualImageInput): Parameters<typeof runBackendCanvasGenerationTask>[0] {
     if (!projectId.trim()) throw new Error("缺少项目标识");
     if (!asset.id || !asset.primaryVersionId) throw new Error("缺少资产或版本标识，请刷新");
     if (asset.category !== "environment" && asset.category !== "prop") throw new Error("请选择场景或道具");
@@ -42,7 +46,10 @@ export function projectVisualImageRequest({ projectId, asset, config, projectSty
             .filter(Boolean)
             .join("\n\n"),
         config: generationConfig,
+        referenceImages,
+        onTaskCreated,
         metadata: {
+            ...(adoptionMode ? { adoptionMode, referenceSource: referenceSource || "none" } : {}),
             operation: "project_asset_image",
             domainProjectId: projectId,
             projectAssetId: asset.id,
@@ -56,6 +63,7 @@ export function projectVisualImageRequest({ projectId, asset, config, projectSty
 
 export async function generateProjectVisualImage(input: VisualImageInput) {
     const result = await runBackendCanvasGenerationTask(projectVisualImageRequest(input));
+    if (input.adoptionMode === "manual") return result;
     if (result.projectAssetImageStatus === "stale") throw new Error("图片已生成并保留在任务结果中，但资产版本已变化，未覆盖当前图片；请从任务结果选择图片重新绑定");
     if (result.projectAssetImageStatus !== "bound") throw new Error("图片尚未绑定到资产，请在任务中心检查结果");
 }

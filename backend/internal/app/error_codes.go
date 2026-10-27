@@ -9,34 +9,42 @@ const (
 	CodeUnauthorized        = kernel.CodeUnauthorized
 	CodeForbidden           = kernel.CodeForbidden
 	CodeNotFound            = kernel.CodeNotFound
-	CodeConflict            = kernel.CodeConflict
-	CodeTooManyRequests     = kernel.CodeTooManyRequests
-	CodeInternal            = kernel.CodeInternal
-	CodeBadGateway          = kernel.CodeBadGateway
-	CodeUnavailable         = kernel.CodeUnavailable
-	CodeTimeout             = kernel.CodeTimeout
-	CodeQuotaExceeded       = kernel.CodeQuotaExceeded
-	CodeIdempotencyConflict = kernel.CodeIdempotencyConflict
-	CodeRateLimited         = kernel.CodeRateLimited
+	CodeConflict                               = kernel.CodeConflict
+	CodeUnprocessableEntity                    = kernel.CodeUnprocessableEntity
+	CodeTooManyRequests                        = kernel.CodeTooManyRequests
+	CodeInternal                               = kernel.CodeInternal
+	CodeBadGateway                             = kernel.CodeBadGateway
+	CodeUnavailable                            = kernel.CodeUnavailable
+	CodeTimeout                                = kernel.CodeTimeout
+	CodeQuotaExceeded                          = kernel.CodeQuotaExceeded
+	CodeIdempotencyConflict                    = kernel.CodeIdempotencyConflict
+	CodeStoryboardAssetBindingInvalidReference = kernel.CodeStoryboardAssetBindingInvalidReference
+	CodeStoryboardAssetBindingCapacityExceeded = kernel.CodeStoryboardAssetBindingCapacityExceeded
+	CodeRateLimited                            = kernel.CodeRateLimited
 )
 
 type ErrorReason = kernel.ErrorReason
 
 const (
-	ReasonInvalidArgument     = kernel.ReasonInvalidArgument
-	ReasonUnauthorized        = kernel.ReasonUnauthorized
-	ReasonForbidden           = kernel.ReasonForbidden
-	ReasonNotFound            = kernel.ReasonNotFound
-	ReasonConflict            = kernel.ReasonConflict
-	ReasonProjectNameConflict = kernel.ReasonProjectNameConflict
-	ReasonFailedPrecondition  = kernel.ReasonFailedPrecondition
-	ReasonQuotaExceeded       = kernel.ReasonQuotaExceeded
-	ReasonRateLimited         = kernel.ReasonRateLimited
-	ReasonUnavailable         = kernel.ReasonUnavailable
-	ReasonTimeout             = kernel.ReasonTimeout
-	ReasonInternal            = kernel.ReasonInternal
-	ReasonBadGateway          = kernel.ReasonBadGateway
-	ReasonUpstreamDNSFailed   = kernel.ReasonUpstreamDNSFailed
+	ReasonInvalidArgument                        = kernel.ReasonInvalidArgument
+	ReasonUnauthorized                           = kernel.ReasonUnauthorized
+	ReasonForbidden                              = kernel.ReasonForbidden
+	ReasonNotFound                               = kernel.ReasonNotFound
+	ReasonConflict                               = kernel.ReasonConflict
+	ReasonProjectNameConflict                    = kernel.ReasonProjectNameConflict
+	ReasonFailedPrecondition                     = kernel.ReasonFailedPrecondition
+	ReasonQuotaExceeded                          = kernel.ReasonQuotaExceeded
+	ReasonRateLimited                            = kernel.ReasonRateLimited
+	ReasonUnavailable                            = kernel.ReasonUnavailable
+	ReasonTimeout                                = kernel.ReasonTimeout
+	ReasonInternal                               = kernel.ReasonInternal
+	ReasonBadGateway                             = kernel.ReasonBadGateway
+	ReasonUpstreamDNSFailed                      = kernel.ReasonUpstreamDNSFailed
+	ReasonStoryboardAssetBindingInvalidRequest   = kernel.ReasonStoryboardAssetBindingInvalidRequest
+	ReasonStoryboardAssetBindingInvalidReference = kernel.ReasonStoryboardAssetBindingInvalidReference
+	ReasonStoryboardAssetBindingCapacityExceeded = kernel.ReasonStoryboardAssetBindingCapacityExceeded
+	ReasonStoryboardAssetBindingConflict         = kernel.ReasonStoryboardAssetBindingConflict
+	ReasonStoryboardAssetBindingBusy             = kernel.ReasonStoryboardAssetBindingBusy
 )
 
 func ReasonForStatus(status int) ErrorReason {

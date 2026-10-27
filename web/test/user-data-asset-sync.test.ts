@@ -3,9 +3,13 @@ import localforage from "localforage";
 import { apiClient } from "@/services/api/request";
 import {
     acknowledgeRemoteAssets,
+    deleteAssetsWithRemoteSync,
     initializeRemoteUserDataSession,
     resetRemoteUserDataSync,
     saveRemoteUserDataNow,
+    loadAssetsForUse,
+    loadAssetLibraryPage,
+    mergeRemoteAssetsWithLocalPending,
 } from "@/services/user-data-sync";
 import { flushAssetStorePersistence, useAssetStore, type Asset, type EntityAsset, type ImageAsset } from "@/stores/use-asset-store";
 
@@ -86,6 +90,10 @@ beforeEach(async () => {
         let status = 200;
         if (method === "get" && id === "snapshot") {
             data = { projects: [], assets: [...remoteAssets.values()] };
+        } else if (method === "post" && url === "/assets/batch") {
+            data = { assets: body.ids.flatMap((id: string) => remoteAssets.has(id) ? [structuredClone(remoteAssets.get(id)!)] : []) };
+        } else if (method === "get" && url === "/assets") {
+            data = { assets: [], total: 0, page: 1, pageSize: 20 };
         } else if (method === "get" && url.includes("/assets/")) {
             const remote = remoteAssets.get(id);
             if (!remote) {
@@ -118,6 +126,144 @@ afterEach(async () => {
     localforage.setItem = originalSet;
     if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window;
     else Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+});
+
+test("accepted remote-only reference fence is scoped and survives same-account session reset", async () => {
+    const { isAssetAvailableForReference } = await import("@/lib/asset-availability");
+    const stale = imageAsset("scoped-remote-only");
+    await initializeRemoteUserDataSession(scope);
+    apiClient.defaults.adapter = async (config) => ({ config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { ids: [stale.id] }, msg: "ok" } });
+    await deleteAssetsWithRemoteSync([stale.id]);
+    expect(isAssetAvailableForReference(stale)).toBe(false);
+    resetRemoteUserDataSync();
+    expect(isAssetAvailableForReference(stale)).toBe(false);
+    const previous = scope;
+    scope = "other-account";
+    expect(isAssetAvailableForReference(stale)).toBe(true);
+    scope = previous;
+    expect(isAssetAvailableForReference(stale)).toBe(false);
+});
+
+test("failed deletion never fences an available remote-only asset", async () => {
+    const { isAssetAvailableForReference } = await import("@/lib/asset-availability");
+    const stale = imageAsset("rejected-remote-only");
+    await initializeRemoteUserDataSession(scope);
+    apiClient.defaults.adapter = async () => { throw new Error("delete rejected"); };
+    await expect(deleteAssetsWithRemoteSync([stale.id])).rejects.toThrow("delete rejected");
+    expect(isAssetAvailableForReference(stale)).toBe(true);
+});
+
+test("deleting data URL hydration retains record without uploading", async () => {
+    const images = await import("@/services/image-storage");
+    const upload = spyOn(images, "uploadImage").mockResolvedValue({ url: "uploaded", storageKey: "resource:unexpected", width: 10, height: 10, bytes: 10, mimeType: "image/png" } as Awaited<ReturnType<typeof images.uploadImage>>);
+    const deleting: ImageAsset = { ...imageAsset("hydrate-deleting"), status: "deleting", data: { dataUrl: "data:image/png;base64,AAAA", width: 10, height: 10, bytes: 10, mimeType: "image/png" } };
+    try {
+        useAssetStore.setState({ assets: [deleting] });
+        await flushAssetStorePersistence();
+        await useAssetStore.persist.rehydrate();
+        expect(upload).not.toHaveBeenCalled();
+        expect(useAssetStore.getState().assets).toEqual([deleting]);
+    } finally { upload.mockRestore(); }
+});
+
+test("remote deleting beats dirty local data during snapshot and authorized refresh", async () => {
+    const stale = imageAsset("deleting-dirty");
+    const deleting = { ...stale, status: "deleting" as const };
+    expect(mergeRemoteAssetsWithLocalPending([deleting], [{ ...stale, title: "unsaved" }])).toEqual([deleting]);
+    useAssetStore.setState({ assets: [stale] });
+    await initializeRemoteUserDataSession(scope);
+    useAssetStore.getState().updateAsset(stale.id, { title: "unsaved" });
+    remoteAssets.set(stale.id, deleting);
+    await loadAssetsForUse([stale.id], { refresh: true });
+    expect(useAssetStore.getState().assets[0]).toEqual(deleting);
+    await saveRemoteUserDataNow();
+    expect(requests.filter((request) => request.method === "put")).toEqual([]);
+});
+
+test("deleting cache is not uploaded; authorized batches <=100 remove only missing IDs", async () => {
+    const assets = Array.from({ length: 205 }, (_, i) => ({ ...imageAsset(`pending-${i}`), status: "deleting" as const }));
+    useAssetStore.setState({ assets });
+    await initializeRemoteUserDataSession(scope);
+    for (const asset of assets.slice(1)) remoteAssets.set(asset.id, asset);
+    await saveRemoteUserDataNow();
+    expect(useAssetStore.getState().assets.map((asset) => asset.id)).toEqual(assets.slice(1).map((asset) => asset.id));
+    expect(requests.filter((request) => request.method === "put")).toEqual([]);
+    expect(requests.filter((request) => request.url === "/assets/batch").map((request) => (request.body as { ids: string[] }).ids.length)).toEqual([100, 100, 5]);
+});
+
+test("dirty verified asset adopts server deleting without uploading stale content", async () => {
+    const stale = imageAsset("verified-stale");
+    useAssetStore.setState({ assets: [stale] });
+    await initializeRemoteUserDataSession(scope);
+    remoteAssets.set(stale.id, stale);
+    await loadAssetsForUse([stale.id], { refresh: true });
+    useAssetStore.getState().updateAsset(stale.id, { title: "old edit" });
+    remoteAssets.set(stale.id, { ...stale, status: "deleting" });
+    await saveRemoteUserDataNow();
+    expect(useAssetStore.getState().assets[0].status).toBe("deleting");
+    expect(requests.filter((request) => request.method === "put")).toEqual([]);
+});
+
+test("refresh missing asset cannot reuse an earlier verified cache for selection", async () => {
+    const stale = imageAsset("gone");
+    await initializeRemoteUserDataSession(scope);
+    remoteAssets.set(stale.id, stale);
+    await loadAssetsForUse([stale.id]);
+    remoteAssets.delete(stale.id);
+    await expect(loadAssetsForUse([stale.id], { refresh: true })).rejects.toThrow("不存在");
+});
+
+test("deleting store records reject stale edit and restore writes", () => {
+    const deleting = { ...imageAsset("write-fence"), status: "deleting" as const };
+    useAssetStore.setState({ assets: [deleting] });
+    expect(() => useAssetStore.getState().updateAsset(deleting.id, { title: "edit", status: "confirmed" })).toThrow("删除中");
+    expect(useAssetStore.getState().assets).toEqual([deleting]);
+});
+
+test("page deletion projection fences known dirty cache without importing the page", async () => {
+    const stale = imageAsset("page-known");
+    useAssetStore.setState({ assets: [stale] });
+    await initializeRemoteUserDataSession(scope);
+    useAssetStore.getState().updateAsset(stale.id, { title: "unsaved" });
+    apiClient.defaults.adapter = async (config) => ({ config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { assets: [{ ...stale, status: "deleting" }, imageAsset("unrelated")], total: 2 }, msg: "ok" } });
+    await loadAssetLibraryPage({ page: 1, pageSize: 20 });
+    expect(useAssetStore.getState().assets).toEqual([{ ...stale, status: "deleting" }]);
+});
+
+test("stale snapshot cannot reactivate accepted deleting record", () => {
+    const stale = imageAsset("snapshot-pending");
+    const deleting = { ...stale, status: "deleting" as const };
+    expect(mergeRemoteAssetsWithLocalPending([stale], [deleting])).toEqual([deleting]);
+});
+
+test("reconciliation response from old account cannot remove new account cache", async () => {
+    const deleting = { ...imageAsset("same-id"), status: "deleting" as const };
+    useAssetStore.setState({ assets: [deleting] });
+    await initializeRemoteUserDataSession(scope);
+    apiClient.defaults.adapter = async (config) => {
+        resetRemoteUserDataSync();
+        useAssetStore.setState({ assets: [imageAsset("same-id")] });
+        return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { assets: [] }, msg: "ok" } };
+    };
+    await expect(saveRemoteUserDataNow()).rejects.toThrow("账号已切换");
+    expect(useAssetStore.getState().assets[0].status).toBe("confirmed");
+});
+
+test("empty filtered page never removes known deleting records", async () => {
+    const deleting = { ...imageAsset("filtered"), status: "deleting" as const };
+    useAssetStore.setState({ assets: [deleting] });
+    await initializeRemoteUserDataSession(scope);
+    await loadAssetLibraryPage({ page: 1, pageSize: 20, status: "active", query: "unrelated" });
+    expect(useAssetStore.getState().assets).toEqual([deleting]);
+});
+
+test("failed authoritative batch keeps deleting cache", async () => {
+    const deleting = { ...imageAsset("failed-read"), status: "deleting" as const };
+    useAssetStore.setState({ assets: [deleting] });
+    await initializeRemoteUserDataSession(scope);
+    apiClient.defaults.adapter = async () => { throw new Error("offline"); };
+    await expect(saveRemoteUserDataNow()).rejects.toThrow("offline");
+    expect(useAssetStore.getState().assets).toEqual([deleting]);
 });
 
 test("角色域写入后 acknowledge 投影，后续保存不再误报远端版本已变化", async () => {

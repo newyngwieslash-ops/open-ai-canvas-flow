@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"log/slog"
 	"math"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 const resourceDeletionLease = 2 * time.Minute
@@ -122,7 +124,7 @@ func (s *Service) cleanupDetachedUserResources(userID string, candidates []model
 		}
 	}
 	deletionJobs := resourceDeletionJobs(userID, physicalObjects)
-	if err := s.repo.DeleteDetachedResources(detached, deletionJobs); err != nil {
+	if err := s.withResourceDeletionLocks(nil, detachedIDs, func(repo *repository.Repository) error { return repo.DeleteDetachedResources(detached, deletionJobs) }); err != nil {
 		return err
 	}
 	slog.Info("detached resource cleanup", "removed", len(detached), "user", userID)
@@ -176,22 +178,75 @@ func (s *Service) drainResourceDeletionJobs(limit int) {
 		if job == nil {
 			return
 		}
-		resource := &model.Resource{
-			ID: job.ResourceID, UserID: job.UserID, Provider: job.Provider,
-			Endpoint: job.Endpoint, Bucket: job.Bucket, StorageSettingID: job.StorageSettingID,
-			ObjectKey: job.ObjectKey,
-		}
-		if err := s.deleteStoredResourceObject(job.UserID, resource); err != nil {
-			delay := resourceDeletionRetryDelay(job.Attempts)
-			if retryErr := s.repo.RetryResourceDeletionJob(job.ID, owner, err.Error(), time.Now().Add(delay)); retryErr != nil {
-				log.Printf("resource deletion worker retry update failed for %s: %v", job.ID, retryErr)
-			}
+		err = s.processResourceDeletionJob(job)
+		if err != nil {
+			log.Printf("resource deletion worker attempt failed for %s: %v", job.ID, err)
 			continue
 		}
-		if err := s.repo.CompleteResourceDeletionJob(job.ID, owner); err != nil {
-			log.Printf("resource deletion worker completion failed for %s: %v", job.ID, err)
+	}
+}
+
+func (s *Service) processResourceDeletionJob(job *model.ResourceDeletionJob) (err error) {
+	var locks *repository.ResourcePhysicalLocks
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.repo.RetryResourceDeletionJob(job.ID, job.LeaseOwner, err.Error(), time.Now().Add(resourceDeletionRetryDelay(job.Attempts))))
+		}
+		err = errors.Join(err, locks.Close())
+	}()
+	resource := &model.Resource{ID: job.ResourceID, UserID: job.UserID, Provider: job.Provider, Endpoint: job.Endpoint, Bucket: job.Bucket, StorageSettingID: job.StorageSettingID, ObjectKey: job.ObjectKey, PlaybackObjectKey: job.ObjectKey}
+	repo := s.repo
+	var stopped []model.ResourceProducerOperation
+	var controlIdentities []string
+	if s.playbackControl != nil {
+		repo = repo.WithControlledPlayback(s.playbackControl.Operations())
+		stopped, controlIdentities, err = repo.ControlledPlaybackForDeletion(job)
+		if err != nil {
+			return err
+		}
+		for _, operation := range stopped {
+			if err = s.playbackControl.CloseAndStop(operation); err != nil {
+				return err
+			}
 		}
 	}
+	if job.Provider == "local" || job.Provider == "" {
+		candidate, e := s.repo.ResourceDeletionObject(job.ID)
+		if e != nil {
+			return e
+		}
+		controlIdentities = append(controlIdentities, repository.ResourcePhysicalIdentity(resource, candidate.Variant))
+		locks, e = repository.AcquireResourcePhysicalLocks(s.dataDir, controlIdentities)
+		if e != nil {
+			return e
+		}
+		repo = repo.WithResourcePhysicalLocks(locks)
+	}
+	if len(stopped) > 0 {
+		if err = repo.SettleControlledPlaybackDeletion(job, stopped); err != nil {
+			return err
+		}
+	}
+	object, retained, err := repo.PrepareResourceDeletion(job)
+	if err != nil {
+		return err
+	}
+	if !retained {
+		if locks != nil {
+			if err := locks.Validate(repository.ResourcePhysicalIdentity(resource, object.Variant)); err != nil {
+				return err
+			}
+		}
+		if object.Variant == "playback" {
+			err = s.deleteLocalPlaybackObject(object.ObjectKey)
+		} else {
+			err = s.deleteStoredResourceObject(job.UserID, resource)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return repo.FinishResourceDeletion(job, retained)
 }
 
 func resourceDeletionRetryDelay(attempts int) time.Duration {

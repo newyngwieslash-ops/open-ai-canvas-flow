@@ -70,7 +70,7 @@ func userAssetFilteredQuery(query *gorm.DB, filter UserAssetPageFilter, includeS
 	}
 	switch strings.TrimSpace(filter.Status) {
 	case "active":
-		query = query.Where("status <> ?", model.AssetVersionStatusArchived)
+		query = query.Where("status NOT IN ?", []model.AssetVersionStatus{model.AssetVersionStatusArchived, model.AssetVersionStatusDeleting})
 	case "archived":
 		query = query.Where("status = ?", model.AssetVersionStatusArchived)
 	case "":
@@ -134,13 +134,14 @@ func (r *Repository) UpdateAssetFolder(folder *model.AssetFolder) error {
 }
 
 func (r *Repository) MoveUserAssetsToFolder(userID string, assetIDs []string, folderID string) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		return moveUserAssetsToFolder(tx, userID, assetIDs, folderID)
+	return r.withStoryboardUserAssetsWrite(userID, func(repo *Repository) error {
+		return moveUserAssetsToFolder(repo.db, userID, assetIDs, folderID)
 	})
 }
 
 func (r *Repository) DeleteAssetFolder(userID string, folderID string) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.withStoryboardUserAssetsWrite(userID, func(repo *Repository) error {
+		tx := repo.db
 		var folder model.AssetFolder
 		if err := tx.First(&folder, "id = ? AND user_id = ?", folderID, userID).Error; err != nil {
 			return err

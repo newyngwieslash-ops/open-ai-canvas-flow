@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,7 +122,7 @@ func TestDeleteLocalResourceObjectRemovesOnlyResourceDirectoryFile(t *testing.T)
 	}
 }
 
-func TestDeleteAssetDatabaseFailureLeavesPhysicalObjectAndNoOutbox(t *testing.T) {
+func TestDeleteAssetAdmissionDatabaseFailureLeavesPhysicalObjectAndNoOutbox(t *testing.T) {
 	svc, db, dataDir := newResourceDeletionTestService(t)
 	objectKey := "users/user-1/image/asset.png"
 	resourcePath := filepath.Join(dataDir, "resources", filepath.FromSlash(objectKey))
@@ -132,18 +134,16 @@ func TestDeleteAssetDatabaseFailureLeavesPhysicalObjectAndNoOutbox(t *testing.T)
 	}
 	resource := model.Resource{ID: "resource-1", UserID: "user-1", Provider: "local", ObjectKey: objectKey, Status: model.ResourceStatusReady}
 	asset := model.Asset{ID: "asset-1", UserID: "user-1", Title: "test", PayloadJSON: `{"data":{"storageKey":"resource:resource-1"}}`}
-	if err := db.Create(&resource).Error; err != nil {
-		t.Fatal(err)
-	}
+	createClosedLocalFixtureResource(t, svc, &resource)
 	if err := db.Create(&asset).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec("CREATE TRIGGER fail_asset_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT, 'forced asset delete failure'); END;").Error; err != nil {
+	if err := db.Exec("CREATE TRIGGER fail_deletion_intent BEFORE INSERT ON resource_deletion_intents BEGIN SELECT RAISE(ABORT, 'forced deletion intent failure'); END;").Error; err != nil {
 		t.Fatal(err)
 	}
 
-	if err := svc.deleteUserAssetWithResources("user-1", "asset-1", false); err == nil {
-		t.Fatal("forced database failure should be returned")
+	if err := svc.deleteUserAssetWithResources("user-1", "asset-1", false); err == nil || !strings.Contains(err.Error(), "forced deletion intent failure") {
+		t.Fatalf("expected deletion admission database failure, got %v", err)
 	}
 	if _, err := os.Stat(resourcePath); err != nil {
 		t.Fatalf("physical object changed before the database transaction committed: %v", err)
@@ -161,6 +161,10 @@ func TestDeleteAssetDatabaseFailureLeavesPhysicalObjectAndNoOutbox(t *testing.T)
 	if assetCount != 1 || resourceCount != 1 || jobCount != 0 {
 		t.Fatalf("transaction was not rolled back: asset=%d resource=%d jobs=%d", assetCount, resourceCount, jobCount)
 	}
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "1 = 1", 0)
+	assertModelCount(t, db, &model.ResourceDeletionObject{}, "1 = 1", 0)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusReady)
+	assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, asset.Status)
 }
 
 func TestDeleteAssetKeepsResourceSharedByIndependentAsset(t *testing.T) {
@@ -232,9 +236,9 @@ func TestDeleteGeneratedAssetTaskReferences(t *testing.T) {
 		canvas bool
 		block  bool
 	}{
-		{name: "completed output", status: model.TaskStatusSucceeded},
-		{name: "failed output", status: model.TaskStatusFailed},
-		{name: "cancelled output", status: model.TaskStatusCancelled},
+		{name: "completed output", status: model.TaskStatusSucceeded, block: true},
+		{name: "failed output", status: model.TaskStatusFailed, block: true},
+		{name: "cancelled output", status: model.TaskStatusCancelled, block: true},
 		{name: "running output", status: model.TaskStatusRunning, block: true},
 		{name: "queued output", status: model.TaskStatusQueued, block: true},
 		{name: "unknown status", block: true},
@@ -274,15 +278,22 @@ func TestDeleteGeneratedAssetTaskReferences(t *testing.T) {
 			if (err != nil) != tc.block {
 				t.Fatalf("DeleteUserAsset() = %v, want blocked=%v", err, tc.block)
 			}
-			wantRemaining, wantJobs := int64(0), int64(1)
+			stopResourceDeletionTestWorkers(t, svc)
+			wantJobs := int64(1)
 			if tc.block {
-				wantRemaining, wantJobs = 1, 0
+				wantJobs = 0
+				assertModelCount(t, db, &model.ResourceDeletionIntent{}, "1 = 1", 0)
+				assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusReady)
+			} else {
+				assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, model.AssetVersionStatusDeleting)
+				assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusDeleting)
+				assertResourceDeletionRetry(t, db, resource.ID, "unsupported-test-provider")
 			}
 			for _, check := range []struct {
 				model any
 				want  int64
 			}{
-				{&model.Asset{}, wantRemaining}, {&model.Resource{}, wantRemaining},
+				{&model.Asset{}, 1}, {&model.Resource{}, 1},
 				{&model.ResourceDeletionJob{}, wantJobs},
 				{&model.Task{}, 1}, {&model.TaskLog{}, 1}, {&model.Result{}, 1},
 			} {
@@ -298,7 +309,7 @@ func TestDeleteGeneratedAssetTaskReferences(t *testing.T) {
 	}
 }
 
-func TestPurgeConfirmedAssetIgnoresTaskReferences(t *testing.T) {
+func TestPurgeConfirmedAssetRejectsTaskReferences(t *testing.T) {
 	svc, db, _ := newResourceDeletionTestService(t)
 	payload := `{"url":"/api/resources/purge-confirmed-resource/file"}`
 	resource := model.Resource{
@@ -319,17 +330,19 @@ func TestPurgeConfirmedAssetIgnoresTaskReferences(t *testing.T) {
 		}
 	}
 
-	// 用户确认的彻底删除不受任务引用拦截；任务记录本身保留，其中的媒体链接随之失效。
-	if err := svc.PurgeUserAsset("user-1", asset.ID); err != nil {
-		t.Fatalf("PurgeUserAsset() error = %v", err)
+	if err := svc.PurgeUserAsset("user-1", asset.ID); err == nil || !strings.Contains(err.Error(), "任务「"+task.Prompt+"」") {
+		t.Fatalf("PurgeUserAsset() error = %v, want task reference source", err)
 	}
+	assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, model.AssetVersionStatusConfirmed)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusReady)
 	for _, check := range []struct {
 		model any
 		want  int64
 	}{
-		{&model.Asset{}, 0},
-		{&model.Resource{}, 0},
-		{&model.ResourceDeletionJob{}, 1},
+		{&model.Asset{}, 1},
+		{&model.Resource{}, 1},
+		{&model.ResourceDeletionJob{}, 0},
+		{&model.ResourceDeletionIntent{}, 0},
 		{&model.Task{}, 1},
 	} {
 		var count int64
@@ -344,6 +357,7 @@ func TestPurgeConfirmedAssetIgnoresTaskReferences(t *testing.T) {
 
 func TestResourceDeletionWorkerRemovesObjectAndCompletesOutbox(t *testing.T) {
 	svc, db, dataDir := newResourceDeletionTestService(t)
+	stopResourceDeletionTestWorkers(t, svc)
 	objectKey := "users/user-1/image/queued.png"
 	resourcePath := filepath.Join(dataDir, "resources", filepath.FromSlash(objectKey))
 	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o750); err != nil {
@@ -352,29 +366,70 @@ func TestResourceDeletionWorkerRemovesObjectAndCompletesOutbox(t *testing.T) {
 	if err := os.WriteFile(resourcePath, []byte("image"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	job := model.ResourceDeletionJob{
-		ID: "deletion-1", UserID: "user-1", ResourceID: "resource-1",
-		Provider: "local", ObjectKey: objectKey,
-		Status: model.ResourceDeletionStatusPending, NextAttemptAt: time.Now().Add(-time.Second),
+	resource := model.Resource{ID: "resource-1", UserID: "user-1", Provider: "local", ObjectKey: objectKey, Status: model.ResourceStatusReady}
+	asset := model.Asset{ID: "asset-1", UserID: "user-1", Status: model.AssetVersionStatusConfirmed, PayloadJSON: `{"data":{"storageKey":"resource:resource-1"}}`}
+	version := model.AssetVersion{ID: "version-1", AssetID: asset.ID, Version: 1, DefinitionJSON: `{}`}
+	representation := model.AssetRepresentation{ID: "representation-1", AssetVersionID: version.ID, ResourceID: resource.ID, Role: "primary", MetadataJSON: `{}`}
+	createClosedLocalFixtureResource(t, svc, &resource)
+	for _, row := range []any{&asset, &version, &representation} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := db.Create(&job).Error; err != nil {
+	if err := svc.DeleteUserAsset(asset.UserID, asset.ID); err != nil {
 		t.Fatal(err)
 	}
+	assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, model.AssetVersionStatusDeleting)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusDeleting)
+	assertModelCount(t, db, &model.AssetVersion{}, "id = ?", 1, version.ID)
+	assertModelCount(t, db, &model.AssetRepresentation{}, "id = ?", 1, representation.ID)
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "status = ?", 1, "pending")
+	assertModelCount(t, db, &model.ResourceDeletionObject{}, "status = ?", 1, "pending")
+	assertModelCount(t, db, &model.ResourceDeletionJob{}, "resource_id = ?", 1, resource.ID)
+	if _, err := os.Stat(resourcePath); err != nil {
+		t.Fatalf("admission changed physical object: %v", err)
+	}
 
+	// The old DELETE trigger now faults finalization, not admission.
+	if err := db.Exec("CREATE TRIGGER fail_asset_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT, 'forced asset delete failure'); END;").Error; err != nil {
+		t.Fatal(err)
+	}
 	svc.drainResourceDeletionJobs(1)
 	if _, err := os.Stat(resourcePath); !os.IsNotExist(err) {
 		t.Fatalf("queued physical object was not deleted: %v", err)
 	}
-	var count int64
-	if err := db.Model(&model.ResourceDeletionJob{}).Where("id = ?", job.ID).Count(&count).Error; err != nil {
+	for _, row := range []any{&model.Asset{}, &model.AssetVersion{}, &model.AssetRepresentation{}, &model.Resource{}, &model.ResourceDeletionJob{}} {
+		assertModelCount(t, db, row, "1 = 1", 1)
+	}
+	assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, model.AssetVersionStatusDeleting)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusDeleting)
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "status = ?", 1, "pending")
+	var retry model.ResourceDeletionJob
+	if err := db.First(&retry, "resource_id = ?", resource.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatal("completed deletion job was not removed")
+	if retry.Status == model.ResourceDeletionStatusProcessing {
+		if err := svc.repo.RetryResourceDeletionJob(retry.ID, retry.LeaseOwner, "retry after finalization database failure", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	} else if retry.Status != model.ResourceDeletionStatusPending {
+		t.Fatalf("finalization failure lost recoverable job: %+v", retry)
 	}
+	if err := db.Exec("DROP TRIGGER fail_asset_delete").Error; err != nil {
+		t.Fatal(err)
+	}
+	if wait := time.Until(retry.NextAttemptAt); retry.Status == model.ResourceDeletionStatusPending && wait > 0 {
+		time.Sleep(wait)
+	}
+	svc.drainResourceDeletionJobs(1)
+	for _, row := range []any{&model.Asset{}, &model.AssetVersion{}, &model.AssetRepresentation{}, &model.Resource{}, &model.ResourceDeletionJob{}} {
+		assertModelCount(t, db, row, "1 = 1", 0)
+	}
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "status = ?", 1, "completed")
+	assertModelCount(t, db, &model.ResourceDeletionObject{}, "status = ?", 1, "completed")
 }
 
-func TestExpiredArchivedAssetCleanupDeletesReferencedAssetAndUsesDeletionOutbox(t *testing.T) {
+func TestExpiredArchivedAssetCleanupKeepsReferencedAssetWithoutDeletionOutbox(t *testing.T) {
 	svc, db, _ := newResourceDeletionTestService(t)
 	old := time.Now().Add(-45 * 24 * time.Hour)
 	resource := model.Resource{
@@ -407,17 +462,20 @@ func TestExpiredArchivedAssetCleanupDeletesReferencedAssetAndUsesDeletionOutbox(
 	if err := db.Model(&model.ResourceDeletionJob{}).Where("resource_id = ?", resource.ID).Count(&jobCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if assetCount != 0 || resourceCount != 0 || jobCount != 1 {
-		t.Fatalf("referenced archived asset was not force deleted through outbox: asset=%d resource=%d jobs=%d", assetCount, resourceCount, jobCount)
+	if assetCount != 1 || resourceCount != 1 || jobCount != 0 {
+		t.Fatalf("referenced archived asset changed: asset=%d resource=%d jobs=%d", assetCount, resourceCount, jobCount)
 	}
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "1 = 1", 0)
+	assertModelCount(t, db, &model.Asset{}, "id = ? AND status = ?", 1, asset.ID, model.AssetVersionStatusArchived)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, resource.ID, model.ResourceStatusReady)
 }
 
-func TestDetachedResourceCleanupRemovesOrphanAndKeepsAssetBackedResource(t *testing.T) {
-	svc, db, _ := newResourceDeletionTestService(t)
+func TestDetachedResourceCleanupRetainsFailedOrphanAndKeepsAssetBackedResource(t *testing.T) {
+	svc, db, dir := newResourceDeletionTestService(t)
 	old := time.Now().Add(-48 * time.Hour)
 	orphan := model.Resource{
 		ID: "resource-detached", UserID: "user-1", Status: model.ResourceStatusReady,
-		Provider: "unsupported-test-provider", ObjectKey: "users/user-1/image/detached.png",
+		Provider: "local", ObjectKey: "users/user-1/image/detached-directory",
 		CreatedAt: old, UpdatedAt: old,
 	}
 	backed := model.Resource{
@@ -429,10 +487,14 @@ func TestDetachedResourceCleanupRemovesOrphanAndKeepsAssetBackedResource(t *test
 		ID: "asset-backed", UserID: "user-1", Title: "素材库图片",
 		PayloadJSON: `{"data":{"storageKey":"resource:resource-backed"}}`, CreatedAt: old, UpdatedAt: old,
 	}
-	for _, item := range []any{&orphan, &backed, &asset} {
-		if err := db.Create(item).Error; err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(dir, "resources", filepath.FromSlash(orphan.ObjectKey))
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	createClosedLocalFixtureResource(t, svc, &orphan)
+	backedPath := writeClosedDeletionFixtureResource(t, svc, &backed)
+	if err := db.Create(&asset).Error; err != nil {
+		t.Fatal(err)
 	}
 
 	if err := svc.cleanupDetachedUserResources("user-1", []model.Resource{orphan, backed}); err != nil {
@@ -446,8 +508,20 @@ func TestDetachedResourceCleanupRemovesOrphanAndKeepsAssetBackedResource(t *test
 	if err := db.Model(&model.Resource{}).Where("id = ?", backed.ID).Count(&backedCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if orphanCount != 0 || backedCount != 1 {
+	if orphanCount != 1 || backedCount != 1 {
 		t.Fatalf("cleanup result: orphan=%d backed=%d", orphanCount, backedCount)
+	}
+	stopResourceDeletionTestWorkers(t, svc)
+	assertResourceDeletionRetry(t, db, orphan.ID, "本地资源路径指向目录")
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, orphan.ID, model.ResourceStatusDeleting)
+	assertModelCount(t, db, &model.Resource{}, "id = ? AND status = ?", 1, backed.ID, model.ResourceStatusReady)
+	assertModelCount(t, db, &model.Asset{}, "id = ?", 1, asset.ID)
+	assertModelCount(t, db, &model.ResourceDeletionJob{}, "resource_id = ?", 0, backed.ID)
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Fatalf("failed orphan deletion changed directory: %v %v", info, err)
+	}
+	if data, err := os.ReadFile(backedPath); err != nil || string(data) != "original" {
+		t.Fatalf("asset-backed object changed: %q %v", data, err)
 	}
 }
 
@@ -517,9 +591,10 @@ func TestDetachedFailedResourceWithoutObjectKeyNeedsNoDeletionJob(t *testing.T) 
 	if err := db.Create(&resource).Error; err != nil {
 		t.Fatal(err)
 	}
+	before := referenceAdmissionRows(t, db, "resources")
 
-	if err := svc.cleanupDetachedUserResources(resource.UserID, []model.Resource{resource}); err != nil {
-		t.Fatal(err)
+	if err := svc.cleanupDetachedUserResources(resource.UserID, []model.Resource{resource}); !errors.Is(err, repository.ErrResourceProducerUnsettled) {
+		t.Fatalf("failed legacy row must remain unresolved: %v", err)
 	}
 	var resourceCount, jobCount int64
 	if err := db.Model(&model.Resource{}).Where("id = ?", resource.ID).Count(&resourceCount).Error; err != nil {
@@ -528,9 +603,14 @@ func TestDetachedFailedResourceWithoutObjectKeyNeedsNoDeletionJob(t *testing.T) 
 	if err := db.Model(&model.ResourceDeletionJob{}).Where("resource_id = ?", resource.ID).Count(&jobCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if resourceCount != 0 || jobCount != 0 {
+	if resourceCount != 1 || jobCount != 0 {
 		t.Fatalf("cleanup result: resource=%d jobs=%d", resourceCount, jobCount)
 	}
+	if after := referenceAdmissionRows(t, db, "resources"); after != before {
+		t.Fatalf("blocked cleanup changed failed resource: before=%s after=%s", before, after)
+	}
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "1 = 1", 0)
+	assertModelCount(t, db, &model.ResourceDeletionObject{}, "1 = 1", 0)
 }
 
 func newResourceDeletionTestService(t *testing.T) (*Service, *gorm.DB, string) {
@@ -543,4 +623,37 @@ func newResourceDeletionTestService(t *testing.T) (*Service, *gorm.DB, string) {
 	svc := New(repository.New(db), dataDir)
 	startDeletionTestWorkers(t, svc)
 	return svc, db, dataDir
+}
+
+func stopResourceDeletionTestWorkers(t *testing.T, svc *Service) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := svc.StopWorker(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertResourceDeletionRetry(t *testing.T, db *gorm.DB, resourceID string, errorParts ...string) {
+	t.Helper()
+	var job model.ResourceDeletionJob
+	if err := db.First(&job, "resource_id = ?", resourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != model.ResourceDeletionStatusPending || job.Attempts != 1 || job.LastError == "" || job.LeaseOwner != "" || job.LeaseExpiresAt != nil || !job.NextAttemptAt.After(job.UpdatedAt) {
+		t.Fatalf("failed deletion must remain retryable: %+v", job)
+	}
+	for _, part := range errorParts {
+		if !strings.Contains(job.LastError, part) {
+			t.Fatalf("deletion failed for unexpected reason: %q, want %q", job.LastError, part)
+		}
+	}
+	var object model.ResourceDeletionObject
+	if err := db.First(&object, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if object.Status != "pending" {
+		t.Fatalf("failed object marked complete: %+v", object)
+	}
+	assertModelCount(t, db, &model.ResourceDeletionIntent{}, "id = ? AND status = ?", 1, object.IntentID, "pending")
 }

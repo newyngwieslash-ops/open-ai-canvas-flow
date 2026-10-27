@@ -33,7 +33,7 @@ func TestCanvasAgentAdmissionAcrossConnections(t *testing.T) {
 
 func testCanvasAgentAdmissionAcrossConnections(t *testing.T, a, b *Repository) {
 	t.Helper()
-	if err := a.db.AutoMigrate(&model.CanvasProject{}, &model.Task{}, &model.CloudAgentExecution{}); err != nil {
+	if err := a.db.AutoMigrate(&model.Resource{}, &model.CanvasProject{}, &model.Task{}, &model.CloudAgentExecution{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.db.Create(&model.CanvasProject{ID: "canvas", UserID: "user", Revision: 7}).Error; err != nil {

@@ -43,19 +43,8 @@ func (s *Service) deleteUserAssetsWithResources(userID string, ids []string, pur
 	if len(assetRecords) != len(assetIDs) {
 		return NotFound("素材不存在或无权删除")
 	}
-	// 删除语义（产品约定，勿收紧）：
-	//   - purge=true 是用户在素材库确认后的「彻底删除」（单个 DELETE、批量删除、清空回收站），
-	//     不因画布、任务、项目或画布历史快照仍引用而拒绝；旧引用随之失效，画布保存时由
-	//     由统一 operations 提交前的资源完整性校验修复断链。
-	//   - purge=false 是内部普通删除：回收站（archived）素材同样直接删除，其余素材保留引用保护。
-	//   - 无论哪种，被其他素材复用的资源与物理对象都保留，物理删除一律经 Outbox 异步执行。
-	deleteReferencedResources := purge
-	if !purge {
-		if len(assetRecords) != 1 {
-			return BadAuthRequest("普通删除仅支持单个素材")
-		}
-		deleteReferencedResources = assetRecords[0].Status == model.AssetVersionStatusArchived
-	}
+	// Every public/internal deletion uses reference protection, including purge.
+	deleteReferencedResources := false
 	versions, representations, err := s.repo.AssetsResourceRecords(assetIDs)
 	if err != nil {
 		return err
@@ -130,17 +119,6 @@ func (s *Service) deleteUserAssetsWithResources(userID string, ids []string, pur
 			}
 		}
 		for _, document := range snapshot.Documents {
-			// 已结束任务的输出和日志仅记录生成历史，不构成素材占用。
-			// 仅在素材删除时放行；孤儿清理仍保留尚未入库的任务产物。
-			switch document.TaskStatus {
-			case model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusCancelled:
-				if document.Kind == "任务日志" || document.Kind == "任务结果" {
-					continue
-				}
-				if document.Kind == "任务" {
-					document.SecondaryJSON = ""
-				}
-			}
 			referencedIDs := documentReferencedResourceIDs(document.PrimaryJSON, ownedIDSet)
 			for resourceID := range documentReferencedResourceIDs(document.SecondaryJSON, ownedIDSet) {
 				referencedIDs[resourceID] = struct{}{}
@@ -187,9 +165,14 @@ func (s *Service) deleteUserAssetsWithResources(userID string, ids []string, pur
 	deletionJobs := resourceDeletionJobs(userID, physicalObjects)
 	// 业务记录和 Outbox 必须在同一事务提交。事务失败时物理文件完全不动；
 	// 提交成功后由幂等 worker 清理，进程退出或对象存储暂时失败都可继续重试。
-	if err := s.repo.DeleteAssetsAndResources(userID, assetIDs, ownedIDs, deletionJobs, deleteReferencedResources); err != nil {
+	if err := s.withResourceDeletionLocks(assetIDs, ownedIDs, func(repo *repository.Repository) error {
+		return repo.DeleteAssetsAndResources(userID, assetIDs, ownedIDs, deletionJobs, deleteReferencedResources)
+	}); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return NotFound("素材不存在或无权删除")
+		}
+		if errors.Is(err, repository.ErrOriginalImageReferenced) {
+			return BadAuthRequest("资源仍被资产版本的原始参考图引用，已保留文件")
 		}
 		if errors.Is(err, repository.ErrCanvasHistoryResourceReferenced) {
 			return BadAuthRequest("素材仍被画布历史版本引用，已保留文件")
@@ -330,7 +313,15 @@ func (s *Service) deleteStoredResourceObject(userID string, resource *model.Reso
 }
 
 func (s *Service) deleteLocalResourceObject(objectKey string) error {
-	root, err := filepath.Abs(filepath.Join(s.dataDir, "resources"))
+	return deleteLocalObjectWithin(filepath.Join(s.dataDir, "resources"), objectKey)
+}
+
+func (s *Service) deleteLocalPlaybackObject(objectKey string) error {
+	return deleteLocalObjectWithin(filepath.Join(s.dataDir, playbackDirName), objectKey)
+}
+
+func deleteLocalObjectWithin(directory, objectKey string) error {
+	root, err := filepath.Abs(directory)
 	if err != nil {
 		return fmt.Errorf("解析本地资源目录失败：%w", err)
 	}

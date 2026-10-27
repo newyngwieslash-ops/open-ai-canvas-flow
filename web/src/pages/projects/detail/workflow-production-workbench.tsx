@@ -1,7 +1,7 @@
 import { ImageSizePicker } from "@/components/image-size-picker";
 import { imageResolutionUsesQuality } from "@/lib/image-size-presets";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Form, Image, Input, InputNumber } from "antd";
 import { SegmentedControl } from "@/components/ui/base/segmented-control";
 import { EmptyState } from "@/components/ui/product/empty-state";
@@ -31,6 +31,7 @@ import {
     listProjectAssetsPage,
     saveProjectShot,
     unlinkShotAsset,
+    type BindingAppendResult,
     type ProjectAsset,
     type ProjectDetail,
     type ProjectShot,
@@ -55,6 +56,7 @@ import {
     type ShortDramaWorkflowStage,
 } from "./workflow-shared";
 import { buildShotAssetReferenceContext, ensureShotAssetMentionPrompt, resolveShotAssetMentionPrompt } from "./workflow-shot-references";
+import { ChapterAssetBindingDrawer, mergeBindingAppendResultIntoProjectCache } from "./chapter-asset-binding-drawer";
 import { Select } from "@/components/ui/base/select";
 
 type ShotEditorValues = Omit<ShotRevisionInput, "durationMs"> & {
@@ -73,6 +75,8 @@ type Props = {
     onRefresh: () => Promise<void>;
     onAddShot: () => void;
     addingShot: boolean;
+    onGenerateStoryboard?: () => void;
+    generatingStoryboard?: boolean;
 };
 
 const productionStageCopy: Record<"storyboard" | "previz" | "video", { label: string; action: string; empty: string }> = {
@@ -83,6 +87,7 @@ const productionStageCopy: Record<"storyboard" | "previz" | "video", { label: st
 
 export default function WorkflowProductionWorkbench(props: Props) {
     const { activeStage, detail, projectId, unitId, workflowStep, selectedShot, onSelectShot, onRefresh, onAddShot, addingShot } = props;
+    const queryClient = useQueryClient();
     const { message, modal } = App.useApp();
     const navigate = useNavigate();
     const effectiveConfig = useEffectiveConfig();
@@ -95,6 +100,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const [previewTab, setPreviewTab] = useState<"latest" | "history">("latest");
     const [previewArtifactId, setPreviewArtifactId] = useState("");
     const [imagePreviewArtifact, setImagePreviewArtifact] = useState<ShotArtifact | null>(null);
+    const [bindingDrawerOpen, setBindingDrawerOpen] = useState(false);
     const [editorDirty, setEditorDirty] = useState(false);
     const [submittingShotIds, setSubmittingShotIds] = useState<Set<string>>(() => new Set());
     const [taskClock, setTaskClock] = useState(() => Date.now());
@@ -130,6 +136,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
     const { skills: availableSkills, loading: skillsLoading } = useSkillRuntimeCatalog();
     const shotAssetReferenceContext = useMemo(() => buildShotAssetReferenceContext(detail, selectedShot?.id || ""), [detail, selectedShot?.id]);
+    const missingBoundImages = detail.shotReferences.filter((reference) => reference.shotId === selectedShot?.id && reference.status === "linked" && reference.referencedVersion && !shotAssetReferenceContext.referenceImages.some((image) => image.id === reference.referencedVersion?.assetId)).length;
     const referenceByVersionId = useMemo(() => {
         const references = (detail.shotReferences || []).filter((reference) => reference.shotId === selectedShot?.id && reference.role === "reference" && reference.status === "linked");
         return new Map(references.flatMap((reference) => [
@@ -396,7 +403,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const selectedShotSubmitting = submittingShotIds.has(selectedShot?.id || "");
 
     if (!selectedShot) {
-        return <div className="workflow-empty-shot"><EmptyState size="compact" title="当前章节还没有分镜" action={<Button type="primary" icon={<Plus className="size-4" />} loading={addingShot} onClick={onAddShot}>新增第一个分镜</Button>} /></div>;
+        return <div className="workflow-empty-shot"><EmptyState size="compact" title="当前章节还没有分镜" action={<div className="flex gap-2"><Button icon={<Plus className="size-4" />} loading={addingShot} onClick={onAddShot}>新增第一个分镜</Button>{activeStage === "storyboard" && props.onGenerateStoryboard ? <Button type="primary" loading={props.generatingStoryboard} onClick={props.onGenerateStoryboard}>生成章节分镜</Button> : null}</div>} /></div>;
     }
 
     const requestShotSelection = (nextShotId: string) => {
@@ -448,6 +455,16 @@ export default function WorkflowProductionWorkbench(props: Props) {
         if (next) requestShotSelection(next.id);
     };
 
+    const handleAssetBindingsApplied = async (result: BindingAppendResult) => {
+        mergeBindingAppendResultIntoProjectCache(queryClient, projectId, unitId, result);
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+            queryClient.invalidateQueries({ queryKey: ["projects"] }),
+            onRefresh(),
+        ]);
+        message.success(result.addedCount > 0 ? `已追加 ${result.addedCount} 项镜头资产引用` : "镜头资产引用已是最新，无新增变更");
+    };
+
     return (
         <div className="workflow-production-shell">
             <div className="workflow-production-main">
@@ -467,7 +484,10 @@ export default function WorkflowProductionWorkbench(props: Props) {
                 </aside>
 
                 <section className="workflow-shot-editor">
+                    {missingBoundImages > 0 ? <p role="status" className="px-4 py-2 text-sm text-muted-foreground">有 {missingBoundImages} 个绑定版本暂无参考图，仅使用可用图片生成。</p> : null}
                     <header className="workflow-panel-header">
+                        {activeStage === "storyboard" && props.onGenerateStoryboard ? <Button loading={props.generatingStoryboard} disabled={editorDirty} onClick={props.onGenerateStoryboard}>生成章节分镜</Button> : null}
+                        {shots.length > 0 ? <Button size="small" onClick={() => setBindingDrawerOpen(true)}>匹配镜头资产</Button> : null}
                         <div className="workflow-shot-heading">
                             <span className="workflow-shot-number">{formatShotOrdinal(shotIndex)}</span>
                             {customShotTitle(watchedTitle || selectedShot.title, shotIndex) ? <h2>{customShotTitle(watchedTitle || selectedShot.title, shotIndex)}</h2> : null}
@@ -590,6 +610,16 @@ export default function WorkflowProductionWorkbench(props: Props) {
             >
                 {imagePreviewArtifact?.resourceId ? <img className={`workflow-image-preview-modal ${imagePreviewArtifact.type === "action_board" ? "grayscale" : ""}`} src={resourceFileUrl(imagePreviewArtifact.resourceId)} alt={imagePreviewArtifact.type === "action_board" ? "动作预演大图" : "分镜图大图"} /> : null}
             </AppModal>
+
+            <ChapterAssetBindingDrawer
+                projectId={projectId}
+                unitId={unitId}
+                shotIds={shots.map((item) => item.id)}
+                shotTitles={Object.fromEntries(shots.map((item, idx) => [item.id, customShotTitle(item.title, idx) || formatShotOrdinal(idx)]))}
+                open={bindingDrawerOpen}
+                onClose={() => setBindingDrawerOpen(false)}
+                onApplied={(result) => void handleAssetBindingsApplied(result)}
+            />
 
             <ShotTimeline activeStage={activeStage} detail={detail} shots={shots} selectedShotId={selectedShot.id} submittingShotIds={submittingShotIds} onSelectShot={requestShotSelection} onAddShot={requestAddShot} addingShot={addingShot} />
         </div>

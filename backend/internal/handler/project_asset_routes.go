@@ -12,6 +12,64 @@ import (
 )
 
 func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
+	registerProjectProfileAnalysisRoutes(r, svc)
+	r.POST("/projects/:id/asset-entities", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		var req service.CreateProjectAssetEntityRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.CreateProjectAssetEntity(user.ID, c.Param("id"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
+	r.PUT("/projects/:id/assets/:assetId/reference-image", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+		var req service.SetProjectReferenceImageRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.SetProjectReferenceImage(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
+	r.POST("/projects/:id/assets/:assetId/image-candidates/:taskId/adopt", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+		var req service.AdoptProjectImageCandidateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.AdoptProjectImageCandidate(user.ID, c.Param("id"), c.Param("assetId"), c.Param("taskId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
 	r.PUT("/projects/:id/assets/:assetId/image", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

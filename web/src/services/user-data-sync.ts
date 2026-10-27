@@ -1,4 +1,5 @@
 import { canonicalize } from "json-canonicalize";
+import { recordAcceptedAssetDeletions } from "@/lib/asset-availability";
 import { resourceFileUrl, resourceIdFromStorageKey } from "@/services/api/resources";
 import { deleteRemoteAssets, deleteRemoteCanvasProject, applyRemoteCanvasOperations, getRemoteAsset, getRemoteAssetsByIds, getRemoteCanvasProject, getRemoteCanvasRevision, getRemoteUserDataSnapshot, listRemoteAssetsPage, upsertRemoteAsset } from "@/services/api/user-data";
 import type { CanvasOperation, CanvasOperationsRequest } from "@/services/api/user-data";
@@ -532,6 +533,7 @@ export function mergeRemoteAssetsWithLocalPending(remoteAssets: Asset[], localAs
         // A local asset absent from the snapshot is an unacknowledged create.
         // A same-ID difference is an unconfirmed edit. Keep both kinds visible;
         // the normal save path will validate/rebase them against the server.
+        if (remote?.status === "deleting") continue;
         if (!remote || !sameEntitySnapshot(remote, local)) merged.set(local.id, local);
     }
     return [...merged.values()];
@@ -544,11 +546,17 @@ async function waitForRemoteProjectLoads(projectIds?: string | readonly string[]
 }
 
 export async function loadAssetLibraryPage(options: Parameters<typeof listRemoteAssetsPage>[0]) {
+    const epoch = sessionEpoch;
     const result = await listRemoteAssetsPage(options);
+    if (epoch !== sessionEpoch) throw new Error("账号已切换，请重新读取素材");
+    const assets = parseAssetRecordList(result.assets);
+    const known = new Map(useAssetStore.getState().assets.map((asset) => [asset.id, asset]));
+    const deleting = assets.filter((asset) => asset.status === "deleting" && known.has(asset.id) && known.get(asset.id)?.status !== "deleting");
+    if (deleting.length) acceptRemoteAssets(deleting, true);
     // 分页列表是展示数据，不是同步快照。不要把每一页都合并进全局
     // asset store，否则滚动/翻页会不断重建并持久化整个素材数组。
     // 真正被画布引用的素材仍由 loadAssetsForUse 按 ID 拉取并写入 store。
-    return { ...result, assets: parseAssetRecordList(result.assets) };
+    return { ...result, assets };
 }
 
 function acceptRemoteAssets(remoteAssets: Asset[], refresh = false) {
@@ -557,7 +565,8 @@ function acceptRemoteAssets(remoteAssets: Asset[], refresh = false) {
     for (const asset of assets) {
         const local = current.get(asset.id);
         const baseline = acknowledgedAssets.get(asset.id);
-        const dirty = local && !sameEntitySnapshot(baseline, local);
+        if (local?.status === "deleting" && asset.status !== "deleting") continue;
+        const dirty = asset.status !== "deleting" && local && !sameEntitySnapshot(baseline, local);
         if (dirty && !refresh) continue;
         const next =
             dirty && local
@@ -592,12 +601,46 @@ async function loadReferencedAssets(ids: Iterable<string>, refresh = false) {
     const pending = [...new Set(ids)].filter((id) => refresh || !loadedIds.has(id) || !verifiedAssets.has(id));
     const records: Asset[] = [];
     for (let offset = 0; offset < pending.length; offset += 100) {
-        const { assets } = await getRemoteAssetsByIds(pending.slice(offset, offset + 100));
+        const batch = pending.slice(offset, offset + 100);
+        const { assets } = await getRemoteAssetsByIds(batch);
         if (epoch !== sessionEpoch) throw new Error("账号已切换，请重新读取素材");
+        const found = new Set(assets.map((asset) => asset.id));
+        for (const id of batch) if (!found.has(id)) verifiedAssets.delete(id);
         acceptRemoteAssets(assets, refresh);
         records.push(...assets);
     }
     return records;
+}
+
+// Only an authorized ID read can prove physical deletion finished; filtered pages cannot.
+async function reconcileDeletingAssets() {
+    const epoch = sessionEpoch;
+    const ids = useAssetStore.getState().assets.filter((asset) => asset.status === "deleting").map((asset) => asset.id);
+    for (let offset = 0; offset < ids.length; offset += 100) {
+        const batch = ids.slice(offset, offset + 100);
+        const result = await getRemoteAssetsByIds(batch);
+        if (epoch !== sessionEpoch) throw new Error("账号已切换，请重新读取素材");
+        const assets = parseAssetRecordList(result.assets);
+        const current = new Map(useAssetStore.getState().assets.map((asset) => [asset.id, asset]));
+        const changed = assets.filter((asset) => !sameEntitySnapshot(current.get(asset.id), asset));
+        if (changed.length) acceptRemoteAssets(changed, true);
+        const found = new Set(assets.map((asset) => asset.id));
+        const missing = new Set(batch.filter((id) => !found.has(id)));
+        if (!missing.size) continue;
+        for (const id of missing) {
+            acknowledgedAssets.delete(id);
+            verifiedAssets.delete(id);
+        }
+        useAssetStore.setState((state) => ({ assets: state.assets.filter((asset) => !missing.has(asset.id) || asset.status !== "deleting") }));
+    }
+}
+
+export async function refreshDeletingAssets() {
+    await withRemoteUserDataSyncExclusive(async () => {
+        if (!activeRemoteUserId) return;
+        await reconcileDeletingAssets();
+        await flushAssetStorePersistence();
+    });
 }
 
 export async function loadAssetsForUse(ids: Iterable<string>, options?: { refresh?: boolean }) {
@@ -915,9 +958,17 @@ export async function deleteAssetsWithRemoteSync(ids: string[]) {
             requireRemoteUserDataBaseline();
             await deleteRemoteAssets(assetIds);
             if (epoch !== sessionEpoch) throw new Error("账号已切换，请刷新原账号素材库确认删除结果");
-            for (const id of assetIds) acknowledgedAssets.delete(id);
+            recordAcceptedAssetDeletions(assetIds);
+            const accepted = new Set(assetIds);
+            useAssetStore.setState((state) => ({ assets: state.assets.map((asset) => {
+                if (!accepted.has(asset.id)) return asset;
+                const deleting = { ...asset, status: "deleting" as const };
+                acknowledgedAssets.set(asset.id, deleting);
+                return deleting;
+            }) }));
+        } else {
+            await useAssetStore.getState().removeAssets(assetIds);
         }
-        await useAssetStore.getState().removeAssets(assetIds);
         await flushAssetStorePersistence();
     });
     if (epoch !== sessionEpoch) throw new Error("账号已切换，请刷新原账号素材库确认删除结果");
@@ -983,7 +1034,7 @@ export async function deleteCanvasProjectsWithRemoteSync(ids: string[]) {
         // 1. 已存在的关联素材标记为 archived
         const assetsToArchive = currentAssets.filter((asset) => {
             const canvasId = asset.metadata?.canvasId as string | undefined;
-            return canvasId && deletedProjectIds.includes(canvasId) && !activeAssetIds.has(asset.id) && asset.status !== "archived";
+            return canvasId && deletedProjectIds.includes(canvasId) && !activeAssetIds.has(asset.id) && asset.status !== "archived" && asset.status !== "deleting";
         });
         for (const asset of assetsToArchive) {
             useAssetStore.getState().updateAsset(asset.id, { status: "archived" });
@@ -1000,7 +1051,7 @@ export async function deleteCanvasProjectsWithRemoteSync(ids: string[]) {
                 const existingAsset = node.metadata?.assetId ? currentAssets.find((a) => a.id === node.metadata?.assetId) : undefined;
                 if (existingAsset) {
                     const owningCanvasId = existingAsset.metadata?.canvasId as string | undefined;
-                    if (owningCanvasId === project.id && !activeAssetIds.has(existingAsset.id) && existingAsset.status !== "archived") {
+                    if (owningCanvasId === project.id && !activeAssetIds.has(existingAsset.id) && existingAsset.status !== "archived" && existingAsset.status !== "deleting") {
                         useAssetStore.getState().updateAsset(existingAsset.id, { status: "archived" });
                         assetChanged = true;
                     }
@@ -1401,6 +1452,11 @@ async function syncRemoteAssetBatch(dirtyAssets: Asset[], uploaded: Map<string, 
             const current = useAssetStore.getState().assets.find((asset) => asset.id === source.id);
             if (!sameEntitySnapshot(current, source)) throw new Error("素材仍在编辑，请重新同步");
             const [asset] = parseAssetRecordList([remote]);
+            if (asset.status === "deleting") {
+                acceptRemoteAssets([asset], true);
+                adoptedAssetIds.add(asset.id);
+                continue;
+            }
             const defaults = getGenerationAssetDefaults(source.id);
             let merged: Asset;
             let edited: boolean;
@@ -1471,15 +1527,19 @@ async function syncRemoteAssetBatch(dirtyAssets: Asset[], uploaded: Map<string, 
         }
     }
 
-    if (incrementalSession) {
-        for (const source of dirtyAssets) {
-            const baseline = acknowledgedAssets.get(source.id);
-            if (!baseline || verifiedAssets.has(source.id)) continue;
-            const { asset } = await getRemoteAsset(source.id);
-            requireCurrentSession();
-            if (Date.parse(asset.updatedAt) !== Date.parse(baseline.updatedAt)) throw assetRemoteVersionConflict();
-            verifiedAssets.add(source.id);
+    for (const source of dirtyAssets) {
+        const baseline = acknowledgedAssets.get(source.id);
+        if (!baseline || adoptedAssetIds.has(source.id)) continue;
+        if (baseline.status === "deleting") { adoptedAssetIds.add(source.id); continue; }
+        const { asset } = await getRemoteAsset(source.id);
+        requireCurrentSession();
+        if (asset.status === "deleting") {
+            acceptRemoteAssets([asset], true);
+            adoptedAssetIds.add(source.id);
+            continue;
         }
+        if (incrementalSession && !verifiedAssets.has(source.id) && Date.parse(asset.updatedAt) !== Date.parse(baseline.updatedAt)) throw assetRemoteVersionConflict();
+        verifiedAssets.add(source.id);
     }
 
     // 转换后的 resource: 引用只属于发往服务端的 payload，不能反写整份实时 store。
@@ -1491,6 +1551,7 @@ async function syncRemoteAssetBatch(dirtyAssets: Asset[], uploaded: Map<string, 
         const source = mergedAssets.get(dirty.id) ?? dirty;
         const remotePayload = await ensureRemoteResourceReferences(assetForRemoteSync(source), uploaded);
         requireCurrentSession();
+        if (useAssetStore.getState().assets.find((asset) => asset.id === source.id)?.status === "deleting" || acknowledgedAssets.get(source.id)?.status === "deleting") continue;
         await upsertRemoteAsset(remotePayload);
         requireCurrentSession();
         acknowledgedAssets.set(source.id, source);
@@ -1505,6 +1566,8 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     };
     // 中央兜底：任何调用方只要把持久媒体写进画布，提交前都会先补齐素材记录与 assetId。
     // 页面级入口仍主动入库，以便立即反馈；这里负责阻止遗漏入口形成远端幽灵资源。
+    await reconcileDeletingAssets();
+    requireCurrentSession();
     const projectsBeforeRepair = useCanvasStore.getState().projects;
     const selectedProjectIds = options.projectId === undefined ? undefined : new Set(typeof options.projectId === "string" ? [options.projectId] : options.projectId);
     if (selectedProjectIds && [...selectedProjectIds].some((id) => remoteDeletedProjects.has(id))) throw new ApiError("云端画布已删除，无法保存", { status: 404 });
@@ -1535,7 +1598,7 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     });
     const canvasAssetIds = selectedProjectIds?.size ? new Set(currentProjects.filter((project) => selectedProjectIds.has(project.id)).flatMap((project) => [...collectAssetIds(project)])) : undefined;
     const dirtyAssets = currentAssets.filter((asset) => {
-        const dirty = !sameEntitySnapshot(acknowledgedAssets.get(asset.id), asset);
+        const dirty = asset.status !== "deleting" && acknowledgedAssets.get(asset.id)?.status !== "deleting" && !sameEntitySnapshot(acknowledgedAssets.get(asset.id), asset);
         const selected = !canvasAssetIds || canvasAssetIds.has(asset.id) || (typeof asset.metadata?.canvasId === "string" && selectedProjectIds!.has(asset.metadata.canvasId));
         return selected && dirty;
     });

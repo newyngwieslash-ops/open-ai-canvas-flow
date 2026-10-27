@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isAssetAvailableForReference } from "@/lib/asset-availability";
 
 import { buildNodeGenerationInputs, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { isFrameNode } from "@/lib/canvas/canvas-frame";
@@ -255,7 +256,7 @@ export function useCanvasRenderModel({
         renderedNodeIdsRef.current = new Set(visibleNodes.map((node) => node.id));
     }, [visibleNodes]);
 
-    const imageAssets = useMemo(() => assets.filter((asset): asset is ImageAsset => asset.kind === "image" && asset.status !== "archived"), [assets]);
+    const imageAssets = useMemo(() => assets.filter((asset): asset is ImageAsset => asset.kind === "image" && isAssetAvailableForReference(asset)), [assets]);
     const semanticNodesRef = useRef(nodes);
     const semanticNodes = useMemo(() => {
         const previous = semanticNodesRef.current;

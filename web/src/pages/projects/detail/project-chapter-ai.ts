@@ -9,7 +9,8 @@ import type { Skill } from "@/services/api/skills";
 import { skillRuntime } from "@/services/skill-runtime";
 import { logicalModelIDForConfig, type AiConfig } from "@/stores/use-config-store";
 
-import type { ChapterStoryboardAsset, ChapterStoryboardCharacter } from "./chapter-storyboard-production";
+import { chapterStoryboardAssets, type ChapterStoryboardCharacter } from "./chapter-storyboard-production";
+import type { ChapterAssetCandidatesState } from "./chapter-asset-candidates";
 
 type ChapterAnalysisInput = {
     projectId: string;
@@ -51,7 +52,7 @@ export function chapterAssetsFromGenerationTask(task: GenerationTask) {
 }
 
 export function chapterStoryboardFromGenerationTask(task: GenerationTask) {
-    return storyboardRowsFromTask(task);
+    return { ...storyboardRowsFromTask(task), taskId: task.id };
 }
 
 export async function extractChapterAssets(input: ChapterAnalysisInput, options?: ChapterTaskOptions): Promise<ChapterAssetBreakdown> {
@@ -64,6 +65,20 @@ export async function extractChapterAssets(input: ChapterAnalysisInput, options?
     return parseChapterAssetBreakdown(result);
 }
 
+export type ChapterStoryboardAssetScope = { kind: "all" | "selected"; assetIds: string[] };
+const storyboardAssetSummaryMaxBytes = 24 * 1024;
+
+export function chapterStoryboardAssetScopeInfo(state: ChapterAssetCandidatesState, scope: ChapterStoryboardAssetScope = { kind: "all", assetIds: [] }) {
+    if (state.status !== "complete") throw new Error("项目资产目录尚未完整加载");
+    const ids = new Set(scope.assetIds);
+    if ((scope.kind === "all" && ids.size) || (scope.kind === "selected" && !ids.size) || ids.size !== scope.assetIds.length) throw new Error("请选择完整目录或明确的非空资产范围");
+    const assets = scope.kind === "all" ? state.assets : state.assets.filter((asset) => ids.has(asset.id));
+    if (scope.kind === "selected" && assets.length !== ids.size) throw new Error("所选资产不在完整项目目录中");
+    const summary = JSON.stringify(assets.map((asset) => ({ assetId: asset.id, category: asset.category, name: asset.title.trim() }))).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    if (new TextEncoder().encode(summary).byteLength > storyboardAssetSummaryMaxBytes) throw new Error("项目资产摘要超过 24 KiB，请明确缩小资产范围；不会自动截断");
+    return { assets, scope, totalCount: state.assets.length, sentCount: assets.length };
+}
+
 type ChapterStoryboardGenerationInput = {
     projectId: string;
     chapterId: string;
@@ -71,13 +86,18 @@ type ChapterStoryboardGenerationInput = {
     sourceText: string;
     projectStyle: { presetId: string; title: string; prompt: string; profileJson?: string };
     characters: ChapterStoryboardCharacter[];
-    assets: ChapterStoryboardAsset[];
+    assetCandidates: ChapterAssetCandidatesState;
+    assetScope?: ChapterStoryboardAssetScope;
     config: AiConfig;
     skills: Skill[];
     selectedSkillIds: string[];
 };
 
 export async function generateChapterStoryboard(input: ChapterStoryboardGenerationInput, options?: ChapterTaskOptions) {
+    if (input.assetCandidates.status === "cancelled") throw new DOMException("项目资产目录加载已取消", "AbortError");
+    if (input.assetCandidates.status !== "complete") throw new Error("项目资产目录尚未完整加载");
+    const scopeInfo = chapterStoryboardAssetScopeInfo(input.assetCandidates, input.assetScope);
+    const assets = chapterStoryboardAssets({ assets: scopeInfo.assets });
     const model = input.config.textModel || input.config.model;
     const config = { ...input.config, model };
     const skillExecution = await skillRuntime.prepare({
@@ -102,7 +122,8 @@ export async function generateChapterStoryboard(input: ChapterStoryboardGenerati
         input: {
             // 后端只在 video_ 前缀的任务上兜底 mode，文本任务必须显式带上。
             mode: "text",
-            canvasAssets: input.assets,
+            canvasAssets: assets,
+            chapterAssetContext: { projectId: input.projectId, unitId: input.chapterId, scope: scopeInfo.scope },
             requirements: "输出可直接写入分镜制作并继续生成分镜图、动作预演和镜头视频的分镜表。",
             projectStyle: input.projectStyle,
             characters: input.characters,
@@ -119,7 +140,7 @@ export async function generateChapterStoryboard(input: ChapterStoryboardGenerati
     });
     options?.onTaskUpdate?.(task);
     const completed = await waitForGenerationTask(task.id, { initialTask: task, useTextEvents: true, onTaskUpdate: options?.onTaskUpdate });
-    return { ...storyboardRowsFromTask(completed), skillCount: skillExecution.selectedSkills.length };
+    return { ...chapterStoryboardFromGenerationTask(completed), skillCount: skillExecution.selectedSkills.length };
 }
 
 async function runProjectTextTask(input: ChapterAnalysisInput, operation: string, promptTemplateVariables: Record<string, string>, options?: ChapterTaskOptions) {

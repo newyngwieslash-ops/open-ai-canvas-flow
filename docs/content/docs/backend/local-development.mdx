@@ -25,6 +25,20 @@ docker compose -f docker-compose.deploy.yml logs --since=15m -f backend
 
 修改后需要重新创建后端容器，单纯重启旧容器不会更新环境变量。未配置时保持空值并由资源请求强校验，不会自动采用容器内网地址；这项设置不放宽出站 SSRF 校验，也不应为此开放数据库或后端端口。只做本地界面开发且不向模型提交资源时可以不设置。部署后仍需验证真实资源 URL 能被目标供应商读取，健康检查不能替代该验证。
 
+## 本机代理与出站 SSRF 拦截
+
+本机装有 Clash、Surge 等代理软件并开启 fake-IP 或 TUN 模式时，公网域名会被解析到 `198.18.0.0/15`（RFC 2544 基准测试段）或 `fdfe::/16`（IPv6 ULA），后端 SSRF 防护会把它们按私网拒绝，表现为渠道「验证并继续」报“不允许访问本机、内网或链路本地地址”、服务商目录始终停留在离线缓存；生成任务则报“读取参考素材失败：后端出站连接被安全策略拦截”，因为后端读取对象存储里的参考素材同样要经过这层校验。
+
+按域名精确放行即可，不要用 `CANVAS_ALLOW_PRIVATE_UPSTREAMS=true` 全局关闭防护：
+
+```bash
+CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS=api.yingce.tv,ai.yingce.tv,metaso.cn,*.qiniucs.com
+```
+
+对象存储的源站域名由 bucket 和 region 拼接（七牛为 `<bucket>.s3.<region>.qiniucs.com`），无法逐个枚举，因此该变量支持 `*.` 子域后缀：只放行子域，不包含裸域，并按标签边界匹配（`*.qiniucs.com` 不会放行 `evilqiniucs.com`）。上传走对象存储 SDK 不经过这层校验，所以典型症状是“上传成功、读取失败”——不要误判为存储配置写错。
+
+`scripts/restart-local.ps1` 已为仓库服务商目录中的域名和常见对象存储域名预置该白名单。生产部署遇到同类报错时，把目标供应商或对象存储域名加入 `.env` 的同一变量并重新创建后端容器。
+
 ## 一键启动（Windows PowerShell）
 
 在仓库根目录执行：
@@ -63,7 +77,7 @@ restart.bat
 脚本会：
 
 - 前端默认监听 `5178`；若该端口没有监听进程却无法绑定（例如被 Windows 保留），自动尝试 `15178`，以启动窗口打印的访问地址为准；
-- 后端固定监听 `8178`，Vite 把 `/api` 代理到 `http://127.0.0.1:8178`；
+- 后端默认监听 `8178`；若该端口没有监听进程却无法绑定（例如被 Windows 保留），自动尝试 `18178`，Vite 把 `/api` 代理到选定的 `http://127.0.0.1:<后端端口>`；
 - 数据目录和 Go 缓存与上面的一键启动相同（`.local/project-workbench-debug`、`.local/cache/go-build`、`.local/cache/go-mod`）；
 - 若选定端口上是本仓库实例，则结束进程后重启；
 - 若选定端口被其他项目占用或仍无法绑定，则在结束已有实例前拒绝启动，并把原因写入 `.local/restart.log`；不会修改 Windows 保留端口设置。

@@ -1,7 +1,12 @@
 $ErrorActionPreference = 'Stop'
+$scriptPath = Join-Path $PSScriptRoot 'restart-local.ps1'
+$bytes = [System.IO.File]::ReadAllBytes($scriptPath)
+if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+    throw 'restart-local.ps1 must keep UTF-8 BOM for Windows PowerShell 5.1.'
+}
 $tokens = $null
 $parseErrors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'restart-local.ps1'), [ref]$tokens, [ref]$parseErrors)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw $parseErrors[0] }
 $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PortOccupancy' }, $true)
 . ([scriptblock]::Create($function.Extent.Text))

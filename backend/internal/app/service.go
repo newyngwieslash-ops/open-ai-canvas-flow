@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"yingce/backend/internal/auth"
+    "yingce/backend/internal/assets"
 	"yingce/backend/internal/canvas"
 	"yingce/backend/internal/kernel"
 	"yingce/backend/internal/model"
@@ -29,6 +30,7 @@ import (
 type Service struct {
 	repo                     *repository.Repository
 	dataDir                  string
+	playbackControl          playbackProducerControl
 	cancelMu                 sync.Mutex
 	registrationMu           sync.Mutex
 	emailCodeMu              sync.Mutex
@@ -111,6 +113,7 @@ const taskWorkerConcurrency = 3
 const taskLogPayloadLimit = 4000
 
 type CreateTaskRequest struct {
+	profileAnalysis bool
 	creationPrepare *creationTaskPreparation
 	admission       *taskAdmission
 	workbenchKind   string
@@ -130,10 +133,13 @@ type CreateTaskRequest struct {
 }
 
 type TaskListOptions struct {
-	Limit         int
-	ProjectID     string
-	ActiveOnly    bool
-	WorkbenchKind string
+	AssetImageCandidates bool
+	AssetID              string
+	BeforeTaskID         string
+	Limit                int
+	ProjectID            string
+	ActiveOnly           bool
+	WorkbenchKind        string
 }
 
 func New(repo *repository.Repository, dataDir string) *Service {
@@ -253,7 +259,39 @@ func (s *Service) Tasks(userID string, limit int) ([]TaskSummary, error) {
 }
 
 func (s *Service) TasksWithOptions(userID string, options TaskListOptions) ([]TaskSummary, error) {
-	tasks, err := s.repo.TasksWithWorkbenchKind(userID, options.Limit, options.ProjectID, options.ActiveOnly, options.WorkbenchKind)
+	var tasks []model.Task
+	var err error
+	if options.AssetImageCandidates {
+		if strings.TrimSpace(options.ProjectID) == "" || options.ActiveOnly || options.WorkbenchKind != "" || options.Limit < 1 || options.Limit > 100 {
+			return nil, BadAuthRequest("候选查询须指定项目、每页 1–100 条，且不能只查询活动任务")
+		}
+		if _, err := s.repo.ProjectForUser(userID, options.ProjectID); err != nil {
+			return nil, err
+		}
+		if options.AssetID != "" {
+			if _, err := s.projectImageAsset(userID, options.ProjectID, options.AssetID); err != nil {
+				return nil, err
+			}
+		}
+		tasks, err = s.repo.ImageCandidateTasks(userID, options.ProjectID, options.AssetID, options.BeforeTaskID, options.Limit)
+		if err != nil && options.BeforeTaskID != "" {
+			return nil, BadAuthRequest("候选分页游标无效或不属于当前查询")
+		}
+	} else if options.AssetID != "" {
+		if !options.ActiveOnly || strings.TrimSpace(options.ProjectID) == "" || options.BeforeTaskID != "" || options.WorkbenchKind != "" {
+			return nil, BadAuthRequest("资产活动任务查询须指定项目和 activeOnly，且不能使用游标或工作台筛选")
+		}
+		asset, assetErr := s.projectImageAsset(userID, options.ProjectID, options.AssetID)
+		if assetErr != nil {
+			return nil, assetErr
+		}
+		tasks, err = s.repo.ActiveProjectImageTasks(userID, options.ProjectID, options.AssetID, asset.Category, options.Limit)
+	} else {
+		if options.BeforeTaskID != "" {
+			return nil, BadAuthRequest("游标筛选仅用于图片候选查询")
+		}
+		tasks, err = s.repo.TasksWithWorkbenchKind(userID, options.Limit, options.ProjectID, options.ActiveOnly, options.WorkbenchKind)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -391,6 +429,12 @@ func (s *Service) log(userID string, taskID string, level string, message string
 		if task, err := s.repo.Task(taskID); err == nil {
 			traceID = task.TraceID
 			requestID = task.RequestID
+			if task.Operation == profileAnalysisOperation {
+				payload = ""
+				if level == "error" || level == "warn" {
+					message = "参考图分析任务诊断"
+				}
+			}
 		}
 	}
 	return s.repo.Create(&model.TaskLog{ID: newID(), UserID: userID, TaskID: taskID, TraceID: traceID, RequestID: requestID, Level: level, Message: message, Payload: truncateTaskLogPayload(payload)})
@@ -404,7 +448,16 @@ func truncateTaskLogPayload(payload string) string {
 	for end > 0 && !utf8.ValidString(payload[:end]) {
 		end--
 	}
-	return payload[:end] + fmt.Sprintf("\n...（日志内容已截断，原始长度 %d 字符）", len(payload))
+    truncated := payload[:end] + fmt.Sprintf("\n...（日志内容已截断，原始长度 %d 字符）", len(payload))
+    if json.Valid([]byte(payload)) {
+        ids := map[string]struct{}{}
+        if err := assets.CollectOwnedDocumentReferences(payload, ids); err == nil {
+            // Retain only resource identities, not extra untruncated diagnostic data.
+            encoded, _ := json.Marshal(map[string]any{"truncated":true, "text":truncated, "resourceIds":assets.SortedIDs(ids)})
+            return string(encoded)
+        }
+    }
+	return truncated
 }
 
 func (s *Service) registerActiveTask(id string, cancel context.CancelFunc) {

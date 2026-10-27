@@ -37,6 +37,14 @@ func recordTaskDiagnostic(task *model.Task, phase, code, outcome, retryClass str
 	if errors.As(cause, &appErr) && appErr.Reason != "" {
 		code = string(appErr.Reason)
 	}
+	if task.Operation == profileAnalysisOperation {
+		// Keep the original cause for billing/routing; only persisted text is projected.
+		if task.Status == model.TaskStatusCancelled || (phase == "cancellation" && code == "task_cancelled") {
+			code, task.Error = "task_cancelled", "任务已取消"
+		} else {
+			code, task.Error = "asset_profile_analysis_invalid_result", profileError(422, "invalid_result").Error()
+		}
+	}
 	diagnostic := &model.TaskExecutionDiagnostic{
 		Code: code, Phase: phase, TaskSubmitted: outcome == "accepted" || outcome == "submitted", SubmissionOutcome: outcome,
 		RetryClass: retryClass, SafeMessage: safeTaskDiagnosticMessage(task.Error), DiagnosticID: task.ID,

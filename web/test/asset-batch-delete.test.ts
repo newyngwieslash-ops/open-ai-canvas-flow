@@ -97,7 +97,8 @@ describe("素材批量删除", () => {
         try {
             await deleteAssetsWithRemoteSync(ids);
             expect(requests).toEqual([{ method: "post", url: "/assets/batch-delete", body: ids }]);
-            expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+            expect(useAssetStore.getState().assets.filter((item) => item.status === "deleting").map((item) => item.id)).toEqual(ids);
+            expect(useAssetStore.getState().assets).toHaveLength(101);
             expect(updates).toBe(1);
         } finally {
             stop();
@@ -163,7 +164,8 @@ describe("素材批量删除", () => {
         try {
             // GET 尚未返回，删除必须已返回，调用方才能关闭 Modal / Popconfirm。
             await within(deleteAssetsWithRemoteSync(["first"]));
-            expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+            expect(useAssetStore.getState().assets.filter((item) => item.id !== "keep").every((item) => item.status === "deleting")).toBe(true);
+            expect(useAssetStore.getState().assets.length).toBeGreaterThan(1);
             expect(requests).toEqual(["post /assets/batch-delete", "get /assets", "get /assets"]);
             for (const observer of observers) expect(observer.getCurrentResult().fetchStatus).toBe("fetching");
 
@@ -209,7 +211,8 @@ describe("素材批量删除", () => {
         };
         await deleteAssetsWithRemoteSync(ids);
         expect(bodies).toEqual([ids]);
-        expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+        expect(useAssetStore.getState().assets.filter((item) => item.id !== "keep").every((item) => item.status === "deleting")).toBe(true);
+            expect(useAssetStore.getState().assets.length).toBeGreaterThan(1);
     });
 
     test("分页未缓存素材补齐详情后，移入回收站同步全部选中项", async () => {
@@ -217,6 +220,7 @@ describe("素材批量删除", () => {
         const remoteAssets = ids.map(asset);
         const writes: Asset[] = [];
         apiClient.defaults.adapter = async (config) => {
+            if (config.method === "get") return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { asset: remoteAssets.find((item) => config.url === `/assets/${item.id}`) }, msg: "ok" } };
             const body = JSON.parse(config.data);
             if (config.url === "/assets/batch") {
                 expect(body.ids).toEqual(ids);

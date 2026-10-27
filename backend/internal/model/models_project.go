@@ -172,11 +172,11 @@ type AssetVersion struct {
 
 type AssetRepresentation struct {
 	ID             string    `json:"id" gorm:"primaryKey;size:36"`
-	TaskID         string    `json:"taskId,omitempty" gorm:"index;size:36;uniqueIndex:idx_asset_representations_task_role,priority:1"`
+	TaskID         string    `json:"taskId,omitempty" gorm:"index;size:36"`
 	AssetVersionID string    `json:"assetVersionId" gorm:"index;size:36;uniqueIndex:idx_asset_representations_version_role,priority:1"`
 	ResourceID     string    `json:"resourceId,omitempty" gorm:"index;size:36"`
 	MediaType      string    `json:"mediaType" gorm:"index;size:24"`
-	Role           string    `json:"role" gorm:"index;size:32;uniqueIndex:idx_asset_representations_task_role,priority:2;uniqueIndex:idx_asset_representations_version_role,priority:2"`
+	Role           string    `json:"role" gorm:"index;size:32;uniqueIndex:idx_asset_representations_version_role,priority:2"`
 	MetadataJSON   string    `json:"metadataJson" gorm:"type:text"`
 	CreatedAt      time.Time `json:"createdAt"`
 }

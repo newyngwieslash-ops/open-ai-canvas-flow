@@ -20,7 +20,7 @@ func uploadReservationTestDB(t *testing.T) (*gorm.DB, *Repository, *Repository) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.UploadReservation{}, &model.UserDailyUploadUsage{}, &model.Resource{}); err != nil {
+	if err := db.AutoMigrate(&model.UploadReservation{}, &model.UserDailyUploadUsage{}, &model.Resource{}, &model.ResourceDeletionObject{}); err != nil {
 		t.Fatal(err)
 	}
 	peer, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -32,6 +32,36 @@ func uploadReservationTestDB(t *testing.T) (*gorm.DB, *Repository, *Repository) 
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 	return db, New(db), New(peer)
+}
+
+// Production creates a pending row before physical upload; publication is an
+// update-only commit so late uploads cannot recreate deleted resource records.
+func seedPendingUploadResource(t *testing.T, r *Repository, resource model.Resource) {
+	t.Helper()
+	resource.Status = model.ResourceStatusPending
+	if err := r.CreateResource(&resource); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUploadReservationPublicationNeverUpserts(t *testing.T) {
+	db, r, _ := uploadReservationTestDB(t)
+	row := model.Resource{ID: "missing", UserID: "user", ObjectKey: "missing", Status: model.ResourceStatusReady, Size: 10}
+	if err := r.SaveResourceWithinStorageLimit(&row, 100, 1000, ""); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("missing publication=%v", err)
+	}
+	row.Status = model.ResourceStatusDeleting
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	row.Status = model.ResourceStatusReady
+	if err := r.SaveResourceWithinStorageLimit(&row, 100, 1000, ""); err == nil {
+		t.Fatal("deleting publication accepted")
+	}
+	stored, err := r.Resource(row.ID)
+	if err != nil || stored.Status != model.ResourceStatusDeleting {
+		t.Fatalf("publication resurrected row: %+v %v", stored, err)
+	}
 }
 
 func TestUploadReservationConcurrentAdmission(t *testing.T) {
@@ -86,6 +116,10 @@ func TestUploadReservationAtomicCapacityCommit(t *testing.T) {
 	results := make(chan error, 2)
 	var wg sync.WaitGroup
 	for i, repo := range []*Repository{first, second} {
+		pending := model.Resource{ID: fmt.Sprint(i), UserID: "user", ObjectKey: fmt.Sprint(i), Status: model.ResourceStatusPending, Size: 60}
+		if err := repo.CreateResource(&pending); err != nil {
+			t.Fatal(err)
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -108,8 +142,11 @@ func TestUploadReservationAtomicCapacityCommit(t *testing.T) {
 		t.Fatalf("committed=%d want=1", accepted)
 	}
 	var count int64
-	if err := db.Model(&model.Resource{}).Count(&count).Error; err != nil || count != 1 {
-		t.Fatalf("resource rows=%d err=%v", count, err)
+	if err := db.Model(&model.Resource{}).Where("status = ?", model.ResourceStatusReady).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("ready resource rows=%d err=%v", count, err)
+	}
+	if err := db.Model(&model.Resource{}).Where("status = ?", model.ResourceStatusPending).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("denied upload must retain pending row: %d %v", count, err)
 	}
 }
 
@@ -133,10 +170,12 @@ func TestUploadReservationCommitAndExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := model.Resource{ID: "other", UserID: "user", Size: 40, Status: model.ResourceStatusReady, ObjectKey: "other"}
+	seedPendingUploadResource(t, r, other)
 	if err := r.SaveResourceWithinStorageLimit(&other, 100, 1000, ""); !errors.Is(err, ErrUploadStorageLimit) {
 		t.Fatalf("ordinary upload ignored reserved capacity: %v", err)
 	}
 	resource := model.Resource{ID: "resource", UserID: "user", Size: 59, Status: model.ResourceStatusReady, ObjectKey: "resource"}
+	seedPendingUploadResource(t, r, resource)
 	if err := r.SaveResourceWithinStorageLimit(&resource, 100, 1000, lease.ID); !errors.Is(err, ErrUploadReservationExpired) {
 		t.Fatalf("mismatched lease: %v", err)
 	}
@@ -174,6 +213,7 @@ func TestUploadReservationCommitAcrossUTCDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	resource := model.Resource{ID: "midnight", UserID: "user", Size: 15, ObjectKey: "midnight", Status: model.ResourceStatusReady}
+	seedPendingUploadResource(t, r, resource)
 	if err := r.SaveResourceWithinStorageLimit(&resource, 1000, 100, lease.ID); !errors.Is(err, ErrDailyUploadLimitExceeded) {
 		t.Fatalf("new-day quota bypassed: %v", err)
 	}

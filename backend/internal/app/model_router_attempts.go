@@ -257,7 +257,15 @@ func (s *Service) switchTaskToNextRoute(task *model.Task, attempts []model.Route
 	}
 	routed := &RoutedModel{LogicalModel: *logicalModel, Revision: *revision, Route: selected.Route, ChannelModel: selected.ChannelModel, CapabilitySpec: selected.CapabilitySpec, PriceTier: priceTier, Defaults: defaults, Intent: intent}
 	nextInput := applyRoutedProviderSelection(input, routed)
+	if task.Operation == profileAnalysisOperation {
+		if err := s.validateProfileModel(task.UserID, nextInput, routed); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.ValidateTaskCapability(nextInput); err != nil {
+		return nil, err
+	}
+	if err := s.validateStoryboardPromptBudget(nextInput); err != nil {
 		return nil, err
 	}
 	if err := s.protectTaskSecrets(nextInput); err != nil {
@@ -464,6 +472,9 @@ func (s *Service) finishTaskRouteAttempt(attempt *model.RouteAttempt, task *mode
 		attempt.Status = "failed"
 		attempt.FailureMessage = truncateRunes(taskFailureMessage(taskErr), 1000)
 		attempt.FailureCode = routeFailureCode(taskErr)
+		if task != nil && task.Operation == profileAnalysisOperation {
+			attempt.FailureMessage = profileError(422, "invalid_result").Error()
+		}
 		if attempt.ProviderRequestID != "" {
 			attempt.DispatchState = "accepted"
 		} else if safeRouteRejection(taskErr) {

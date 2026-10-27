@@ -320,7 +320,7 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 	digest := CanvasOperationsDigest(req)
 	var result UserDataSummary
 	err = s.host.WithStorageLock(func() error {
-		return s.repo.Transaction(func(tx *repository.Repository) error {
+		return s.repo.ResourceLifecycleTransaction(func(tx *repository.Repository) error {
 			tx = tx.WithCanvasEditProofs(req.EditProofs)
 			if err := tx.LockCanvasMutation(userID, canvasID); err != nil {
 				return err

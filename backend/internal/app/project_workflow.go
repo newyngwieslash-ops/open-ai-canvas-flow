@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -127,6 +128,18 @@ func (s *Service) CreateUnitWorkflow(userID string, projectID string, unitID str
 }
 
 func (s *Service) UpdateWorkflowStep(userID string, projectID string, stepID string, req UpdateWorkflowStepRequest) (model.WorkflowStepInstance, error) {
+	var result model.WorkflowStepInstance
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		writer := *s
+		writer.repo = repo
+		var err error
+		result, err = writer.updateWorkflowStepLocked(userID, projectID, stepID, req)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) updateWorkflowStepLocked(userID string, projectID string, stepID string, req UpdateWorkflowStepRequest) (model.WorkflowStepInstance, error) {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return model.WorkflowStepInstance{}, err
 	}
@@ -191,6 +204,18 @@ func (s *Service) UpdateWorkflowStep(userID string, projectID string, stepID str
 }
 
 func (s *Service) RegisterTaskOutput(userID string, projectID string, stepID string, req RegisterTaskOutputRequest) (model.WorkflowStepInstance, error) {
+	var result model.WorkflowStepInstance
+	err := s.repo.WithStoryboardProjectWrite(projectID, func(repo *repository.Repository) error {
+		writer := *s
+		writer.repo = repo
+		var err error
+		result, err = writer.registerTaskOutputLocked(userID, projectID, stepID, req)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) registerTaskOutputLocked(userID string, projectID string, stepID string, req RegisterTaskOutputRequest) (model.WorkflowStepInstance, error) {
 	if _, err := s.activeProjectForUser(userID, projectID); err != nil {
 		return model.WorkflowStepInstance{}, err
 	}
@@ -225,6 +250,7 @@ func (s *Service) RegisterTaskOutput(userID string, projectID string, stepID str
 	if step.Status == model.WorkflowStepStatusFailed {
 		return model.WorkflowStepInstance{}, BadAuthRequest("失败步骤不能登记成功产物")
 	}
+	originalStep := *step
 	unitID := strings.TrimSpace(req.UnitID)
 	shotID := strings.TrimSpace(req.ShotID)
 	var shot *model.Shot
@@ -319,6 +345,9 @@ func (s *Service) RegisterTaskOutput(userID string, projectID string, stepID str
 	var artifact *model.ShotArtifact
 	if shot != nil && strings.TrimSpace(req.ResourceID) != "" && artifactType != "" {
 		artifact = &model.ShotArtifact{ID: newID(), ProjectID: projectID, UnitID: shot.UnitID, ShotID: shot.ID, RevisionID: shotRevisionID, TaskID: task.ID, Type: artifactType, ResourceID: strings.TrimSpace(req.ResourceID), Status: "ready", Selected: true, MetadataJSON: metadata, CreatedAt: now, UpdatedAt: now}
+		if shotRevisionID != shot.CurrentRevisionID {
+			artifact.Status, artifact.Selected = "stale", false
+		}
 	}
 	// 单镜产物成功只代表该镜头完成，不能提前放行整个章节阶段。
 	if shot != nil {
@@ -329,6 +358,9 @@ func (s *Service) RegisterTaskOutput(userID string, projectID string, stepID str
 	}
 	if err := s.repo.RegisterWorkflowTaskOutput(step, next, instance, projectID, link, representation, productionLink, artifact); err != nil {
 		return model.WorkflowStepInstance{}, err
+	}
+	if artifact != nil && artifact.Status == "stale" && !artifact.Selected {
+		return originalStep, nil
 	}
 	return *step, nil
 }
@@ -427,6 +459,15 @@ func (s *Service) RegisterTaskOutputFromTask(task model.Task) error {
 	decrypted, err := s.decryptTaskInputJSON(task.InputJSON)
 	if err != nil {
 		return err
+	}
+	meta, err := parseProjectImageMetadata(decrypted)
+	if err != nil {
+		return err
+	}
+	// This entry is also used by completion, recovery and read compensation.
+	// Manual project images can only bind through explicit candidate adoption.
+	if meta.supported() && meta.AdoptionMode == "manual" {
+		return nil
 	}
 	var input struct {
 		WorkflowStepID  string         `json:"workflowStepId"`
@@ -565,14 +606,27 @@ func findTaskOutputResource(value any, mediaType string) (string, string) {
 }
 
 func (s *Service) ensureGeneratedProjectAsset(task model.Task, projectID string, shotID string, resourceID string, mediaType string) (string, error) {
-	representations, err := s.repo.AssetRepresentationsForTask(task.ID)
+	assetID := workflowGeneratedEntityID("asset", task.ID)
+	versionID := workflowGeneratedEntityID("version", task.ID)
+	representations, err := s.repo.AssetRepresentations(versionID)
 	if err != nil {
 		return "", err
 	}
 	for _, representation := range representations {
-		if representation.Role == "output" && representation.ResourceID == resourceID && representation.AssetVersionID != "" {
-			return representation.AssetVersionID, nil
+		if representation.Role != "output" {
+			continue
 		}
+		version, err := s.repo.AssetVersionForProject(projectID, versionID)
+		if err != nil {
+			return "", err
+		}
+		if version.AssetID != assetID || representation.TaskID != task.ID || representation.ResourceID != resourceID || representation.MediaType != mediaType {
+			return "", BadAuthRequest("工作流产物重放与原登记不一致")
+		}
+		if _, err := s.repo.AssetForUser(task.UserID, assetID); err != nil {
+			return "", err
+		}
+		return versionID, nil
 	}
 	resource, err := s.repo.ResourceForUser(task.UserID, resourceID)
 	if err != nil {
@@ -586,8 +640,6 @@ func (s *Service) ensureGeneratedProjectAsset(task model.Task, projectID string,
 		return "", err
 	}
 	now := time.Now()
-	assetID := workflowGeneratedEntityID("asset", task.ID)
-	versionID := workflowGeneratedEntityID("version", task.ID)
 	label := "图片"
 	if mediaType == "video" {
 		label = "视频"
@@ -638,9 +690,6 @@ func (s *Service) ensureGeneratedProjectAsset(task model.Task, projectID string,
 		return "", err
 	}
 	link := &model.ProjectAssetLink{ID: newID(), ProjectID: projectID, AssetID: assetID, FolderID: folderID, Position: position, CreatedAt: now}
-	if err := s.repo.UpsertAsset(asset); err != nil {
-		return "", err
-	}
 	if _, err := s.repo.LinkProjectAsset(asset, version, link); err != nil {
 		return "", err
 	}

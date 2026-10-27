@@ -99,9 +99,10 @@ export function AgentLauncher({
     const keepsAvatarSize = live || media || bundleManifestLoading;
     const height = keepsAvatarSize ? Math.max(40, Math.min(appearance.avatarHeight, viewport.height - 60, (viewport.width - 40) / aspectRatio)) : 76;
     const width = keepsAvatarSize ? Math.round(height * aspectRatio) : 76;
-    const { position, dragging, handlers } = useAgentLauncherPosition(onOpen, width, height);
+    const { position, dragging, handlers, launcherRef, obscured } = useAgentLauncherPosition(onOpen, width, height);
     return (
         <motion.button
+            ref={launcherRef}
             type="button"
             aria-label={`打开${appearance.agentName}`}
             title={live && live2DError ? live2DError : `${approvalPending ? "Agent 等待你的审批" : "打开 Agent 助手"} · 拖动可调整位置，聚焦后可用方向键移动`}
@@ -111,9 +112,9 @@ export function AgentLauncher({
                 live && "canvas-agent-launcher-live2d",
                 mediaURL && !mediaError && "canvas-agent-launcher-media",
             )}
-            style={{ ...position, width, height, color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow, ...(hidden ? { display: "none" } : null) } as CSSProperties}
-            aria-hidden={hidden || undefined}
-            tabIndex={hidden ? -1 : undefined}
+            style={{ ...position, width, height, color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow, ...(hidden || obscured ? { display: "none" } : null) } as CSSProperties}
+            aria-hidden={hidden || obscured || undefined}
+            tabIndex={hidden || obscured ? -1 : undefined}
             data-canvas-no-zoom
             onDragStart={(event) => event.preventDefault()}
             {...handlers}

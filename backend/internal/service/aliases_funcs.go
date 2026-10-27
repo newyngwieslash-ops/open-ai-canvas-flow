@@ -58,6 +58,11 @@ var (
 	RateLimited                                = app.RateLimited
 	ReasonForStatus                            = app.ReasonForStatus
 	SanitizeAPICallPayload                     = app.SanitizeAPICallPayload
+	StoryboardAssetBindingBusy                 = app.StoryboardAssetBindingBusy
+	StoryboardAssetBindingCapacityExceeded     = app.StoryboardAssetBindingCapacityExceeded
+	StoryboardAssetBindingConflict             = app.StoryboardAssetBindingConflict
+	StoryboardAssetBindingInvalidReference     = app.StoryboardAssetBindingInvalidReference
+	StoryboardAssetBindingInvalidRequest       = app.StoryboardAssetBindingInvalidRequest
 	Unauthorized                               = app.Unauthorized
 	ValidateCapabilitySpec                     = app.ValidateCapabilitySpec
 	ValidateChannelModelPrice                  = app.ValidateChannelModelPrice

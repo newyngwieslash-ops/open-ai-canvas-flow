@@ -1,3 +1,4 @@
+import { ASSET_DELETING_MESSAGE, isAssetAvailableForReference } from "@/lib/asset-availability";
 import { uploadImage } from "@/services/image-storage";
 import { assetStorageUsageQueryKey, AssetStorageUsage } from "./asset-storage-usage";
 import { readFileAsDataUrl, readImageMeta, formatBytes } from "@/lib/image-utils";
@@ -25,7 +26,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { ASSET_CATEGORY_OPTIONS } from "@/lib/asset-category";
 import { downloadBrowserMedia } from "@/services/browser-download";
 import { flushAssetStorePersistence, useAssetStore, type AssetCategory, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
-import { loadAssetLibraryPage, loadAssetsForUse, saveRemoteUserDataNow, localSavedRemotePendingMessage, deleteAssetsWithRemoteSync, deleteAssetWithRemoteSync } from "@/services/user-data-sync";
+import { refreshDeletingAssets, loadAssetLibraryPage, loadAssetsForUse, saveRemoteUserDataNow, localSavedRemotePendingMessage, deleteAssetsWithRemoteSync, deleteAssetWithRemoteSync } from "@/services/user-data-sync";
 import { useUserStore } from "@/stores/use-user-store";
 import { createAssetFolder, deleteAssetFolder, listAssetFolders, updateAssetFolder, type AssetFolder, moveRemoteAssetsToFolder } from "@/services/api/user-data";
 import { assetCountMap, assetSearchText, readAssetGridDensity, assetKindIcons } from "./asset-library-format";
@@ -81,7 +82,7 @@ export default function AssetsPage() {
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const userId = useUserStore((state) => state.user?.id || "");
     const retentionDays = useUserStore((state) => state.runtimeLimits.recycleBinRetentionDays ?? 30);
-    const [viewMode, setViewMode] = useState<"library" | "trash">("library");
+    const [viewMode, setViewMode] = useState<"library" | "trash" | "deleting">("library");
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [categoryFilter, setCategoryFilter] = useState<AssetCategory | "all">("all");
@@ -124,9 +125,10 @@ export default function AssetsPage() {
     const folders = foldersQuery.data?.folders || [];
 
     const allLibraryAssets = useMemo(() => assets, [assets]);
-    const activeAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status !== "archived"), [allLibraryAssets]);
+    const activeAssets = useMemo(() => allLibraryAssets.filter(isAssetAvailableForReference), [allLibraryAssets]);
     const trashAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status === "archived"), [allLibraryAssets]);
-    const validAssets = viewMode === "trash" ? trashAssets : activeAssets;
+    const deletingAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status === "deleting"), [allLibraryAssets]);
+    const validAssets = viewMode === "deleting" ? deletingAssets : viewMode === "trash" ? trashAssets : activeAssets;
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
         return validAssets.filter((asset) => {
@@ -141,17 +143,21 @@ export default function AssetsPage() {
 
     const assetPageQuery = useQuery({
         queryKey: [...ASSET_LIBRARY_QUERY_KEY, userId, page, pageSize, viewMode, kindFilter, categoryFilter, folderFilter, debouncedKeyword],
-        queryFn: ({ signal }) => loadAssetLibraryPage({
+        queryFn: async ({ signal }) => {
+            if (viewMode === "deleting") await refreshDeletingAssets();
+            return loadAssetLibraryPage({
             page,
             pageSize,
-            status: viewMode === "trash" ? "archived" : "active",
+            status: viewMode === "deleting" ? "deleting" : viewMode === "trash" ? "archived" : "active",
             kind: kindFilter === "all" ? undefined : kindFilter,
             category: categoryFilter === "all" ? undefined : categoryFilter,
             folderId: folderFilter !== "all" && folderFilter !== "uncategorized" ? folderFilter : undefined,
             uncategorized: folderFilter === "uncategorized",
             query: debouncedKeyword || undefined,
             signal,
-        }),
+        });
+        },
+        refetchInterval: viewMode === "deleting" ? 5000 : false,
         enabled: Boolean(userId),
         placeholderData: keepPreviousData,
     });
@@ -162,14 +168,14 @@ export default function AssetsPage() {
     }, [filteredAssets, page, pageSize]);
     // 远端成功且本页有可展示素材时用远端。真正的空结果保持空页。
     // 仅在「远端空、本地仍有筛选结果」或「远端总数>0 但本页全是被排除的 entity」时回退本地。
-    const remotePageAssets = useMemo(() => assetPageQuery.data?.assets || [], [assetPageQuery.data?.assets]);
+    const remotePageAssets = useMemo(() => (assetPageQuery.data?.assets || []).map((asset) => deletingAssets.find((local) => local.id === asset.id) || asset).filter((asset) => viewMode === "deleting" ? asset.status === "deleting" : viewMode === "trash" ? asset.status === "archived" : isAssetAvailableForReference(asset)), [assetPageQuery.data?.assets, deletingAssets, viewMode]);
     const remoteTotal = assetPageQuery.data?.total ?? 0;
     const remoteReady = assetPageQuery.isSuccess && assetPageQuery.data !== undefined;
     const preferLocalUnsynced = remoteReady && remoteTotal === 0 && localVisibleAssets.length > 0;
     const remoteEntityOnlyPage = remoteReady && remotePageAssets.length === 0 && remoteTotal > 0;
     const useRemotePage = remoteReady && !preferLocalUnsynced && !remoteEntityOnlyPage && (remotePageAssets.length > 0 || remoteTotal === 0);
     const visibleAssets = useMemo(() => useRemotePage ? remotePageAssets : localVisibleAssets, [useRemotePage, remotePageAssets, localVisibleAssets]);
-    const visibleAssetIds = useMemo(() => visibleAssets.map((asset) => asset.id), [visibleAssets]);
+    const visibleAssetIds = useMemo(() => visibleAssets.filter((asset) => asset.status !== "deleting").map((asset) => asset.id), [visibleAssets]);
     const allFilteredSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIds.includes(id));
     const selectionMode = selecting || selectedIds.length > 0;
     const totalAssets = useRemotePage ? remoteTotal : filteredAssets.length;
@@ -250,6 +256,8 @@ export default function AssetsPage() {
     const moveAssetsToFolder = async (assetIds: string[], folderId: string) => {
         if (!assetIds.length) return;
         try {
+            await ensureAssetsInStore(assetIds);
+            if (useAssetStore.getState().assets.some((asset) => assetIds.includes(asset.id) && asset.status === "deleting")) throw new Error(ASSET_DELETING_MESSAGE);
             await moveRemoteAssetsToFolder(assetIds, folderId);
             assetIds.forEach((id) => updateAsset(id, { folderId: folderId || undefined }));
             await flushAssetStorePersistence();
@@ -273,6 +281,7 @@ export default function AssetsPage() {
     };
 
     const openEdit = async (asset: LibraryAsset) => {
+        if (asset.status === "deleting" || useAssetStore.getState().assets.find((item) => item.id === asset.id)?.status === "deleting") { message.warning(ASSET_DELETING_MESSAGE); return; }
         let editableAsset = useAssetStore.getState().assets.find((item) => item.id === asset.id);
         if (!editableAsset) {
             try {
@@ -311,11 +320,15 @@ export default function AssetsPage() {
     };
 
     const ensureAssetsInStore = async (assetIds: string[]) => {
-        const missingIds = assetIds.filter((id) => !useAssetStore.getState().assets.some((asset) => asset.id === id));
-        if (missingIds.length) await loadAssetsForUse(missingIds);
+        await loadAssetsForUse(assetIds, userId ? { refresh: true } : undefined);
+        if (useAssetStore.getState().assets.some((asset) => assetIds.includes(asset.id) && asset.status === "deleting")) throw new Error(ASSET_DELETING_MESSAGE);
     };
 
     const saveAsset = async () => {
+        if (editingAsset) {
+            try { await ensureAssetsInStore([editingAsset.id]); }
+            catch (error) { message.error(error instanceof Error ? error.message : "素材不可编辑"); return; }
+        }
         const values = await form.validateFields();
         let imageData = imageDraft;
         if (values.kind === "image" && imageFile) {
@@ -488,7 +501,7 @@ export default function AssetsPage() {
         try {
             await deleteAssetsWithRemoteSync(trashAssets.map((asset) => asset.id));
             setSelectedIds([]);
-            message.success(`已彻底清空回收站 ${count} 个素材`);
+            message.success(`已受理回收站 ${count} 个素材的删除请求`);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "清空回收站失败");
         }
@@ -498,7 +511,7 @@ export default function AssetsPage() {
         if (!deletingAsset) return;
         try {
             await deleteAssetWithRemoteSync(deletingAsset.id);
-            message.success("素材已彻底删除");
+            message.success("素材删除请求已受理");
             setDeletingAsset(null);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "素材删除失败");
@@ -526,7 +539,7 @@ export default function AssetsPage() {
         setBatchWorking(true);
         try {
             await deleteAssetsWithRemoteSync(ids);
-            message.success(`已彻底删除 ${ids.length} 个素材`);
+            message.success(`已受理 ${ids.length} 个素材的删除请求`);
             setSelectedIds([]);
             setBatchDeleteOpen(false);
         } catch (error) {
@@ -541,8 +554,8 @@ export default function AssetsPage() {
             <WorkspacePage grid className="library-page assets-library-page canvas-library-page">
                 <div className="studio-band">
                     <PageHeader
-                        title={viewMode === "trash" ? "素材库 / 回收站" : "素材库"}
-                        description={viewMode === "trash" ? "已删除画布或手动归档的临时素材，可随时还原或彻底清理。" : "管理文本、图片、视频、音频和 3D 模型素材。"}
+                        title={viewMode === "deleting" ? "素材库 / 删除中" : viewMode === "trash" ? "素材库 / 回收站" : "素材库"}
+                        description={viewMode === "deleting" ? ASSET_DELETING_MESSAGE : viewMode === "trash" ? "已删除画布或手动归档的临时素材，可随时还原或彻底清理。" : "管理文本、图片、视频、音频和 3D 模型素材。"}
                         meta={<span className="app-projects-header-meta assets-header-meta">{totalAssets} 个素材</span>}
                         actions={
                             <div className="assets-header-actions">
@@ -683,6 +696,9 @@ export default function AssetsPage() {
                             </section>
                             </div>
                             <div className="collection-trash-entry">
+                                <button type="button" aria-pressed={viewMode === "deleting"} className={cn("assets-filter-item w-full", viewMode === "deleting" && "is-active")} onClick={() => { setViewMode("deleting"); setKindFilter("all"); setCategoryFilter("all"); setFolderFilter("all"); setPage(1); setSelectedIds([]); }}>
+                                    删除中
+                                </button>
                                 <button
                                     type="button"
                                     aria-pressed={viewMode === "trash"}
@@ -711,6 +727,7 @@ export default function AssetsPage() {
                             </div>
                         </aside>
                         <section className="min-w-0">
+                            {viewMode === "deleting" && assetPageQuery.isError ? <p role="alert" className="mb-3 text-sm text-muted-foreground">删除状态暂时无法刷新，已保留本地记录；稍后会自动刷新。</p> : null}
                             {viewMode === "trash" ? (
                                 <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-600 dark:text-amber-300">
                                     <div className="flex items-center gap-2">
@@ -719,7 +736,7 @@ export default function AssetsPage() {
                                     </div>
                                 </div>
                             ) : null}
-                            {selectionMode ? (
+                            {selectionMode && viewMode !== "deleting" ? (
                                 <AssetsBatchBar
                                     count={selectedIds.length}
                                     isTrash={viewMode === "trash"}
@@ -735,7 +752,7 @@ export default function AssetsPage() {
                                 />
                             ) : null}
                             {validAssets.length === 0 && totalAssets === 0 ? (
-                                viewMode === "trash" ? (
+                                viewMode === "deleting" ? <WorkspaceState icon="assets" compact title="没有删除中的素材" description="已受理但尚未完成物理清理的素材会显示在这里。" /> : viewMode === "trash" ? (
                                     <WorkspaceState icon="assets" compact title="回收站是空的" description="删除画布或手动移入回收站的素材会暂存到这里，可在需要时随时还原。" />
                                 ) : (
                                     <AssetsEmptyState onNew={openCreate} onImport={() => assetInputRef.current?.click()} onGoCanvas={() => navigate("/canvas")} />
@@ -1003,7 +1020,7 @@ export default function AssetsPage() {
                 okButtonProps={{ danger: true }}
                 cancelText="取消"
             >
-                确定彻底删除「{deletingAsset?.title}」吗？未被其他素材复用的服务器文件会直接释放，原画布或任务中的旧引用可能失效，操作不可恢复。
+                确定提交「{deletingAsset?.title}」的删除请求吗？有业务引用的素材会被拒绝；受理后进入删除中，物理清理完成后才移除记录，失败将自动重试。
             </Modal>
             <Modal
                 className="library-modal library-confirm-modal"
@@ -1017,7 +1034,7 @@ export default function AssetsPage() {
                 okButtonProps={{ danger: true }}
                 cancelText="取消"
             >
-                确定彻底删除已选择的 {selectedIds.length} 个素材吗？未被其他素材复用的服务器文件会直接释放，原画布或任务中的旧引用可能失效，操作不可恢复。
+                确定提交已选择的 {selectedIds.length} 个素材的删除请求吗？有业务引用的素材会被拒绝；受理后进入删除中，物理清理完成后才移除记录，失败将自动重试。
             </Modal>
         </>
     );

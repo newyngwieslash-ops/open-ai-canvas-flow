@@ -212,8 +212,25 @@ func (r *Repository) SaveTaskCompletion(task *model.Task, expected model.TaskSta
 // Registration and terminal success commit together; a failed asset write leaves
 // the task recoverable and never exposes a false success to the canvas.
 func (r *Repository) SaveTaskCompletionWithRegistration(task *model.Task, expected model.TaskStatus, results []model.Result, register func(*Repository) error) error {
-	return r.Transaction(func(repo *Repository) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
 		tx := repo.db
+		if err := repo.requireUnchangedMediaCheckpoint(task); err != nil {
+			return err
+		}
+		if err := repo.RequireProfileSource(task, false); err != nil {
+			return err
+		}
+		if err := repo.requireReferenceResources(task.UserID, false, nil, task.InputJSON, task.ResultJSON); err != nil {
+			return err
+		}
+		for _, result := range results {
+			if result.UserID != task.UserID || result.TaskID != task.ID {
+				return gorm.ErrInvalidData
+			}
+			if err := repo.requireResultResources(&result); err != nil {
+				return err
+			}
+		}
 		storedResultJSON := task.ResultJSON
 		updated := taskLeaseWriter(tx.Model(&model.Task{}), task.LeaseOwner).
 			Where("id = ? AND status = ?", task.ID, expected).
@@ -235,6 +252,9 @@ func (r *Repository) SaveTaskCompletionWithRegistration(task *model.Task, expect
 			}
 			// 版本化资产绑定可能补充结果状态；与任务终态在同一事务保存。
 			if task.ResultJSON != storedResultJSON {
+				if err := repo.requireLiveDocumentResources(task.UserID, task.ResultJSON); err != nil {
+					return err
+				}
 				return tx.Model(&model.Task{}).Where("id = ?", task.ID).Update("result_json", task.ResultJSON).Error
 			}
 		}

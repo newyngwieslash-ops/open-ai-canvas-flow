@@ -11,6 +11,33 @@ const (
 )
 
 type (
+	GeneratedBindingRequest = app.GeneratedBindingRequest
+	GeneratedBindingBaseline = app.GeneratedBindingBaseline
+	GeneratedBindingInput = app.GeneratedBindingInput
+	GeneratedBindingRow = app.GeneratedBindingRow
+	GeneratedBindingResolution = app.GeneratedBindingResolution
+	BindingCategory                        = app.BindingCategory
+	BindingEvidence                        = app.BindingEvidence
+	BindingIssue                           = app.BindingIssue
+	BindingCandidate                       = app.BindingCandidate
+	BindingPreviewRequest                  = app.BindingPreviewRequest
+	BindingReference                       = app.BindingReference
+	BindingArtifact                        = app.BindingArtifact
+	BindingShotBaseline                    = app.BindingShotBaseline
+	BindingVersionBaseline                 = app.BindingVersionBaseline
+	BindingCatalogBaseline                 = app.BindingCatalogBaseline
+	BindingBaseline                        = app.BindingBaseline
+	BindingShotPreview                     = app.BindingShotPreview
+	BindingPreview                         = app.BindingPreview
+	BindingSelection                       = app.BindingSelection
+	BindingAppendRequest                   = app.BindingAppendRequest
+	BindingShotAppendResult                = app.BindingShotAppendResult
+	BindingAppendResult                    = app.BindingAppendResult
+	ProjectReferenceImage                  = app.ProjectReferenceImage
+	CreateProjectAssetEntityRequest        = app.CreateProjectAssetEntityRequest
+	SetProjectReferenceImageRequest        = app.SetProjectReferenceImageRequest
+	AdoptProjectImageCandidateRequest      = app.AdoptProjectImageCandidateRequest
+	AssetImageCandidate                    = app.AssetImageCandidate
 	BindProjectAssetImageRequest           = app.BindProjectAssetImageRequest
 	PaymentOrderQuery                      = app.PaymentOrderQuery
 	PaymentReconciliationQuery             = app.PaymentReconciliationQuery

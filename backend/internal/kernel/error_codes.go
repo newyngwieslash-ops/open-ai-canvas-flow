@@ -5,42 +5,50 @@ package kernel
 const (
 	CodeOK = 0
 
-	CodeInvalidArgument = 400
-	CodeUnauthorized    = 401
-	CodeForbidden       = 403
-	CodeNotFound        = 404
-	CodeConflict        = 409
-	CodeTooManyRequests = 429
-	CodeInternal        = 500
-	CodeBadGateway      = 502
-	CodeUnavailable     = 503
-	CodeTimeout         = 504
+	CodeInvalidArgument     = 400
+	CodeUnauthorized        = 401
+	CodeForbidden           = 403
+	CodeNotFound            = 404
+	CodeConflict            = 409
+	CodeUnprocessableEntity = 422
+	CodeTooManyRequests     = 429
+	CodeInternal            = 500
+	CodeBadGateway          = 502
+	CodeUnavailable         = 503
+	CodeTimeout             = 504
 
-	CodeQuotaExceeded          = 40301
-	CodeIdempotencyConflict    = 40901
-	CodeCanvasResourcesMissing = 40902
-	CodeRateLimited            = 42901
+	CodeQuotaExceeded                          = 40301
+	CodeIdempotencyConflict                    = 40901
+	CodeCanvasResourcesMissing                 = 40902
+	CodeStoryboardAssetBindingInvalidReference = 42201
+	CodeStoryboardAssetBindingCapacityExceeded = 42202
+	CodeRateLimited                            = 42901
 )
 
 // ErrorReason 是稳定机器可读原因，前端应判断 reason 而不是解析 msg。
 type ErrorReason string
 
 const (
-	ReasonInvalidArgument        ErrorReason = "invalid_argument"
-	ReasonUnauthorized           ErrorReason = "unauthorized"
-	ReasonForbidden              ErrorReason = "forbidden"
-	ReasonNotFound               ErrorReason = "not_found"
-	ReasonConflict               ErrorReason = "conflict"
-	ReasonProjectNameConflict    ErrorReason = "project_name_conflict"
-	ReasonCanvasResourcesMissing ErrorReason = "canvas_history_resources_missing"
-	ReasonFailedPrecondition     ErrorReason = "failed_precondition"
-	ReasonQuotaExceeded          ErrorReason = "quota_exceeded"
-	ReasonRateLimited            ErrorReason = "rate_limited"
-	ReasonUnavailable            ErrorReason = "unavailable"
-	ReasonTimeout                ErrorReason = "timeout"
-	ReasonInternal               ErrorReason = "internal"
-	ReasonBadGateway             ErrorReason = "bad_gateway"
-	ReasonUpstreamDNSFailed      ErrorReason = "upstream_dns_failed"
+	ReasonInvalidArgument                        ErrorReason = "invalid_argument"
+	ReasonUnauthorized                           ErrorReason = "unauthorized"
+	ReasonForbidden                              ErrorReason = "forbidden"
+	ReasonNotFound                               ErrorReason = "not_found"
+	ReasonConflict                               ErrorReason = "conflict"
+	ReasonProjectNameConflict                    ErrorReason = "project_name_conflict"
+	ReasonCanvasResourcesMissing                 ErrorReason = "canvas_history_resources_missing"
+	ReasonFailedPrecondition                     ErrorReason = "failed_precondition"
+	ReasonQuotaExceeded                          ErrorReason = "quota_exceeded"
+	ReasonRateLimited                            ErrorReason = "rate_limited"
+	ReasonUnavailable                            ErrorReason = "unavailable"
+	ReasonTimeout                                ErrorReason = "timeout"
+	ReasonInternal                               ErrorReason = "internal"
+	ReasonBadGateway                             ErrorReason = "bad_gateway"
+	ReasonUpstreamDNSFailed                      ErrorReason = "upstream_dns_failed"
+	ReasonStoryboardAssetBindingInvalidRequest   ErrorReason = "storyboard_asset_binding_invalid_request"
+	ReasonStoryboardAssetBindingInvalidReference ErrorReason = "storyboard_asset_binding_invalid_reference"
+	ReasonStoryboardAssetBindingCapacityExceeded ErrorReason = "storyboard_asset_binding_capacity_exceeded"
+	ReasonStoryboardAssetBindingConflict         ErrorReason = "storyboard_asset_binding_conflict"
+	ReasonStoryboardAssetBindingBusy             ErrorReason = "storyboard_asset_binding_busy"
 )
 
 func ReasonForStatus(status int) ErrorReason {

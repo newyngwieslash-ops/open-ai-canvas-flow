@@ -92,6 +92,7 @@ func (r *Repository) UnboundCharacterTurnaroundTasks(userID string, projectID st
 	var tasks []model.Task
 	err := r.db.Where("user_id = ? AND project_id = ? AND status = ? AND type = ?", userID, projectID, model.TaskStatusSucceeded, "canvas_image").
 		Where("input_json LIKE ?", "%character_turnaround%").
+		Where("COALESCE("+r.taskInputJSONField("metadata", "adoptionMode")+", '') <> ?", "manual").
 		Where("NOT EXISTS (SELECT 1 FROM asset_representations WHERE asset_representations.task_id = tasks.id)").
 		Order("created_at asc").Limit(100).Find(&tasks).Error
 	return tasks, err
@@ -123,14 +124,19 @@ func (r *Repository) EnsureVoiceProfiles(profiles []model.VoiceProfile) error {
 	if len(profiles) == 0 {
 		return nil
 	}
-	return r.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "provider"}, {Name: "voice_key"}},
-		DoNothing: true,
-	}).Create(&profiles).Error
+ return r.resourceLifecycleTransaction(func(repo *Repository) error {
+ for _, profile := range profiles { if err := repo.requireReferenceResources(profile.UserID, false, []string{profile.SampleResourceID}, profile.CompatibleModelsJSON); err != nil { return err } }
+ return repo.db.Clauses(clause.OnConflict{
+ Columns: []clause.Column{{Name: "user_id"}, {Name: "provider"}, {Name: "voice_key"}}, DoNothing: true,
+ }).Create(&profiles).Error
+ })
 }
 
 func (r *Repository) CreateVoiceProfile(profile *model.VoiceProfile) error {
-	return r.db.Create(profile).Error
+ return r.resourceLifecycleTransaction(func(repo *Repository) error {
+ if err := repo.requireReferenceResources(profile.UserID, false, []string{profile.SampleResourceID}, profile.CompatibleModelsJSON); err != nil { return err }
+ return repo.db.Create(profile).Error
+ })
 }
 
 // RenameVoiceProfile 只改用户上传样本声音的显示名；内置音色的名称由系统维护。
@@ -149,7 +155,9 @@ func (r *Repository) VoiceProfileBySampleResource(userID string, resourceID stri
 }
 
 func (r *Repository) CreateUserCharacter(asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+        if err := repo.requireCharacterResources(asset, version, representations); err != nil { return err }
+        tx := repo.db
 		if err := tx.Create(asset).Error; err != nil {
 			return err
 		}
@@ -172,31 +180,53 @@ func (r *Repository) CreateUserCharacter(asset *model.Asset, version *model.Asse
 
 // CreateProjectCharacter 将角色身份、首版本和项目关联放入同一事务。
 func (r *Repository) CreateProjectCharacter(projectID string, asset *model.Asset, version *model.AssetVersion, link *model.ProjectAssetLink) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(asset).Error; err != nil {
+	return r.WithStoryboardProjectWrite(projectID, func(owned *Repository) error {
+		if _, err := owned.ProjectForUser(asset.UserID, projectID); err != nil {
 			return err
 		}
-		if err := tx.Create(version).Error; err != nil {
-			return err
-		}
-		if err := tx.Create(link).Error; err != nil {
-			return err
-		}
-		return tx.Model(&model.Project{}).Where("id = ?", projectID).
-			Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": asset.UpdatedAt}).Error
+		return owned.resourceLifecycleTransaction(func(repo *Repository) error {
+			if err := repo.requireCharacterResources(asset, version, nil); err != nil {
+				return err
+			}
+			tx := repo.db
+			if err := tx.Create(asset).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(version).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(link).Error; err != nil {
+				return err
+			}
+			return tx.Model(&model.Project{}).Where("id = ?", projectID).
+				Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": asset.UpdatedAt}).Error
+		})
 	})
 }
 
 // SaveCharacterVersion 通过不可变版本替换角色当前状态，旧镜头仍可继续引用历史版本。
-func (r *Repository) SaveCharacterVersion(projectID string, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := saveCharacterVersion(tx, asset, version, representations, voice); err != nil {
+func (r *Repository) SaveCharacterVersion(projectID string, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding, expectedVersionID string) error {
+	return r.WithStoryboardAssetWrite(projectID, asset.ID, func(owned *Repository) error {
+	return owned.ProfileWriteTransaction(func(repo *Repository) error {
+		tx := repo.db
+		if _, err := repo.LockProfileAsset(asset.UserID, asset.ID); err != nil { return err }
+		if projectID != "" {
+			if _, err := New(tx).ProjectForUser(asset.UserID, projectID); err != nil {
+				return err
+			}
+			linked, err := New(tx).ProjectAssetLinked(projectID, asset.ID)
+			if err != nil {
+				return err
+			}
+			if !linked {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		if err := saveCharacterVersion(tx, asset, version, representations, voice, expectedVersionID); err != nil {
 			return err
 		}
 		projectIDs := []string{}
-		if projectID != "" {
-			projectIDs = append(projectIDs, projectID)
-		} else if err := tx.Model(&model.ProjectAssetLink{}).Where("asset_id = ?", asset.ID).Distinct("project_id").Pluck("project_id", &projectIDs).Error; err != nil {
+		if err := tx.Model(&model.ProjectAssetLink{}).Where("asset_id = ?", asset.ID).Distinct("project_id").Order("project_id").Pluck("project_id", &projectIDs).Error; err != nil {
 			return err
 		}
 		for _, linkedProjectID := range projectIDs {
@@ -207,12 +237,18 @@ func (r *Repository) SaveCharacterVersion(projectID string, asset *model.Asset, 
 		}
 		return nil
 	})
+	})
 }
 
 // ConfirmProjectCharacterCandidate 保证角色归并版本与候选确认同时生效，失败时不会留下孤立版本。
-func (r *Repository) ConfirmProjectCharacterCandidate(candidate *model.ProjectAssetCandidate, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := saveCharacterVersion(tx, asset, version, representations, voice); err != nil {
+func (r *Repository) ConfirmProjectCharacterCandidate(candidate *model.ProjectAssetCandidate, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding, expectedVersionID string) error {
+	return r.WithStoryboardAssetWrite(candidate.ProjectID, asset.ID, func(repo *Repository) error {
+		tx := repo.db
+		if _, err := repo.ProjectForUser(asset.UserID, candidate.ProjectID); err != nil { return err }
+		current, err := repo.ProjectCharacterAsset(asset.UserID, candidate.ProjectID, asset.ID)
+		if err != nil { return err }
+		if current.Kind != "entity" { return gorm.ErrInvalidData }
+		if err := repo.SaveCharacterVersion(candidate.ProjectID, asset, version, representations, voice, expectedVersionID); err != nil {
 			return err
 		}
 		result := tx.Model(&model.ProjectAssetCandidate{}).
@@ -224,12 +260,28 @@ func (r *Repository) ConfirmProjectCharacterCandidate(candidate *model.ProjectAs
 		if result.RowsAffected != 1 {
 			return gorm.ErrInvalidData
 		}
-		return tx.Model(&model.Project{}).Where("id = ?", candidate.ProjectID).
-			Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": candidate.UpdatedAt}).Error
+		return nil
 	})
 }
 
-func saveCharacterVersion(tx *gorm.DB, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding) error {
+func saveCharacterVersion(tx *gorm.DB, asset *model.Asset, version *model.AssetVersion, representations []model.AssetRepresentation, voice *model.CharacterVoiceBinding, expectedVersionID string) error {
+	current, err := New(tx).LockProfileAsset(asset.UserID, asset.ID)
+	if err != nil { return err }
+	if current.Category != asset.Category || current.Kind != asset.Kind { return ErrProjectAssetVersionChanged }
+    if err := New(tx).requireCharacterResources(asset, version, representations); err != nil { return err }
+	if err := New(tx).LockAssetImageResources(asset.UserID, version.DefinitionJSON, representations); err != nil {
+		return err
+	}
+	updated := tx.Model(&model.Asset{}).Where("id = ? AND user_id = ? AND primary_version_id = ?", asset.ID, asset.UserID, expectedVersionID).Updates(map[string]any{
+		"kind": asset.Kind, "category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID,
+		"title": asset.Title, "payload_json": asset.PayloadJSON, "updated_at": asset.UpdatedAt,
+	})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return ErrProjectAssetVersionChanged
+	}
 	if err := tx.Create(version).Error; err != nil {
 		return err
 	}
@@ -242,16 +294,6 @@ func saveCharacterVersion(tx *gorm.DB, asset *model.Asset, version *model.AssetV
 		if err := tx.Create(voice).Error; err != nil {
 			return err
 		}
-	}
-	result := tx.Model(&model.Asset{}).Where("id = ? AND user_id = ?", asset.ID, asset.UserID).Updates(map[string]any{
-		"kind": asset.Kind, "category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID,
-		"title": asset.Title, "payload_json": asset.PayloadJSON, "updated_at": asset.UpdatedAt,
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return gorm.ErrRecordNotFound
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"context"
 	"encoding/base64"
 	"net"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"yingce/backend/internal/outbound/outboundtest"
 )
 
 func TestOutboundTransportUsesEnvironmentProxyAndHonorsNoProxy(t *testing.T) {
@@ -151,6 +154,26 @@ func TestValidateOutboundURLAllowsOnlyNamedPrivateUpstream(t *testing.T) {
 	}
 }
 
+// 本机 Clash/Surge 的 fake-IP 与 TUN 模式会把对象存储源站域名解析到
+// 198.18.0.0/15 与 fdfe::/16，未放行时读取参考素材会被判成
+// "不允许访问本机、内网或链路本地地址"。上传走对象存储 SDK 不经过这层校验，
+// 所以症状是上传成功、读取失败。这里用私网 A 记录代表同一策略分支。
+func TestQiniuOriginBlockedWithoutAllowlistAndAllowedWithWildcard(t *testing.T) {
+	host := "yingce-dev.s3.cn-south-1.qiniucs.com"
+	outboundtest.DNS(t, [4]byte{10, 0, 0, 1}, host)
+
+	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "false")
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "api.yingce.tv")
+	if _, err := resolveOutboundHost(context.Background(), host); err == nil {
+		t.Fatal("unlisted object storage origin must be rejected")
+	}
+
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "*.qiniucs.com")
+	if _, err := resolveOutboundHost(context.Background(), host); err != nil {
+		t.Fatalf("wildcard allowlist should permit the object storage origin: %v", err)
+	}
+}
+
 func TestAllowedPrivateUpstreamHostUsesExactCaseInsensitiveMatch(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", " API.EXAMPLE.COM.,trusted.internal ")
 	if !AllowedPrivateUpstreamHost("api.example.com") {
@@ -158,6 +181,31 @@ func TestAllowedPrivateUpstreamHostUsesExactCaseInsensitiveMatch(t *testing.T) {
 	}
 	if AllowedPrivateUpstreamHost("api.example.com.evil.test") {
 		t.Fatal("AllowedPrivateUpstreamHost() should reject hostname suffix confusion")
+	}
+}
+
+// 对象存储源站域名由 bucket 和 region 拼接，无法枚举，只能按子域后缀放行。
+func TestAllowedPrivateUpstreamHostSupportsWildcardSubdomainSuffix(t *testing.T) {
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "*.qiniucs.com")
+	if !AllowedPrivateUpstreamHost("yingce-dev.s3.cn-south-1.qiniucs.com") {
+		t.Fatal("wildcard entry should allow a multi-label subdomain")
+	}
+	if AllowedPrivateUpstreamHost("qiniucs.com") {
+		t.Fatal("wildcard entry must not match the bare suffix host")
+	}
+	if AllowedPrivateUpstreamHost("evilqiniucs.com") {
+		t.Fatal("wildcard entry must match on label boundaries only")
+	}
+	if AllowedPrivateUpstreamHost("yingce-dev.s3.cn-south-1.qiniucs.com.evil.test") {
+		t.Fatal("wildcard entry must not match a longer host that merely contains the suffix")
+	}
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "*.QINIUCS.COM.")
+	if !AllowedPrivateUpstreamHost("bucket.s3.cn-east-1.qiniucs.com") {
+		t.Fatal("wildcard entry should normalize case and trailing dot")
+	}
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "*")
+	if AllowedPrivateUpstreamHost("any.example.com") {
+		t.Fatal("a bare wildcard must not act as allow-all")
 	}
 }
 

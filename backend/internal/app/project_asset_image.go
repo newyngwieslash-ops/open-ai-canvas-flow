@@ -28,7 +28,7 @@ func projectVisualCategory(category model.AssetCategory) bool {
 func (s *Service) BindProjectAssetImage(userID, projectID, assetID string, req BindProjectAssetImageRequest) (ProjectAssetSummary, error) {
 	_, err := s.bindProjectAssetImage(userID, projectID, assetID, req, newID())
 	if errors.Is(err, repository.ErrProjectAssetVersionChanged) {
-		return ProjectAssetSummary{}, BadAuthRequest("资产版本已变化，请刷新后重新绑定图片")
+		return ProjectAssetSummary{}, projectAssetVersionConflict()
 	}
 	if err != nil {
 		return ProjectAssetSummary{}, err
@@ -41,6 +41,23 @@ func (s *Service) BindProjectAssetImage(userID, projectID, assetID string, req B
 }
 
 func (s *Service) bindProjectAssetImage(userID, projectID, assetID string, req BindProjectAssetImageRequest, operationID string) (bool, error) {
+	applied := false
+	err := s.repo.WithStoryboardAssetWrite(projectID, assetID, func(owned *repository.Repository) error {
+		return owned.ProfileWriteTransaction(func(repo *repository.Repository) error {
+			applied = false
+			if _, err := repo.LockProfileAsset(userID, assetID); err != nil {
+				return err
+			}
+			writer := &Service{repo: repo, dataDir: s.dataDir}
+			var err error
+			applied, err = writer.bindProjectAssetImageLocked(userID, projectID, assetID, req, operationID)
+			return err
+		})
+	})
+	return applied, err
+}
+
+func (s *Service) bindProjectAssetImageLocked(userID, projectID, assetID string, req BindProjectAssetImageRequest, operationID string) (bool, error) {
 	if strings.TrimSpace(req.ResourceID) == "" || strings.TrimSpace(req.ExpectedVersionID) == "" {
 		return false, BadAuthRequest("图片资源与预期资产版本不能为空")
 	}
@@ -58,14 +75,12 @@ func (s *Service) bindProjectAssetImage(userID, projectID, assetID string, req B
 	if !linked || !projectVisualCategory(asset.Category) || (asset.Kind != "entity" && asset.Kind != "text" && asset.Kind != "image") {
 		return false, BadAuthRequest("请选择当前项目的场景或道具图片资产")
 	}
-	representations, err := s.repo.AssetRepresentationsForTask(operationID)
+	registered, err := s.repo.RegisteredMediaVersion(assetID, operationID, req.ResourceID, "", []string{"primary"})
 	if err != nil {
 		return false, err
 	}
-	for _, representation := range representations {
-		if representation.Role == "primary" {
-			return false, nil
-		}
+	if registered != "" {
+		return false, nil
 	}
 	if asset.PrimaryVersionID != req.ExpectedVersionID {
 		return false, repository.ErrProjectAssetVersionChanged
@@ -127,23 +142,14 @@ func (s *Service) bindProjectAssetImage(userID, projectID, assetID string, req B
 	}
 	asset.Kind, asset.PayloadJSON, asset.PrimaryVersionID, asset.Status, asset.UpdatedAt = "image", string(encoded), version.ID, model.AssetVersionStatusConfirmed, now
 	representation := model.AssetRepresentation{ID: newID(), AssetVersionID: version.ID, TaskID: operationID, ResourceID: resource.ID, MediaType: "image", Role: "primary", MetadataJSON: "{}", CreatedAt: now}
-	applied, err := s.repo.CommitProjectAssetImage(projectID, req.ExpectedVersionID, asset, &version, &representation)
-	if err != nil {
-		// 多实例对同一任务收尾时只允许一个提交；其他实例按重放处理。
-		existing, readErr := s.repo.AssetRepresentationsForTask(operationID)
-		if readErr == nil {
-			for _, item := range existing {
-				if item.Role == "primary" {
-					return false, nil
-				}
-			}
-		}
-	}
-	return applied, err
+	return s.repo.CommitProjectAssetImage(projectID, req.ExpectedVersionID, asset, &version, &representation)
 }
 
 // finalizeProjectAssetImageTask runs before task success, including media recovery.
 func (s *Service) finalizeProjectAssetImageTask(task model.Task, result map[string]interface{}) (bool, error) {
+	if handled, err := s.finalizeManualProjectImageTask(task, result); handled || err != nil {
+		return false, err
+	}
 	if !strings.Contains(task.InputJSON, "project_asset_image") {
 		return false, nil
 	}

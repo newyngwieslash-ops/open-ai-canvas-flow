@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -137,11 +138,17 @@ func (r *Repository) UserStructuredStorageUsage(userID string) (UserStorageUsage
 
 // Create 是低层兼容入口；业务写路径应优先使用带领域约束的显式方法。
 func (r *Repository) Create(value any) error {
+	if rawReferenceBearing(reflect.ValueOf(value)) {
+		return r.rawReferenceWrite(value, false)
+	}
 	return r.db.Create(value).Error
 }
 
 // Save 是低层兼容入口；涉及状态机或权限边界的写入不得绕过显式事务方法。
 func (r *Repository) Save(value any) error {
+	if rawReferenceBearing(reflect.ValueOf(value)) {
+		return r.rawReferenceWrite(value, true)
+	}
 	return r.db.Save(value).Error
 }
 

@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/kernel"
 )
 
 // ErrProjectNameConflict 表示同一用户下的项目名称已被占用。
@@ -44,6 +45,15 @@ func (r *Repository) ProjectForUser(userID string, id string) (*model.Project, e
 }
 
 func (r *Repository) CreateProject(project *model.Project) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(project.UserID, false, []string{project.CoverResourceID}, project.StyleProfileJSON); err != nil {
+			return err
+		}
+		return repo.createProject(project)
+	})
+}
+
+func (r *Repository) createProject(project *model.Project) error {
 	// 只忽略用户与名称这一业务唯一索引；主键等其他冲突仍按数据库错误返回。
 	result := r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "name"}},
@@ -59,100 +69,128 @@ func (r *Repository) CreateProject(project *model.Project) error {
 }
 
 func (r *Repository) UpdateProject(project *model.Project) error {
-	return r.db.Model(&model.Project{}).Where("id = ? AND user_id = ?", project.ID, project.UserID).Updates(map[string]any{
-		"name": project.Name, "type": project.Type, "aspect_ratio": project.AspectRatio, "source_type": project.SourceType,
-		"description": project.Description, "cover_resource_id": project.CoverResourceID,
-		"style_preset_id": project.StylePresetID, "style_profile_json": project.StyleProfileJSON,
-		"default_image_model": project.DefaultImageModel, "default_video_model": project.DefaultVideoModel,
-		"status": project.Status, "revision": project.Revision, "updated_at": project.UpdatedAt,
-	}).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(project.UserID, false, []string{project.CoverResourceID}, project.StyleProfileJSON); err != nil {
+			return err
+		}
+		tx := repo.db
+		result := tx.Model(&model.Project{}).Where("id = ? AND user_id = ?", project.ID, project.UserID).Updates(map[string]any{
+			"name": project.Name, "type": project.Type, "aspect_ratio": project.AspectRatio, "source_type": project.SourceType,
+			"description": project.Description, "cover_resource_id": project.CoverResourceID,
+			"style_preset_id": project.StylePresetID, "style_profile_json": project.StyleProfileJSON,
+			"default_image_model": project.DefaultImageModel, "default_video_model": project.DefaultVideoModel,
+			"status": project.Status, "revision": gorm.Expr("revision + 1"), "updated_at": project.UpdatedAt,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.Model(&model.Project{}).Where("id = ? AND user_id = ?", project.ID, project.UserID).Select("revision").Scan(&project.Revision).Error
+	})
 }
 
 func (r *Repository) DeleteProject(userID string, id string, canvasUpdates []model.CanvasProject) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		var canvasIDs []string
-		if err := tx.Model(&model.CanvasProject{}).
-			Where("user_id = ? AND project_id = ?", userID, id).
-			Pluck("id", &canvasIDs).Error; err != nil {
+	return r.withStoryboardProjectWrite(id, func(db *gorm.DB) error {
+		owned := New(db)
+		if _, err := owned.ProjectForUser(userID, id); err != nil {
 			return err
 		}
-		projectScopeIDs := append([]string{id}, canvasIDs...)
-		var activeTaskCount int64
-		if err := tx.Model(&model.Task{}).
-			Where("user_id = ? AND project_id IN ? AND status IN ?", userID, projectScopeIDs, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).
-			Count(&activeTaskCount).Error; err != nil {
-			return err
-		}
-		if activeTaskCount > 0 {
-			return ErrProjectHasActiveTasks
-		}
-		if err := tx.Where("user_id = ? AND project_id = ?", userID, id).Delete(&model.CanvasShare{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.CanvasUnitLink{}).Error; err != nil {
-			return err
-		}
-		for _, canvas := range canvasUpdates {
-			result := tx.Model(&model.CanvasProject{}).
-				Where("id = ? AND user_id = ? AND project_id = ? AND revision = ?", canvas.ID, userID, id, canvas.Revision).
-				Updates(map[string]any{"project_id": "", "payload_json": canvas.PayloadJSON, "updated_at": canvas.UpdatedAt, "revision": canvas.Revision + 1})
-			if result.Error != nil {
-				return result.Error
+		documents := []string{}
+		for _, canvas := range canvasUpdates { documents = append(documents, canvas.PayloadJSON) }
+		if err := owned.lockStoryboardShotRows(id, "", nil, nil, nil, documents...); err != nil { return err }
+		return owned.resourceLifecycleTransaction(func(repo *Repository) error {
+			for _, canvas := range canvasUpdates {
+				if err := repo.requireLiveDocumentResources(userID, canvas.PayloadJSON); err != nil {
+					return err
+				}
 			}
-			if result.RowsAffected != 1 {
-				return gorm.ErrRecordNotFound
+			tx := repo.db
+			var canvasIDs []string
+			if err := tx.Model(&model.CanvasProject{}).
+				Where("user_id = ? AND project_id = ?", userID, id).
+				Pluck("id", &canvasIDs).Error; err != nil {
+				return err
 			}
-		}
-		var remainingCanvasCount int64
-		if err := tx.Model(&model.CanvasProject{}).Where("user_id = ? AND project_id = ?", userID, id).Count(&remainingCanvasCount).Error; err != nil {
-			return err
-		}
-		if remainingCanvasCount != 0 {
-			return fmt.Errorf("项目删除时仍有 %d 个画布关联未处理", remainingCanvasCount)
-		}
-		shotIDs := tx.Model(&model.Shot{}).Select("id").Where("project_id = ?", id)
-		if err := tx.Where("project_id = ?", id).Delete(&model.ProductionTaskLink{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.ShotArtifact{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("shot_id IN (?)", shotIDs).Delete(&model.ShotRevision{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("shot_id IN (?)", shotIDs).Delete(&model.ShotAssetReference{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.Shot{}).Error; err != nil {
-			return err
-		}
-		instanceIDs := tx.Model(&model.WorkflowInstance{}).Select("id").Where("project_id = ?", id)
-		stepIDs := tx.Model(&model.WorkflowStepInstance{}).Select("id").Where("workflow_instance_id IN (?)", instanceIDs)
-		if err := tx.Where("workflow_step_id IN (?)", stepIDs).Delete(&model.WorkflowStepTask{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("workflow_instance_id IN (?)", instanceIDs).Delete(&model.WorkflowStepInstance{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.WorkflowInstance{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetLink{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetFolder{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetCandidate{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", id).Delete(&model.ProjectUnit{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&model.Task{}).Where("user_id = ? AND project_id = ?", userID, id).Update("project_id", "").Error; err != nil {
-			return err
-		}
-		return tx.Delete(&model.Project{}, "id = ? AND user_id = ?", id, userID).Error
+			projectScopeIDs := append([]string{id}, canvasIDs...)
+			var activeTaskCount int64
+			if err := tx.Model(&model.Task{}).
+				Where("user_id = ? AND project_id IN ? AND status IN ?", userID, projectScopeIDs, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).
+				Count(&activeTaskCount).Error; err != nil {
+				return err
+			}
+			if activeTaskCount > 0 {
+				return ErrProjectHasActiveTasks
+			}
+			if err := tx.Where("user_id = ? AND project_id = ?", userID, id).Delete(&model.CanvasShare{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.CanvasUnitLink{}).Error; err != nil {
+				return err
+			}
+			for _, canvas := range canvasUpdates {
+				result := tx.Model(&model.CanvasProject{}).
+					Where("id = ? AND user_id = ? AND project_id = ? AND revision = ?", canvas.ID, userID, id, canvas.Revision).
+					Updates(map[string]any{"project_id": "", "payload_json": canvas.PayloadJSON, "updated_at": canvas.UpdatedAt, "revision": canvas.Revision + 1})
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return gorm.ErrRecordNotFound
+				}
+			}
+			var remainingCanvasCount int64
+			if err := tx.Model(&model.CanvasProject{}).Where("user_id = ? AND project_id = ?", userID, id).Count(&remainingCanvasCount).Error; err != nil {
+				return err
+			}
+			if remainingCanvasCount != 0 {
+				return fmt.Errorf("项目删除时仍有 %d 个画布关联未处理", remainingCanvasCount)
+			}
+			shotIDs := tx.Model(&model.Shot{}).Select("id").Where("project_id = ?", id)
+			if err := tx.Where("project_id = ?", id).Delete(&model.ProductionTaskLink{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.ShotArtifact{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("shot_id IN (?)", shotIDs).Delete(&model.ShotRevision{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("shot_id IN (?)", shotIDs).Delete(&model.ShotAssetReference{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.Shot{}).Error; err != nil {
+				return err
+			}
+			instanceIDs := tx.Model(&model.WorkflowInstance{}).Select("id").Where("project_id = ?", id)
+			stepIDs := tx.Model(&model.WorkflowStepInstance{}).Select("id").Where("workflow_instance_id IN (?)", instanceIDs)
+			if err := tx.Where("workflow_step_id IN (?)", stepIDs).Delete(&model.WorkflowStepTask{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("workflow_instance_id IN (?)", instanceIDs).Delete(&model.WorkflowStepInstance{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.WorkflowInstance{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetLink{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetFolder{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.ProjectAssetCandidate{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&model.ProjectUnit{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.Task{}).Where("user_id = ? AND project_id = ?", userID, id).Update("project_id", "").Error; err != nil {
+				return err
+			}
+			return tx.Delete(&model.Project{}, "id = ? AND user_id = ?", id, userID).Error
+		})
 	})
 }
 
@@ -217,7 +255,11 @@ func (r *Repository) ProjectUnit(projectID string, id string) (*model.ProjectUni
 }
 
 func (r *Repository) UpdateProjectUnit(unit *model.ProjectUnit, invalidateWorkflow bool) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.withStoryboardProjectWrite(unit.ProjectID, func(tx *gorm.DB) error {
+		if err := New(tx).lockStoryboardShotRows(unit.ProjectID, unit.ID, nil, nil, nil); err != nil { return err }
+		current, err := New(tx).ProjectUnit(unit.ProjectID, unit.ID)
+		if err != nil { return err }
+		invalidateWorkflow = invalidateWorkflow || current.SourceText != unit.SourceText
 		result := tx.Model(&model.ProjectUnit{}).Where("id = ? AND project_id = ?", unit.ID, unit.ProjectID).Updates(map[string]any{
 			"parent_id": unit.ParentID, "title": unit.Title, "source_text": unit.SourceText, "word_count": unit.WordCount, "status": unit.Status, "position": unit.Position, "updated_at": unit.UpdatedAt,
 		})
@@ -240,7 +282,8 @@ func (r *Repository) UpdateProjectUnit(unit *model.ProjectUnit, invalidateWorkfl
 }
 
 func (r *Repository) DeleteProjectUnit(projectID string, id string) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.withStoryboardProjectWrite(projectID, func(tx *gorm.DB) error {
+		if err := New(tx).lockStoryboardShotRows(projectID, id, nil, nil, nil); err != nil { return err }
 		if err := tx.Where("project_id = ? AND unit_id = ?", projectID, id).Delete(&model.CanvasUnitLink{}).Error; err != nil {
 			return err
 		}
@@ -337,7 +380,11 @@ func (r *Repository) AssignCanvasToProject(userID string, canvasID string, proje
 }
 
 func (r *Repository) UnassignCanvasFromProject(userID string, projectID string, canvasID string, payloadJSON string, updatedAt time.Time, revision int64) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireLiveDocumentResources(userID, payloadJSON); err != nil {
+			return err
+		}
+		tx := repo.db
 		if err := tx.Where("project_id = ? AND canvas_id = ?", projectID, canvasID).Delete(&model.CanvasUnitLink{}).Error; err != nil {
 			return err
 		}
@@ -384,7 +431,7 @@ func (r *Repository) NextProjectAssetPosition(projectID string, folderID string)
 }
 
 func (r *Repository) MoveProjectAsset(projectID string, assetID string, folderID string, position int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.withStoryboardProjectWrite(projectID, func(tx *gorm.DB) error {
 		result := tx.Model(&model.ProjectAssetLink{}).
 			Where("project_id = ? AND asset_id = ?", projectID, assetID).
 			Updates(map[string]any{"folder_id": folderID, "position": position})
@@ -469,41 +516,95 @@ func (r *Repository) DeleteProjectAssetFolder(projectID string, folderID string)
 // 事务失败时资产一并回滚，不再留下“有资产无链接”的孤儿资产。
 func (r *Repository) LinkProjectAsset(asset *model.Asset, version *model.AssetVersion, link *model.ProjectAssetLink) (bool, error) {
 	createdLink := false
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// 资产可能尚未落库（首次导入）或已存在（并发/重试），冲突幂等跳过。
-		assetCreated := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(asset)
-		if assetCreated.Error != nil {
-			return assetCreated.Error
+	err := r.withStoryboardProjectWrite(link.ProjectID, func(db *gorm.DB) error {
+		owned := New(db)
+		if _, err := owned.ProjectForUser(asset.UserID, link.ProjectID); err != nil {
+			return err
 		}
-		created := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "project_id"}, {Name: "asset_id"}}, DoNothing: true}).Create(link)
-		if created.Error != nil {
-			return created.Error
+		apply := func(owned *Repository) error {
+			return owned.resourceLifecycleTransaction(func(repo *Repository) error {
+				createdLink = false
+				if asset.Status == model.AssetVersionStatusDeleting {
+					return ErrResourceDeleting
+				}
+				current, err := repo.requireLiveAsset(asset.ID)
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				if current != nil && current.UserID != asset.UserID {
+					return gorm.ErrRecordNotFound
+				}
+				if current != nil {
+					*asset = *current
+					if current.PrimaryVersionID != "" {
+						version = nil
+					} else if version != nil {
+						asset.PrimaryVersionID = version.ID
+					}
+				}
+				docs := []string{asset.PayloadJSON}
+				if current != nil {
+					docs = append(docs, current.PayloadJSON)
+				}
+				if version != nil {
+					docs = append(docs, version.DefinitionJSON)
+				}
+				if err := repo.requireReferenceResources(asset.UserID, false, nil, docs...); err != nil {
+					return err
+				}
+				tx := repo.db
+				// 资产可能尚未落库（首次导入）或已存在（并发/重试），冲突幂等跳过。
+				assetCreated := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(asset)
+				if assetCreated.Error != nil {
+					return assetCreated.Error
+				}
+				created := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "project_id"}, {Name: "asset_id"}}, DoNothing: true}).Create(link)
+				if created.Error != nil {
+					return created.Error
+				}
+				if created.RowsAffected == 0 {
+					return nil
+				}
+				createdLink = true
+				if version != nil {
+					if err := tx.Create(version).Error; err != nil {
+						return err
+					}
+				}
+				result := tx.Model(&model.Asset{}).Where("id = ? AND user_id = ?", asset.ID, asset.UserID).Updates(map[string]any{
+					"category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID, "updated_at": asset.UpdatedAt,
+				})
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return gorm.ErrRecordNotFound
+				}
+				return tx.Model(&model.Project{}).Where("id = ?", link.ProjectID).Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": time.Now()}).Error
+			})
 		}
-		if created.RowsAffected == 0 {
-			return nil
+		var current model.Asset
+		if err := db.First(&current, "id = ?", asset.ID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			return apply(owned)
+		} else if err != nil {
+			return err
 		}
-		createdLink = true
-		if version != nil {
-			if err := tx.Create(version).Error; err != nil {
-				return err
-			}
-		}
-		result := tx.Model(&model.Asset{}).Where("id = ? AND user_id = ?", asset.ID, asset.UserID).Updates(map[string]any{
-			"category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID, "updated_at": asset.UpdatedAt,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return gorm.ErrRecordNotFound
-		}
-		return tx.Model(&model.Project{}).Where("id = ?", link.ProjectID).Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": time.Now()}).Error
+		return owned.WithStoryboardAssetWrite(link.ProjectID, asset.ID, apply)
 	})
 	return createdLink, err
 }
 
 func (r *Repository) DeleteProjectAssetLink(projectID string, assetID string) error {
-	return r.db.Delete(&model.ProjectAssetLink{}, "project_id = ? AND asset_id = ?", projectID, assetID).Error
+	return r.WithStoryboardAssetWrite(projectID, assetID, func(repo *Repository) error {
+		count, err := repo.ProjectAssetShotReferenceCount(projectID, assetID)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return kernel.NewAppError(400, "素材仍被项目镜头引用，请先解除镜头用途")
+		}
+		return repo.db.Delete(&model.ProjectAssetLink{}, "project_id = ? AND asset_id = ?", projectID, assetID).Error
+	})
 }
 
 func (r *Repository) ProjectAssetShotReferenceCount(projectID string, assetID string) (int64, error) {
@@ -533,7 +634,27 @@ func (r *Repository) AssetReferenceCount(assetID string) (int64, error) {
 }
 
 func (r *Repository) UpdateAssetDomain(asset *model.Asset) error {
-	return r.db.Model(&model.Asset{}).Where("id = ? AND user_id = ?", asset.ID, asset.UserID).Updates(map[string]any{"category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID, "updated_at": asset.UpdatedAt}).Error
+	return r.WithStoryboardAssetWrite("", asset.ID, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(repo *Repository) error {
+			current, err := repo.requireLiveAsset(asset.ID)
+			if err != nil {
+				return err
+			}
+			if current.UserID != asset.UserID {
+				return gorm.ErrRecordNotFound
+			}
+			if asset.Status == model.AssetVersionStatusDeleting {
+				return ErrResourceDeleting
+			}
+			if err := repo.db.Model(&model.Asset{}).Where("id = ? AND user_id = ?", asset.ID, asset.UserID).Updates(map[string]any{"category": asset.Category, "updated_at": asset.UpdatedAt}).Error; err != nil { return err }
+			var projectIDs []string
+			if err := repo.db.Model(&model.ProjectAssetLink{}).Where("asset_id = ?", asset.ID).Distinct("project_id").Order("project_id").Pluck("project_id", &projectIDs).Error; err != nil { return err }
+			for _, projectID := range projectIDs {
+				if err := repo.BumpProjectRevision(projectID); err != nil { return err }
+			}
+			return nil
+		})
+	})
 }
 
 func (r *Repository) AssetVersions(assetID string) ([]model.AssetVersion, error) {
@@ -586,5 +707,12 @@ func (r *Repository) AssetVersionForProject(projectID string, versionID string) 
 }
 
 func (r *Repository) CreateAssetVersion(version *model.AssetVersion) error {
-	return r.db.Create(version).Error
+	return r.WithStoryboardAssetWrite("", version.AssetID, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(repo *Repository) error {
+			if err := repo.requireAssetVersionReferences(version); err != nil {
+				return err
+			}
+			return repo.db.Create(version).Error
+		})
+	})
 }

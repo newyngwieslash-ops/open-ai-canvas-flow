@@ -135,7 +135,7 @@ export function compileShotAssetReferencePrompt(references: ShotPromptAssetRefer
 function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetReference): ReferenceImage | undefined {
     const boundRepresentations = reference?.referencedVersion?.representations || [];
     const representation = preferredVisualRepresentation(boundRepresentations)
-        || (asset.character ? preferredVisualRepresentation(asset.character.representations) : undefined);
+        || (!reference?.referencedVersion && asset.character ? preferredVisualRepresentation(asset.character.representations) : undefined);
     if (representation) {
         return {
             id: asset.id,
@@ -145,6 +145,10 @@ function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetRe
             url: resourceFileUrl(representation.resourceId),
             storageKey: resourceStorageKey(representation.resourceId),
         };
+    }
+    if (reference?.referencedVersion) {
+        const resourceId = reference.referencedVersion.referenceImage?.resourceId;
+        return resourceId ? { id: asset.id, name: asset.title, type: "image/*", dataUrl: "", url: resourceFileUrl(resourceId), storageKey: resourceStorageKey(resourceId) } : undefined;
     }
     if (asset.mediaType !== "image" || !asset.storageKey) return undefined;
     const resourceId = resourceIdFromStorageKey(asset.storageKey);

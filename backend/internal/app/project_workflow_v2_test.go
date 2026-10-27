@@ -51,7 +51,8 @@ func TestRegisterTaskOutputFromTaskPersistsMediaAssetAndArtifactIdempotently(t *
 		t.Fatal(err)
 	}
 	submittedRevisionID := shot.CurrentRevisionID
-	if _, _, err = service.CreateShotRevision("user-1", project.ID, shot.ID, ShotRevisionInput{PlotDescription: "任务提交后修改的镜头", DurationMs: 3000}); err != nil {
+	currentShot, _, err := service.CreateShotRevision("user-1", project.ID, shot.ID, ShotRevisionInput{PlotDescription: "任务提交后修改的镜头", DurationMs: 3000})
+	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -65,14 +66,63 @@ func TestRegisterTaskOutputFromTaskPersistsMediaAssetAndArtifactIdempotently(t *
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}
+	currentTask := task
+	currentTask.ID, currentTask.InputJSON = "current-shot-task", "{}"
+	if err := db.Create(&currentTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RegisterTaskOutput("user-1", project.ID, videoStep.ID, RegisterTaskOutputRequest{TaskID: currentTask.ID, UnitID: unit.ID, ShotID: shot.ID, ShotRevisionID: currentShot.CurrentRevisionID, ArtifactType: "video", ResourceID: resource.ID, MediaType: "video"}); err != nil {
+		t.Fatal(err)
+	}
+	var currentArtifact model.ShotArtifact
+	if err := db.First(&currentArtifact, "task_id = ?", currentTask.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if currentArtifact.Status != "ready" || !currentArtifact.Selected {
+		t.Fatalf("current revision output not selected: %+v", currentArtifact)
+	}
+	if err := db.Model(&model.WorkflowStepInstance{}).Where("id = ?", videoStep.ID).Updates(map[string]any{"status": model.WorkflowStepStatusCompleted, "output_json": `{"current":"keep"}`, "completed_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.WorkflowInstance{}).Where("id = ?", workflow.Instance.ID).Updates(map[string]any{"status": model.WorkflowStatusCompleted, "revision": 71}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var currentStep model.WorkflowStepInstance
+	var currentInstance model.WorkflowInstance
+	var currentStoredShot model.Shot
+	if err := db.First(&currentStep, "id = ?", videoStep.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&currentInstance, "id = ?", workflow.Instance.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&currentStoredShot, "id = ?", shot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var submittedRevision model.ShotRevision
+	if err := db.First(&submittedRevision, "id = ?", submittedRevisionID).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := service.RegisterTaskOutputFromTask(task); err != nil {
 		t.Fatal(err)
+	}
+	versionID := workflowGeneratedEntityID("version", task.ID)
+	originalVersion, err := service.repo.AssetVersion(versionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalRepresentations, err := service.repo.AssetRepresentations(versionID)
+	if err != nil || len(originalRepresentations) != 1 || originalRepresentations[0].TaskID != task.ID {
+		t.Fatalf("original media provenance missing: %+v %v", originalRepresentations, err)
 	}
 	if err := service.RegisterTaskOutputFromTask(task); err != nil {
 		t.Fatal(err)
 	}
 	assetID := workflowGeneratedEntityID("asset", task.ID)
-	versionID := workflowGeneratedEntityID("version", task.ID)
+	returnedStep, err := service.RegisterTaskOutput("user-1", project.ID, videoStep.ID, RegisterTaskOutputRequest{TaskID: task.ID, UnitID: unit.ID, ShotID: shot.ID, ShotRevisionID: submittedRevisionID, ArtifactType: "video", AssetVersionID: versionID, ResourceID: resource.ID, MediaType: "video", Role: "output"})
+	if err != nil || !reflect.DeepEqual(returnedStep, currentStep) {
+		t.Fatalf("historical registration returned changed progress: %+v %v", returnedStep, err)
+	}
 	checks := []struct {
 		table string
 		where string
@@ -103,6 +153,13 @@ func TestRegisterTaskOutputFromTaskPersistsMediaAssetAndArtifactIdempotently(t *
 	if len(version.ID) > 36 {
 		t.Fatalf("asset version ID length = %d, want at most 36", len(version.ID))
 	}
+	if !reflect.DeepEqual(version, *originalVersion) {
+		t.Fatal("historical replay changed original asset version")
+	}
+	representations, err := service.repo.AssetRepresentations(versionID)
+	if err != nil || !reflect.DeepEqual(representations, originalRepresentations) {
+		t.Fatalf("historical replay changed original media provenance: %+v %v", representations, err)
+	}
 	var artifact model.ShotArtifact
 	if err := db.First(&artifact, "task_id = ?", task.ID).Error; err != nil {
 		t.Fatal(err)
@@ -110,8 +167,119 @@ func TestRegisterTaskOutputFromTaskPersistsMediaAssetAndArtifactIdempotently(t *
 	if artifact.RevisionID != submittedRevisionID {
 		t.Fatalf("artifact revision = %q, want submitted revision %q", artifact.RevisionID, submittedRevisionID)
 	}
+	if artifact.Status != "stale" || artifact.Selected {
+		t.Fatalf("historical output became current: %+v", artifact)
+	}
 	if artifact.MetadataJSON != `{"model":"MiniMax-H3"}` {
 		t.Fatalf("artifact metadata = %q", artifact.MetadataJSON)
+	}
+	var selected model.ShotArtifact
+	if err := db.First(&selected, "id = ?", currentArtifact.ID).Error; err != nil || !reflect.DeepEqual(selected, currentArtifact) {
+		t.Fatalf("historical output replaced current selection: %+v %v", selected, err)
+	}
+	var savedShot model.Shot
+	if err := db.First(&savedShot, "id = ?", shot.ID).Error; err != nil || !reflect.DeepEqual(savedShot, currentStoredShot) {
+		t.Fatalf("historical output changed current shot: %+v %v", savedShot, err)
+	}
+	var savedRevision model.ShotRevision
+	if err := db.First(&savedRevision, "id = ?", submittedRevisionID).Error; err != nil || !reflect.DeepEqual(savedRevision, submittedRevision) {
+		t.Fatalf("historical output changed submitted revision: %+v %v", savedRevision, err)
+	}
+	var savedStep model.WorkflowStepInstance
+	var savedInstance model.WorkflowInstance
+	if err := db.First(&savedStep, "id = ?", videoStep.ID).Error; err != nil || !reflect.DeepEqual(savedStep, currentStep) {
+		t.Fatalf("historical output changed current workflow step: %+v %v", savedStep, err)
+	}
+	if err := db.First(&savedInstance, "id = ?", workflow.Instance.ID).Error; err != nil || !reflect.DeepEqual(savedInstance, currentInstance) {
+		t.Fatalf("historical output changed current workflow instance: %+v %v", savedInstance, err)
+	}
+}
+
+func TestRegisterHistoricalWorkflowOutputPreservesProgress(t *testing.T) {
+	for _, mode := range []string{"historical_revision", "revision_current_again", "foreign_revision", "missing_revision", "empty_revision", "selected_history", "ready_history"} {
+		t.Run(mode, func(t *testing.T) {
+			s, db := newProjectWorkflowV2TestService(t)
+			p, u := seedWorkflowProject(t, db)
+			if err := s.EnsureBuiltinProjectWorkflowTemplate(); err != nil {
+				t.Fatal(err)
+			}
+			workflow, err := s.CreateUnitWorkflow("user-1", p.ID, u.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shot, err := s.CreateProjectShot("user-1", p.ID, CreateProjectShotRequest{UnitID: u.ID, Title: "shot", Description: "original"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			revisionID := shot.CurrentRevisionID
+			if mode != "revision_current_again" {
+				if _, _, err := s.CreateShotRevision("user-1", p.ID, shot.ID, ShotRevisionInput{PlotDescription: "current"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "foreign_revision" {
+				other, err := s.CreateProjectShot("user-1", p.ID, CreateProjectShotRequest{UnitID: u.ID, Title: "other", Description: "other"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				revisionID = other.CurrentRevisionID
+			} else if mode == "missing_revision" {
+				revisionID = "nonexistent-revision"
+			} else if mode == "empty_revision" {
+				revisionID = ""
+			}
+			if err := db.Create(&model.Resource{ID: "history-resource", UserID: "user-1", Kind: "video", Status: model.ResourceStatusReady}).Error; err != nil {
+				t.Fatal(err)
+			}
+			var step, next model.WorkflowStepInstance
+			var instance model.WorkflowInstance
+			if err := db.First(&step, "id = ?", workflow.Steps[0].ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.First(&next, "id = ?", workflow.Steps[1].ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.First(&instance, "id = ?", workflow.Instance.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			beforeStep, beforeNext, beforeInstance := step, next, instance
+			step.OutputJSON, step.Status = `{"history":"must not replace progress"}`, model.WorkflowStepStatusCompleted
+			next.Status = model.WorkflowStepStatusReady
+			instance.Revision++
+			artifact := model.ShotArtifact{ID: "history-artifact", ProjectID: p.ID, UnitID: u.ID, ShotID: shot.ID, RevisionID: revisionID, TaskID: "history-task", ResourceID: "history-resource", Type: "video", Status: "stale"}
+			if mode == "selected_history" {
+				artifact.Selected = true
+			} else if mode == "ready_history" {
+				artifact.Status = "ready"
+			}
+			err = s.repo.RegisterWorkflowTaskOutput(&step, &next, &instance, p.ID, &model.WorkflowStepTask{ID: "history-link", WorkflowStepID: step.ID, TaskID: artifact.TaskID}, nil, nil, &artifact)
+			wantErr := mode != "historical_revision" && mode != "revision_current_again"
+			if (err != nil) != wantErr {
+				t.Fatalf("historical admission: %v (want error=%v)", err, wantErr)
+			}
+			var savedStep, savedNext model.WorkflowStepInstance
+			var savedInstance model.WorkflowInstance
+			if err := db.First(&savedStep, "id = ?", step.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.First(&savedNext, "id = ?", next.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.First(&savedInstance, "id = ?", instance.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(savedStep, beforeStep) || !reflect.DeepEqual(savedNext, beforeNext) || !reflect.DeepEqual(savedInstance, beforeInstance) {
+				t.Fatal("historical admission changed current workflow progress")
+			}
+			var count int64
+			wantCount := int64(1)
+			if wantErr {
+				wantCount = 0
+			}
+			if err := db.Model(&model.ShotArtifact{}).Count(&count).Error; err != nil || count != wantCount {
+				t.Fatalf("historical artifact count=%d error=%v", count, err)
+			}
+		})
 	}
 }
 

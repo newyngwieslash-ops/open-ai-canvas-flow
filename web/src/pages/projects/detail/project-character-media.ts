@@ -5,20 +5,28 @@ import { logicalModelIDForConfig, resolveModelRequestConfig, type AiConfig } fro
 
 type ProjectStylePrompt = { id: string; title: string; prompt: string; profile?: StyleProfileSnapshot };
 
-export async function generateCharacterTurnaround(input: { projectId: string; assetId: string; versionId: string; name: string; definition: Record<string, unknown>; projectStyle?: ProjectStylePrompt; config: AiConfig }) {
+type CharacterTurnaroundInput = { projectId: string; assetId: string; versionId: string; name: string; definition: Record<string, unknown>; projectStyle?: ProjectStylePrompt; config: AiConfig; adoptionMode?: "manual"; referenceSource?: "original" | "current" | "none"; referenceImages?: import("@/types/image").ReferenceImage[]; onTaskCreated?: Parameters<typeof runBackendCanvasGenerationTask>[0]["onTaskCreated"] };
+
+export async function generateCharacterTurnaround(input: CharacterTurnaroundInput) {
+    return runBackendCanvasGenerationTask(characterTurnaroundRequest(input));
+}
+
+export function characterTurnaroundRequest(input: CharacterTurnaroundInput): Parameters<typeof runBackendCanvasGenerationTask>[0] {
     const promptTemplateVariables = characterTurnaroundVariables(input.name, input.definition, input.projectStyle);
     const generationConfig = { ...input.config, model: input.config.imageModel || input.config.model, count: "1" };
     const requestConfig = resolveModelRequestConfig(generationConfig, generationConfig.model);
     const styleExecutionPlan = input.projectStyle?.profile ? resolveStyleExecutionPlan(input.projectStyle.profile, { mode: "image", model: requestConfig.model, interfaceType: requestConfig.interfaceType || requestConfig.apiFormat }) : undefined;
     if (styleExecutionPlan?.status === "blocked" && !logicalModelIDForConfig(generationConfig)) throw new Error(`当前图片模型无法完整执行项目画风：${styleExecutionPlan.warnings.join("；")}。请切换图片模型，或在项目设置中停用对应画风资产`);
-    await runBackendCanvasGenerationTask({
+    return {
         projectId: input.projectId,
         nodeId: `character-turnaround:${input.assetId}`,
         mode: "image",
         prompt: promptTemplateTaskPlaceholder("角色三视图"),
         config: generationConfig,
-        metadata: { operation: PromptTemplateOperation.CharacterTurnaround, promptTemplateOperation: PromptTemplateOperation.CharacterTurnaround, promptTemplateVariables, characterAssetId: input.assetId, stylePresetId: input.projectStyle?.id, styleProfileJson: input.projectStyle?.profile ? serializeStyleProfile(input.projectStyle.profile) : undefined, styleExecutionPlan, resolvedCharacterVersions: [{ assetId: input.assetId, versionId: input.versionId }] },
-    });
+        referenceImages: input.referenceImages,
+        onTaskCreated: input.onTaskCreated,
+        metadata: { ...(input.adoptionMode ? { adoptionMode: input.adoptionMode, referenceSource: input.referenceSource || "none", projectAssetVersionId: input.versionId } : {}), operation: PromptTemplateOperation.CharacterTurnaround, promptTemplateOperation: PromptTemplateOperation.CharacterTurnaround, promptTemplateVariables, characterAssetId: input.assetId, stylePresetId: input.projectStyle?.id, styleProfileJson: input.projectStyle?.profile ? serializeStyleProfile(input.projectStyle.profile) : undefined, styleExecutionPlan, resolvedCharacterVersions: [{ assetId: input.assetId, versionId: input.versionId }] },
+    };
 }
 
 function characterTurnaroundVariables(name: string, definition: Record<string, unknown>, projectStyle?: ProjectStylePrompt) {

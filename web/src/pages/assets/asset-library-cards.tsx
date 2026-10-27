@@ -3,6 +3,7 @@
 // 纯展示组件，数据与操作回调由素材库页面传入。
 
 import { Dropdown, type MenuProps } from "antd";
+import { ASSET_DELETING_MESSAGE } from "@/lib/asset-availability";
 import type { MouseEvent } from "react";
 import { AlertTriangle, AudioLines, Box, Copy, Download, FileText, FolderOpen, MoreHorizontal, PencilLine, Play, RotateCcw, Trash2 } from "lucide-react";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
@@ -67,7 +68,8 @@ export function AssetCard({
     onMoveToFolder: (folderId: string) => void;
 }) {
     const summary = assetSummary(asset);
-    const menuItems: MenuProps["items"] = isTrash
+    const deleting = asset.status === "deleting";
+    const menuItems: MenuProps["items"] = deleting ? [] : isTrash
         ? [{ key: "restore", icon: <RotateCcw className="size-3.5" />, label: "还原到素材库", onClick: onRestore }, { type: "divider" as const }, { key: "delete", danger: true, icon: <Trash2 className="size-3.5" />, label: "彻底删除", onClick: onDelete }]
         : [
               ...(asset.kind === "text" || asset.kind === "image" ? [{ key: "edit", icon: <PencilLine className="size-3.5" />, label: "编辑", onClick: onEdit }] : []),
@@ -79,6 +81,7 @@ export function AssetCard({
               { key: "delete", danger: true, icon: <Trash2 className="size-3.5" />, label: "彻底删除", onClick: onDelete },
           ];
     const handleCardClick = (event: MouseEvent<HTMLButtonElement>) => {
+        if (deleting) return;
         if (selectionMode || event.shiftKey || event.ctrlKey || event.metaKey) {
             onSelect(!selected, event.shiftKey);
             return;
@@ -95,7 +98,7 @@ export function AssetCard({
                     </h2>
                     <span className="asset-collection-date shrink-0 tabular-nums">{formatAssetTime(asset.updatedAt)}</span>
                 </div>
-                {isTrash ? (
+                {deleting ? <div role="status" className="mt-1 text-xs text-muted-foreground">{ASSET_DELETING_MESSAGE}</div> : isTrash ? (
                     <div className="mt-1 flex items-center gap-1 text-[var(--fs-tiny)] font-medium text-amber-600 dark:text-amber-400" title={formatExpirationDate(asset.updatedAt, retentionDays)}>
                         <AlertTriangle className="size-3 shrink-0" />
                         <span>{formatExpirationHint(asset.updatedAt, retentionDays)}</span>
@@ -178,7 +181,7 @@ export function AssetCover({
                     <KindIcon />
                     {kind ? assetKindLabel(kind, asset.category) : "素材"}
                 </span>
-                {isTrash ? <span className="assets-cover-badge is-category !bg-amber-500/85 !text-white">回收站</span> : asset.kind === "entity" ? null : <span className="assets-cover-badge is-category">{assetCategoryLabel(asset.category)}</span>}
+                {asset.status === "deleting" ? <span className="assets-cover-badge">删除中</span> : isTrash ? <span className="assets-cover-badge is-category !bg-amber-500/85 !text-white">回收站</span> : asset.kind === "entity" ? null : <span className="assets-cover-badge is-category">{assetCategoryLabel(asset.category)}</span>}
                 {asset.portraitCertified ? <span className="assets-cover-badge is-category">人像认证</span> : null}
             </span>
             {clock ? <span className="assets-cover-clock">{clock}</span> : null}
@@ -186,6 +189,7 @@ export function AssetCover({
             <input
                 type="checkbox"
                 checked={selected}
+                disabled={asset.status === "deleting"}
                 onClick={(event) => event.stopPropagation()}
                 onChange={(event) => onSelect(event.target.checked, (event.nativeEvent as globalThis.MouseEvent).shiftKey)}
                 className="assets-select-check"

@@ -279,10 +279,10 @@ func (s *Service) openResourceRange(userID string, resource *model.Resource, ran
 }
 
 func (s *Service) storeResource(userID string, kind string, fileName string, mimeType string, size int64, width int, height int, durationMs int64, body io.Reader, uploadKey *string, forceLocal bool, reservationIDs ...string) (*model.Resource, bool, error) {
-	return s.storeResourceWithWriter(userID, kind, fileName, mimeType, size, width, height, durationMs, body, uploadKey, forceLocal, s.storeResourceObject, reservationIDs...)
+	return s.storeResourceWithWriter(userID, kind, fileName, mimeType, size, width, height, durationMs, body, uploadKey, forceLocal, nil, reservationIDs...)
 }
 
-func (s *Service) storeResourceWithWriter(userID string, kind string, fileName string, mimeType string, size int64, width int, height int, durationMs int64, body io.Reader, uploadKey *string, forceLocal bool, writeObject func(*model.Resource, string, io.Reader) (string, error), reservationIDs ...string) (*model.Resource, bool, error) {
+func (s *Service) storeResourceWithWriter(userID string, kind string, fileName string, mimeType string, size int64, width int, height int, durationMs int64, body io.Reader, uploadKey *string, forceLocal bool, writeObject func(*model.Resource, string, io.Reader) (resourceWriteResult, error), reservationIDs ...string) (*model.Resource, bool, error) {
 	reservationID := ""
 	if len(reservationIDs) > 0 {
 		reservationID = reservationIDs[0]
@@ -325,7 +325,13 @@ func (s *Service) storeResourceWithWriter(userID string, kind string, fileName s
 		resource.StorageSettingID = storageSettingID
 		resource.ObjectKey = objectKey
 	}
-	if err := s.repo.CreateResource(&resource); err != nil {
+	var operation *model.ResourceProducerOperation
+	if writeObject == nil && resource.Provider == "local" {
+		operation, err = s.repo.BeginLocalResourceProduction(&resource, true)
+	} else {
+		operation, err = s.repo.BeginResourceProduction(&resource, "original", true)
+	}
+	if err != nil {
 		if existing, lookupErr := s.resourceForUploadKey(userID, uploadKey); lookupErr == nil && existing != nil {
 			if existing.Status == model.ResourceStatusReady {
 				if err := validateResourceUploadIdentity(existing, kind, mimeType, size); err != nil {
@@ -338,34 +344,32 @@ func (s *Service) storeResourceWithWriter(userID string, kind string, fileName s
 		return nil, false, err
 	}
 	var etag string
-	etag, err = writeObject(&resource, fileName, body)
+	if writeObject == nil {
+		etag, operation, err = s.writeStoredResourceProduction(&resource, operation, fileName, body)
+	} else {
+		etag, err = s.writeResourceProduction(&resource, operation, fileName, body, writeObject)
+	}
 	resource.UpdatedAt = time.Now()
 	if err != nil {
 		resource.Status = model.ResourceStatusFailed
 		resource.Error = err.Error()
-		if saveErr := s.repo.SaveResource(&resource); saveErr != nil {
+		if saveErr := s.publishResourceProduction(&resource, operation, ""); saveErr != nil {
 			return nil, true, errors.Join(err, fmt.Errorf("记录资源失败状态失败：%w", saveErr))
 		}
 		return nil, true, err
 	}
 	resource.Status = model.ResourceStatusReady
 	resource.ETag = etag
-	if err := s.saveResourceWithinStorageLimit(&resource, reservationID); err != nil {
-		cleanupErr := s.deleteStoredResourceObject(userID, &resource)
-		if cleanupErr == nil {
-			if deleteErr := s.repo.DeleteResource(userID, resource.ID); deleteErr != nil {
-				return nil, true, errors.Join(err, fmt.Errorf("清理资源记录失败：%w", deleteErr))
-			}
-			return nil, true, fmt.Errorf("保存资源就绪状态失败：%w", err)
-		}
-
+	if err := s.publishResourceProduction(&resource, operation, reservationID); err != nil {
+		// Business failure does not prove the remote writer stopped. Deletion
+		// admission checks the durable operation before accepting cleanup.
 		resource.Status = model.ResourceStatusFailed
-		resource.Error = fmt.Sprintf("保存资源就绪状态失败，物理对象清理失败：%v", cleanupErr)
-		statusErr := s.repo.SaveResource(&resource)
-		if statusErr != nil {
-			return nil, true, errors.Join(err, cleanupErr, fmt.Errorf("记录资源失败状态失败：%w", statusErr))
+		resource.Error = "resource publication failed"
+		if saveErr := s.publishResourceProduction(&resource, operation, ""); saveErr != nil {
+			return nil, true, errors.Join(err, saveErr)
 		}
-		return nil, true, errors.Join(err, fmt.Errorf("清理已上传资源对象失败：%w", cleanupErr))
+		cleanupErr := s.repo.DeleteResource(userID, resource.ID)
+		return nil, true, errors.Join(err, cleanupErr)
 	}
 	s.recordActivity(userID, "resource", 1)
 	s.maybeStartPlaybackTranscode(&resource)
@@ -391,22 +395,24 @@ func writeLocalResourceObject(filePath string, body io.Reader) error {
 // storeResourceObject writes to the configured origin. When object storage is
 // enabled, a failed origin write must fail the resource instead of silently
 // changing its storage location to local disk.
-func (s *Service) storeResourceObject(resource *model.Resource, fileName string, body io.Reader) (string, error) {
+func (s *Service) storeResourceObject(resource *model.Resource, fileName string, body io.Reader) (resourceWriteResult, error) {
 	if resource == nil {
-		return "", errors.New("资源不存在")
+		return resourceWriteResult{}, errors.New("资源不存在")
 	}
 	if resource.Provider == "local" {
-		return "", writeLocalResourceObject(filepath.Join(s.dataDir, "resources", filepath.FromSlash(resource.ObjectKey)), body)
+		err := writeLocalResourceObject(filepath.Join(s.dataDir, "resources", filepath.FromSlash(resource.ObjectKey)), body)
+		return resourceWriteResult{PhysicalSettled: true}, err
 	}
 	setting, settingErr := s.ossSettingForResource(resource.UserID, resource)
 	if settingErr != nil {
-		return "", settingErr
+		return resourceWriteResult{}, settingErr
 	}
 	etag, err := putOSSObject(s.storageSettingWithRuntimePolicy(setting), resource.ObjectKey, resource.MimeType, resource.Size, body)
 	if err != nil {
-		return "", err
+		return resourceWriteResult{}, err
 	}
-	return etag, nil
+	// SDK retries may have older accepted requests even when this call succeeds.
+	return resourceWriteResult{ETag: etag}, nil
 }
 
 func (s *Service) retryStoredResource(userID string, resource *model.Resource, kind string, mimeType string, size int64, body io.Reader) (*model.Resource, error) {
@@ -440,35 +446,44 @@ func (s *Service) retryStoredResource(userID string, resource *model.Resource, k
 	resource.Status = model.ResourceStatusPending
 	resource.Error = ""
 	resource.UpdatedAt = time.Now()
+	var operation *model.ResourceProducerOperation
+	if resource.Provider == "local" {
+		operation, err = s.repo.BeginLocalResourceProduction(resource, false)
+	} else {
+		operation, err = s.repo.BeginResourceProduction(resource, "original", false)
+	}
+	if err != nil {
+		return nil, err
+	}
 	day, err := s.reserveRetryUploadQuota(userID, size)
 	if err != nil {
 		resource.Status = model.ResourceStatusFailed
 		resource.Error = err.Error()
 		resource.UpdatedAt = time.Now()
-		if saveErr := s.repo.SaveResource(resource); saveErr != nil {
+		if saveErr := s.publishResourceProduction(resource, operation, ""); saveErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("恢复资源重试失败状态失败：%w", saveErr))
 		}
 		return nil, err
 	}
 	var etag string
-	etag, err = s.storeResourceObject(resource, "", body)
+	etag, operation, err = s.writeStoredResourceProduction(resource, operation, "", body)
 	resource.UpdatedAt = time.Now()
 	if err != nil {
 		s.releaseRetryUploadQuota(userID, day, size)
 		resource.Status = model.ResourceStatusFailed
 		resource.Error = err.Error()
-		if saveErr := s.repo.SaveResource(resource); saveErr != nil {
+		if saveErr := s.publishResourceProduction(resource, operation, ""); saveErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("记录资源重试失败状态失败：%w", saveErr))
 		}
 		return nil, err
 	}
 	resource.Status = model.ResourceStatusReady
 	resource.ETag = etag
-	if err := s.saveResourceWithinStorageLimit(resource, ""); err != nil {
+	if err := s.publishResourceProduction(resource, operation, ""); err != nil {
 		s.releaseRetryUploadQuota(userID, day, size)
 		resource.Status = model.ResourceStatusFailed
 		resource.Error = "保存资源重试就绪状态失败"
-		if saveErr := s.repo.SaveResource(resource); saveErr != nil {
+		if saveErr := s.publishResourceProduction(resource, operation, ""); saveErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("记录资源重试失败状态失败：%w", saveErr))
 		}
 		return nil, fmt.Errorf("保存资源重试就绪状态失败：%w", err)

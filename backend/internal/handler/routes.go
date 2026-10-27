@@ -110,9 +110,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		tasks, err := svc.TasksWithOptions(user.ID, service.TaskListOptions{
-			Limit:      pageSize,
-			ProjectID:  c.Query("projectId"),
-			ActiveOnly: c.Query("activeOnly") == "true",
+			Limit:                pageSize,
+			ProjectID:            c.Query("projectId"),
+			ActiveOnly:           c.Query("activeOnly") == "true",
+			AssetImageCandidates: c.Query("assetImageCandidates") == "true",
+			AssetID:              c.Query("assetId"),
+			BeforeTaskID:         c.Query("beforeTaskId"),
 		})
 		if err != nil {
 			failService(c, err)

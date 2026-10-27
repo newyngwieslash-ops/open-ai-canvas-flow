@@ -13,6 +13,7 @@ export function ProjectVisualAssetCard({
     folderItems,
     onOpen,
     onGenerate,
+    onAnalyze,
     onBind,
     onMove,
     onRemove,
@@ -23,6 +24,7 @@ export function ProjectVisualAssetCard({
     folderItems: Array<{ key: string; label: string }>;
     onOpen: () => void;
     onGenerate: () => void;
+    onAnalyze?: () => void;
     onBind: () => void;
     onMove: (folderId: string) => void;
     onRemove: () => void;
@@ -54,7 +56,8 @@ export function ProjectVisualAssetCard({
                     {asset.title}
                 </button>
                 <p className="mt-2 line-clamp-2 min-h-9 text-[var(--fs-label)] leading-[18px] text-foreground/55">{description || "查看资产设定与提示词"}</p>
-                <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-border/60 pt-2">
+                <div data-agent-launcher-avoid className="mt-3 flex flex-wrap items-center gap-1 border-t border-border/60 pt-2">
+                    {onAnalyze ? <Button size="small" disabled={busy} onClick={onAnalyze}>分析参考图</Button> : null}
                     <Button size="small" icon={<Sparkles className="size-3.5" />} loading={generating} disabled={busy} onClick={onGenerate}>
                         {resourceId ? "重新生成" : "生成图片"}
                     </Button>

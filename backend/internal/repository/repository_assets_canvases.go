@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"yingce/backend/internal/kernel"
 	"yingce/backend/internal/model"
 )
 
@@ -43,13 +44,32 @@ func (r *Repository) AssetsForUserIDs(userID string, ids []string) ([]model.Asse
 }
 
 func (r *Repository) UpsertAsset(asset *model.Asset) error {
-	result := r.db.Model(&model.Asset{}).
-		Where("id = ? AND user_id = ?", asset.ID, asset.UserID).
-		Updates(map[string]any{"folder_id": asset.FolderID, "kind": asset.Kind, "category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID, "title": asset.Title, "payload_json": asset.PayloadJSON, "updated_at": asset.UpdatedAt})
-	if result.Error != nil || result.RowsAffected > 0 {
-		return result.Error
-	}
-	return r.db.Create(asset).Error
+	return r.withStoryboardUserAssetsWrite(asset.UserID, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(tx *Repository) error {
+			if asset.Status == model.AssetVersionStatusDeleting {
+				return ErrResourceDeleting
+			}
+			current, err := tx.AssetForUser(asset.UserID, asset.ID)
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if current != nil && current.Status == model.AssetVersionStatusDeleting {
+				return ErrResourceDeleting
+			}
+			if current != nil && current.PrimaryVersionID != "" && current.PrimaryVersionID != asset.PrimaryVersionID {
+				return &kernel.AppError{Status: 409, Code: 409, Reason: "project_asset_version_changed", Message: "资产版本已变化，请刷新后重试", Cause: ErrProjectAssetVersionChanged}
+			}
+			if err := tx.requireLiveDocumentResources(asset.UserID, asset.PayloadJSON); err != nil {
+				return err
+			}
+			result := tx.db.Model(&model.Asset{}).Where("id = ? AND user_id = ? AND status <> ?", asset.ID, asset.UserID, model.AssetVersionStatusDeleting).
+				Updates(map[string]any{"folder_id": asset.FolderID, "kind": asset.Kind, "category": asset.Category, "status": asset.Status, "primary_version_id": asset.PrimaryVersionID, "title": asset.Title, "payload_json": asset.PayloadJSON, "updated_at": asset.UpdatedAt})
+			if result.Error != nil || result.RowsAffected > 0 {
+				return result.Error
+			}
+			return tx.db.Create(asset).Error
+		})
+	})
 }
 
 func (r *Repository) DeleteAsset(userID string, id string) error {
@@ -69,14 +89,36 @@ func (r *Repository) FindExpiredArchivedAssets(cutoff time.Time, limit int) ([]m
 }
 
 func (r *Repository) ReplaceAssets(userID string, assets []model.Asset) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Delete(&model.Asset{}, "user_id = ?", userID).Error; err != nil {
-			return err
-		}
-		if len(assets) == 0 {
+	return r.withStoryboardUserAssetsWrite(userID, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(tx *Repository) error {
+			existing, err := tx.Assets(userID)
+			if err != nil {
+				return err
+			}
+			for _, asset := range existing {
+				if asset.Status == model.AssetVersionStatusDeleting {
+					return ErrResourceDeleting
+				}
+			}
+			keep := map[string]bool{}
+			for index := range assets {
+				if assets[index].UserID != userID {
+					return gorm.ErrInvalidData
+				}
+				keep[assets[index].ID] = true
+				if err := tx.UpsertAsset(&assets[index]); err != nil {
+					return err
+				}
+			}
+			for _, asset := range existing {
+				if !keep[asset.ID] {
+					if err := tx.stageResourceDeletion(userID, []string{asset.ID}, nil); err != nil {
+						return err
+					}
+				}
+			}
 			return nil
-		}
-		return tx.Create(&assets).Error
+		})
 	})
 }
 
@@ -101,7 +143,10 @@ func (r *Repository) CanvasProjectForUser(userID string, id string) (*model.Canv
 }
 
 func (r *Repository) UpsertCanvasProject(project *model.CanvasProject) error {
-	return r.Transaction(func(tx *Repository) error {
+	return r.resourceLifecycleTransaction(func(tx *Repository) error {
+		if err := tx.requireLiveDocumentResources(project.UserID, project.PayloadJSON); err != nil {
+			return err
+		}
 		if project.Revision > 0 {
 			if err := tx.LockCanvasMutation(project.UserID, project.ID); err != nil {
 				return err

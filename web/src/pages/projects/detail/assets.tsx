@@ -13,7 +13,6 @@ import { useExternalAssetSources } from "@/hooks/use-external-asset-sources";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { CanvasFolderPreview } from "@/components/canvas/canvas-folder-preview";
 import { CANVAS_FOLDER_THEME_OPTIONS, resolveCanvasFolderTheme } from "@/lib/canvas/canvas-folder-theme";
-import { resolveProjectCanvasStyle } from "@/components/canvas/canvas-style-picker-modal";
 import { CHARACTER_VOICE_FORMAT_LABEL, CHARACTER_VOICE_UPLOAD_ACCEPT, characterVoiceFormatName, characterVoiceTitleFromFileName, isSupportedCharacterVoiceFile } from "@/lib/character-voice-formats";
 import { ASSET_CATEGORIES, defaultAssetCategoryForKind, normalizeAssetCategory } from "@/lib/asset-category";
 import { resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey } from "@/services/api/resources";
@@ -27,14 +26,12 @@ import {
     createProjectAssetVersion,
     createProjectCharacter,
     deleteProjectAssetFolder,
-    getProjectCharacter,
     linkProjectAsset,
     listProjectAssetCandidates,
     listProjectAssetFolders,
     listProjectAssetsPage,
     moveProjectAsset,
     replaceProjectAssetRepresentations,
-    replaceProjectCharacterRepresentations,
     unbindProjectCharacterVoice,
     unlinkProjectAsset,
     updateProjectAssetCategory,
@@ -45,15 +42,15 @@ import {
 } from "@/services/api/projects";
 import { acknowledgeRemoteAssets, loadAssetsForUse, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { useAssetStore, type Asset, type AssetCategory, type AssetStatus, type EntityAsset, type ImageAsset } from "@/stores/use-asset-store";
-import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasFolderStyle, type CanvasFolderTheme, type CanvasNodeData } from "@/types/canvas";
 
 import { ProjectCharacterCard } from "./project-character-card";
 import { projectCharacterCover } from "./project-character-cover";
 import { assetSupportsImageBinding } from "./asset-image-binding";
 import { linkSelectedProjectAssets } from "./project-asset-linking";
-import { generateCharacterTurnaround } from "./project-character-media";
-import { generateProjectVisualImage, projectVisualTaskAssetId } from "./project-visual-asset";
+import { ProjectAssetImageModal } from "./project-asset-image-modal";
+import { ProjectProfileAnalysisModal } from "./project-profile-analysis-modal";
+import { projectVisualTaskAssetId } from "./project-visual-asset";
 import { listGenerationTasks } from "@/services/api/task-center";
 import { ProjectVisualAssetCard } from "./project-visual-asset-card";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
@@ -75,8 +72,6 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
     const personalAssets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updatePersonalAsset = useAssetStore((state) => state.updateAsset);
-    const effectiveConfig = useEffectiveConfig();
-    const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const [category, setCategory] = useState("all");
     const [folderId, setFolderId] = useState("");
     const [page, setPage] = useState(1);
@@ -88,6 +83,8 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
     const [folderEditor, setFolderEditor] = useState<{ folder?: ProjectAssetFolder; parentId: string } | null>(null);
     const [folderName, setFolderName] = useState("");
     const [addOpen, setAddOpen] = useState(false);
+    const [imageStudio, setImageStudio] = useState<{ asset?: ProjectAsset; mode: "direct" | "generate" } | null>(null);
+    const [analysisAsset, setAnalysisAsset] = useState<ProjectAsset | null>(null);
     const [editorAsset, setEditorAsset] = useState<ProjectAsset | "new" | null>(null);
     const [imageAsset, setImageAsset] = useState<ProjectAsset | null>(null);
     const externalAssetSources = useExternalAssetSources(addOpen || Boolean(imageAsset));
@@ -351,40 +348,13 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
     const saveCharacter = useMutation({
         mutationFn: async (values: CharacterForm) => {
             const definition = characterDefinition(values);
-            return editorAsset === "new" ? createProjectCharacter(detail.project.id, { name: values.name, definition }) : updateProjectCharacter(detail.project.id, editorAsset!.id, { name: values.name, definition });
+            if (!values.name.trim()) throw new Error("请输入角色名称");
+            if (editorAsset === "new") return createProjectCharacter(detail.project.id, { name: values.name.trim(), definition });
+            if (!editorAsset?.primaryVersionId) throw new Error("角色版本未加载，请刷新");
+            return updateProjectCharacter(detail.project.id, editorAsset.id, { name: values.name.trim(), definition, expectedVersionId: editorAsset.primaryVersionId });
         },
         onSuccess: (result) => { syncPersonalCharacterProjection(result.asset); setEditorAsset(null); done(editorAsset === "new" ? "角色卡已创建" : "角色设定已保存并生成新版本"); },
         onError: failed("角色保存失败"),
-    });
-    const generateMutation = useMutation({
-        mutationKey: ["project-character-turnaround", detail.project.id],
-        mutationFn: async (asset: ProjectAsset) => {
-            if (!asset.character) throw new Error("角色版本信息不完整");
-            const model = effectiveConfig.imageModel || effectiveConfig.model;
-            const config = { ...effectiveConfig, model };
-            if (!isAiConfigReady(config, model)) throw new Error("请先在设置中配置可用的图片模型");
-            const projectStyle = resolveProjectCanvasStyle(detail.project.stylePresetId, detail.project.styleProfileJson);
-            await generateCharacterTurnaround({ projectId: detail.project.id, assetId: asset.id, versionId: asset.character.versionId, name: asset.title, definition: asset.character.definition, projectStyle, config });
-            return getProjectCharacter(detail.project.id, asset.id);
-        },
-        onSuccess: (result) => { syncPersonalCharacterProjection(result.asset); done("三视图已生成并绑定到新角色版本"); },
-        onError: failed("三视图生成失败"),
-    });
-    const generateVisualMutation = useMutation({
-        mutationKey: ["project-visual-image", detail.project.id],
-        mutationFn: async (asset: ProjectAsset) => {
-            const model = effectiveConfig.imageModel || effectiveConfig.model;
-            const config = { ...effectiveConfig, model };
-            if (!isAiConfigReady(config, model)) throw new Error("请先在设置中配置可用的图片模型");
-            await generateProjectVisualImage({
-                projectId: detail.project.id, asset, config,
-                projectStyle: resolveProjectCanvasStyle(detail.project.stylePresetId, detail.project.styleProfileJson),
-            });
-        },
-        onSuccess: async (_, asset) => {
-            await refreshVisualAsset(asset.id, "图片已生成并绑定到资产新版本");
-        },
-        onError: failed("资产图片生成失败"),
     });
     const bindVisualMutation = useMutation({
         mutationFn: async (picked: AssetLibraryPickerItem) => {
@@ -411,18 +381,14 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
             if (selected?.kind !== "image") throw new Error(imageAsset.category === "character" ? "请选择一张包含正面、侧面和背面的三视图设定图" : "请选择一张图片素材");
             const resourceId = resourceIdFromStorageKey((selected as ImageAsset).data.storageKey);
             if (!resourceId) throw new Error("所选图片尚未同步到后端资源库");
-            if (imageAsset.category === "character") {
-                const character = await replaceProjectCharacterRepresentations(detail.project.id, imageAsset.id, [{ role: "turnaround_sheet", resourceId, metadata: { sourceAssetId: selected.id } }, { role: "primary", resourceId, metadata: { source: "turnaround_sheet", sourceAssetId: selected.id } }]);
-                return { mode: "character" as const, asset: character.asset };
-            }
+            if (imageAsset.category === "character") throw new Error("请使用角色图片创作入口，明确选择成品类型");
             const { asset } = await replaceProjectAssetRepresentations(detail.project.id, imageAsset.id, [{ resourceId, metadata: { sourceAssetId: selected.id } }]);
             return { mode: "asset" as const, asset };
         },
-        onSuccess: ({ mode, asset }) => {
-            if (mode === "character") syncPersonalCharacterProjection(asset);
+        onSuccess: ({ asset }) => {
             void Promise.all([queryClient.invalidateQueries({ queryKey: ["project", detail.project.id, "assets"] }), queryClient.invalidateQueries({ queryKey: ["project", detail.project.id, "asset-candidates"] })]);
             setImageAsset(null);
-            done(mode === "character" ? "三视图已绑定到新角色版本" : "图片已绑定到新资产版本");
+            done("图片已绑定到新资产版本");
         },
         onError: failed("图片绑定失败"),
     });
@@ -434,7 +400,10 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         const definition = asset === "new" ? {} : asset.character?.definition || {};
         form.setFieldsValue({ name: asset === "new" ? "" : asset.title, ...Object.fromEntries(characterFields.map(([key]) => [key, fieldValue(definition[key])])) } as CharacterForm);
     };
-    const openImages = (asset: ProjectAsset) => setImageAsset(asset);
+    const openImages = (asset: ProjectAsset) => {
+        if (asset.category === "character" || asset.category === "environment" || asset.category === "prop") setImageStudio({ asset, mode: "direct" });
+        else setImageAsset(asset);
+    };
     const openVoice = (asset: ProjectAsset) => { const sampleResourceId = asset.character?.voice?.profile.sampleResourceId || ""; setVoiceAsset(asset); setVoiceSample(sampleResourceId ? { resourceId: sampleResourceId, name: asset.character?.voice?.profile.name || "当前声音", url: resourceFileUrl(sampleResourceId) } : null); setVoiceInstructions(asset.character?.voice?.instructions || ""); };
     const openFolderEditor = (folder?: ProjectAssetFolder, parentId = folderId === ALL_FOLDERS ? "" : folderId) => {
         setFolderEditor({ folder, parentId: folder?.parentId || parentId });
@@ -492,7 +461,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                 <div className="flex shrink-0 items-center gap-1.5 sm:pl-4">
                     <Button type="text" className="!h-9 !px-3" icon={<FolderPlus className="size-3.5" />} onClick={() => openFolderEditor()}>新建文件夹</Button>
                     <Button type="text" className="!h-9 !px-3" icon={<Link2 className="size-3.5" />} onClick={() => setAddOpen(true)}>引用素材</Button>
-                    <Button type="primary" className="!h-9 !px-3.5" icon={<Plus className="size-3.5" />} onClick={() => openCharacterEditor("new")}>新建角色</Button>
+                    <Button type="primary" className="!h-9 !px-3.5" icon={<Plus className="size-3.5" />} onClick={() => setImageStudio({ mode: "generate" })}>新建资产</Button>
                 </div>
             </header>
             <div className="project-assets-layout mt-3 grid gap-3">
@@ -545,7 +514,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                         </section>
                     ) : null}
                     <div className="mb-2 flex items-center justify-between text-xs text-foreground/45"><span>{currentFolder?.name || (folderId === ALL_FOLDERS ? (category === "all" ? "全部资产" : categoryLabel(category)) : "根目录内容")}</span><span>{assetsQuery.data?.total || 0} 项已确认</span></div>
-                    {assetsQuery.isLoading ? <WorkspaceState icon="assets" compact title="正在读取资产" description="按当前目录、分类和关键词加载这一页。" /> : visibleAssets.length ? <><div className="project-assets-grid assets-library-grid">{visibleAssets.map((asset) => asset.category === "character" ? <ProjectCharacterCard key={asset.id} asset={asset} folderItems={folderMoveItems} generating={generatingAssetIds.has(asset.id)} removing={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id)} onOpen={() => setPreviewAsset(asset)} onEdit={() => openCharacterEditor(asset)} onGenerate={() => generateMutation.mutate(asset)} onBindImages={() => openImages(asset)} onBindVoice={() => openVoice(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onRemove={() => unlinkMutation.mutate(asset.id)} /> : asset.visual ? <ProjectVisualAssetCard key={asset.id} asset={asset} folderItems={folderMoveItems} generating={generatingVisualAssetIds.has(asset.id)} busy={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id) || (bindVisualMutation.isPending && imageAsset?.id === asset.id)} onOpen={() => setPreviewAsset(asset)} onGenerate={() => generateVisualMutation.mutate(asset)} onBind={() => openImages(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onRemove={() => unlinkMutation.mutate(asset.id)} /> : <MediaAssetCard key={asset.id} asset={asset} personalAsset={personalAssets.find((item) => item.id === asset.id)} folderItems={folderMoveItems} onOpen={() => setPreviewAsset(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onCategoryChange={(next) => categoryMutation.mutate({ id: asset.id, next })} onVersion={() => versionMutation.mutate(asset.id)} onRemove={() => unlinkMutation.mutate(asset.id)} loading={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (categoryMutation.isPending && categoryMutation.variables?.id === asset.id) || (versionMutation.isPending && versionMutation.variables === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id)} />)}</div><PaginationBar current={page} pageSize={pageSize} total={assetsQuery.data?.total || 0} itemLabel="项" pageSizeOptions={[20, 40, 80]} onChange={(nextPage, nextPageSize) => { setPage(nextPageSize !== pageSize ? 1 : nextPage); setPageSize(nextPageSize); }} /></> : childFolders.length || (showPendingCandidates && pendingCandidates.length) ? null : <WorkspaceState icon="assets" compact title={debouncedKeyword ? "没有找到匹配资产" : "这个文件夹还没有内容"} description={debouncedKeyword ? "换一个关键词，或调整左侧分类与目录筛选。" : "可以新建子文件夹、引用个人素材，或把画布产物归档到这里。"} />}
+                    {assetsQuery.isLoading ? <WorkspaceState icon="assets" compact title="正在读取资产" description="按当前目录、分类和关键词加载这一页。" /> : visibleAssets.length ? <><div className="project-assets-grid assets-library-grid">{visibleAssets.map((asset) => asset.category === "character" ? <ProjectCharacterCard key={asset.id} asset={asset} folderItems={folderMoveItems} generating={generatingAssetIds.has(asset.id)} removing={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id)} onOpen={() => setPreviewAsset(asset)} onEdit={() => openCharacterEditor(asset)} onGenerate={() => setImageStudio({ asset, mode: "generate" })} onAnalyze={() => setAnalysisAsset(asset)} onBindImages={() => openImages(asset)} onBindVoice={() => openVoice(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onRemove={() => unlinkMutation.mutate(asset.id)} /> : asset.visual ? <ProjectVisualAssetCard key={asset.id} asset={asset} folderItems={folderMoveItems} generating={generatingVisualAssetIds.has(asset.id)} busy={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id) || (bindVisualMutation.isPending && imageAsset?.id === asset.id)} onOpen={() => setPreviewAsset(asset)} onGenerate={() => setImageStudio({ asset, mode: "generate" })} onAnalyze={() => setAnalysisAsset(asset)} onBind={() => openImages(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onRemove={() => unlinkMutation.mutate(asset.id)} /> : <MediaAssetCard key={asset.id} asset={asset} personalAsset={personalAssets.find((item) => item.id === asset.id)} folderItems={folderMoveItems} onOpen={() => setPreviewAsset(asset)} onMove={(nextFolderId) => moveMutation.mutate({ id: asset.id, nextFolderId })} onCategoryChange={(next) => categoryMutation.mutate({ id: asset.id, next })} onVersion={() => versionMutation.mutate(asset.id)} onRemove={() => unlinkMutation.mutate(asset.id)} loading={(moveMutation.isPending && moveMutation.variables?.id === asset.id) || (categoryMutation.isPending && categoryMutation.variables?.id === asset.id) || (versionMutation.isPending && versionMutation.variables === asset.id) || (unlinkMutation.isPending && unlinkMutation.variables === asset.id)} />)}</div><PaginationBar current={page} pageSize={pageSize} total={assetsQuery.data?.total || 0} itemLabel="项" pageSizeOptions={[20, 40, 80]} onChange={(nextPage, nextPageSize) => { setPage(nextPageSize !== pageSize ? 1 : nextPage); setPageSize(nextPageSize); }} /></> : childFolders.length || (showPendingCandidates && pendingCandidates.length) ? null : <WorkspaceState icon="assets" compact title={debouncedKeyword ? "没有找到匹配资产" : "这个文件夹还没有内容"} description={debouncedKeyword ? "换一个关键词，或调整左侧分类与目录筛选。" : "可以新建子文件夹、引用个人素材，或把画布产物归档到这里。"} />}
                 </div>
             </div>
 
@@ -568,6 +537,8 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                 }}
             />
             <ProjectAssetPreviewModal asset={previewAsset} personalAsset={previewAsset && !previewAsset.visual ? personalAssets.find((item) => item.id === previewAsset.id) : undefined} onClose={() => setPreviewAsset(null)} onDownload={() => previewAsset && downloadPreviewAsset(previewAsset)} onReplaceImage={() => { if (!previewAsset || !assetSupportsImageBinding(previewAsset)) return; setPreviewAsset(null); openImages(previewAsset); }} />
+            {analysisAsset ? <ProjectProfileAnalysisModal project={detail.project} asset={analysisAsset} onClose={() => setAnalysisAsset(null)} onSaved={refreshProject} /> : null}
+            {imageStudio ? <ProjectAssetImageModal key={`${detail.project.id}:${imageStudio.asset?.id || "new"}`} project={detail.project} asset={imageStudio.asset} folderId={folderId === ALL_FOLDERS ? undefined : folderId || undefined} initialMode={imageStudio.mode} onClose={() => setImageStudio(null)} onSaved={refreshProject} /> : null}
             <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} form={form} loading={saveCharacter.isPending} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} />
             <Modal className="workspace-modal workspace-modal-compact" title={folderEditor?.folder ? "重命名文件夹" : "新建文件夹"} open={Boolean(folderEditor)} okText={folderEditor?.folder ? "保存" : "创建"} cancelText="取消" okButtonProps={{ loading: createFolderMutation.isPending || renameFolderMutation.isPending }} onCancel={() => { setFolderEditor(null); setFolderName(""); }} onOk={saveFolder}>
                 <div className="grid gap-2"><span className="text-[var(--fs-label)] text-foreground/48">位置：{folderEditor ? projectAssetFolderParentLabel(assetFolders, folderEditor.parentId) : ""}</span><Input autoFocus maxLength={60} value={folderName} placeholder="输入文件夹名称" onChange={(event) => setFolderName(event.target.value)} onPressEnter={saveFolder} /></div>

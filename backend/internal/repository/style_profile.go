@@ -29,10 +29,24 @@ func (r *Repository) StyleProfileForUser(userID string, id string) (*model.Style
 }
 
 func (r *Repository) CreateStyleProfile(profile *model.StyleProfile) error {
-	return r.db.Create(profile).Error
+	return r.resourceLifecycleTransaction(func(tx *Repository) error {
+		if err := tx.requireReferenceResources(profile.UserID, false, nil, referenceURLDocument(profile.CoverURL), profile.ProfileJSON); err != nil {
+			return err
+		}
+		return tx.db.Create(profile).Error
+	})
 }
 
 func (r *Repository) UpdateStyleProfile(profile *model.StyleProfile) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(profile.UserID, false, nil, referenceURLDocument(profile.CoverURL), profile.ProfileJSON); err != nil {
+			return err
+		}
+		return repo.updateStyleProfile(profile)
+	})
+}
+
+func (r *Repository) updateStyleProfile(profile *model.StyleProfile) error {
 	return r.db.Model(&model.StyleProfile{}).Where("id = ? AND user_id = ?", profile.ID, profile.UserID).Updates(map[string]any{
 		"name": profile.Name, "description": profile.Description, "cover_url": profile.CoverURL,
 		"tags_json": profile.TagsJSON, "profile_json": profile.ProfileJSON, "revision": profile.Revision, "updated_at": profile.UpdatedAt,

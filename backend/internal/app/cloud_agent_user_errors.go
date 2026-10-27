@@ -29,7 +29,11 @@ var (
 	taskErrorWrappedRequest        = regexp.MustCompile(`(?is)^Request failed with status code \d{3}\s*[:：-]?\s*(.+)$`)
 	taskErrorWrappedStatusPrefix   = regexp.MustCompile(`(?i)^\d{3}(?:\s+(?:Bad Gateway|Service Unavailable|Gateway Timeout|Internal Server Error|Not Found|Unauthorized|Forbidden|Too Many Requests))?\s*[:：-]?\s*`)
 	taskErrorStorageDisabled       = regexp.MustCompile(`(?i)\bUserDisable\b`)
-	taskErrorStorageUpload         = regexp.MustCompile(`(?i)(?:参考(?:图片|媒体)上传失败|OSS 上传失败|对象存储|腾讯云 COS|七牛云)`)
+	taskErrorStorageUpload         = regexp.MustCompile(`(?i)(?:参考(?:图片|媒体)上传失败|(?:OSS|COS|S3) 上传失败|上传\s*(?:OSS|COS|S3)\s*失败|对象存储|腾讯云 COS|七牛云)`)
+	taskErrorStorageRead           = regexp.MustCompile(`(?i)(?:(?:七牛云 Kodo|腾讯云 COS|阿里云 OSS|S3|OSS|CDN) 读取失败|读取(?:任务参考|参考)(?:资源|素材)失败)`)
+	// 出站安全策略拦截与存储配置无关：域名放行、代理和 DNS 才是根因，
+	// 归到"存储上传失败"会让用户去改一个本来正确的配置。
+	taskErrorOutboundBlocked = regexp.MustCompile(`(?:不允许访问本机、内网或链路本地地址|不允许访问保留地址或特殊用途地址|不允许访问本机或内网地址)`)
 )
 
 // userFacingTaskError 把任务里保存的原始错误转换成用户能看懂的中文原因。
@@ -195,6 +199,11 @@ func taskErrorStorageMessage(value string) string {
 		return ""
 	case taskErrorStorageDisabled.MatchString(value):
 		return "对象存储账号已停用，请检查或更换对象存储配置。"
+	case taskErrorOutboundBlocked.MatchString(value):
+		// 出站拦截发生在读取阶段，先于供应商调用；提示要指向网络策略而不是存储配置。
+		return "读取参考素材失败：后端出站连接被安全策略拦截（域名被解析到内网地址）。请联系管理员检查代理与 DNS，或按域名放行对象存储主机。"
+	case taskErrorStorageRead.MatchString(value):
+		return "读取参考素材失败，请检查对象存储读取配置与网络后重试。"
 	case taskErrorStorageUpload.MatchString(value):
 		return "参考素材上传到对象存储失败，请检查对象存储配置后重试。"
 	}

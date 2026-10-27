@@ -21,9 +21,10 @@ export { logicalModelIDForConfig };
 export type BackendGenerationMode = "text" | "image" | "video" | "audio";
 
 export type BackendGenerationResult = {
+    assetImageCandidate?: import("./task-center").AssetImageCandidate;
     projectAssetImageStatus?: "bound" | "stale";
     mode?: BackendGenerationMode;
-    images?: Array<{ dataUrl: string; storageKey?: string; width?: number; height?: number; bytes?: number; mimeType?: string }>;
+    images?: Array<{ dataUrl: string; resourceId?: string; storageKey?: string; width?: number; height?: number; bytes?: number; mimeType?: string }>;
     video?: { dataUrl: string; storageKey?: string; width?: number; height?: number; durationMs?: number; bytes?: number; mimeType?: string };
     audio?: { dataUrl: string; storageKey?: string; durationMs?: number; bytes?: number; mimeType?: string; format?: string };
     audios?: Array<{ dataUrl: string; storageKey?: string; durationMs?: number; bytes?: number; mimeType?: string; format?: string }>;
