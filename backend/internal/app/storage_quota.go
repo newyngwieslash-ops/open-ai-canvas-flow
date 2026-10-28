@@ -223,10 +223,16 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 			// Owner discovery/coordination must precede the lifecycle and task
 			// locks taken by terminal success and its real registration callback.
 			err = s.repo.WithStoryboardAssetWrite(task.ProjectID, metadata.targetID(), complete)
+		} else if task.MediaRecoveryJSON != "" {
+			err = s.repo.WithStoryboardUserAssetsWrite(task.UserID, complete)
 		} else {
 			err = complete(s.repo)
 		}
 		if err != nil {
+			return err
+		}
+	} else if task.MediaRecoveryJSON != "" {
+		if err := s.repo.WithStoryboardUserAssetsWrite(task.UserID, complete); err != nil {
 			return err
 		}
 	} else if err := complete(s.repo); err != nil {

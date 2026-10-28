@@ -99,7 +99,7 @@ func (s *Service) hydrateProviderMedia(userID string, media *providerMedia, poli
 	}
 	data, err := io.ReadAll(io.LimitReader(body, resourceLimit+1))
 	if err != nil {
-		return err
+		return fmt.Errorf("读取任务参考资源失败：%w", err)
 	}
 	if int64(len(data)) > resourceLimit {
 		return fmt.Errorf("任务参考资源超过读取上限 %d 字节", resourceLimit)

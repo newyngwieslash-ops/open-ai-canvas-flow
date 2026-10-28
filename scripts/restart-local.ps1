@@ -257,8 +257,8 @@ function Test-CommandExists([string]$Name) {
 }
 
 function Install-WebDependencies {
-    $viteBinary = Join-Path $webDir "node_modules\.bin\vite"
-    if (Test-Path -LiteralPath $viteBinary) { return }
+    $viteEntry = Join-Path $webDir "node_modules\vite\bin\vite.js"
+    if (Test-Path -LiteralPath $viteEntry) { return }
     Write-RestartLog INFO "web/node_modules 不存在，正在执行 bun install --frozen-lockfile"
     Push-Location $webDir
     try {
@@ -381,8 +381,21 @@ $goModLiteral = ConvertTo-PowerShellLiteral $goModuleCache
 $backendAddr = "127.0.0.1:{0}" -f $BackendPort
 $proxyTarget = "http://127.0.0.1:{0}" -f $BackendPort
 
+# 禁用控制台快速编辑模式，防止鼠标误点选中控制台文本导致 Go 后端或 Vite 输出阻塞挂起。
+$disableQuickEdit = @"
+try {
+    Add-Type -Name ConMode -Namespace Win32 -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint m);'
+    `$hIn = [Win32.ConMode]::GetStdHandle(-10)
+    `$mode = [uint32]0
+    if ([Win32.ConMode]::GetConsoleMode(`$hIn, [ref]`$mode)) {
+        [void][Win32.ConMode]::SetConsoleMode(`$hIn, (`$mode -band (-bnot 0x40)) -bor 0x80)
+    }
+} catch {}
+"@
+
 $backendCommand = @"
 `$ErrorActionPreference = 'Stop'
+$disableQuickEdit
 Set-Location -LiteralPath $backendDirLiteral
 `$env:CANVAS_BACKEND_ADDR = '$backendAddr'
 `$env:CANVAS_BACKEND_DATA_DIR = $dataDirLiteral
@@ -396,6 +409,7 @@ go run ./cmd/server
 
 $webCommand = @"
 `$ErrorActionPreference = 'Stop'
+$disableQuickEdit
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = '$proxyTarget'
 Write-Host '影策前端: http://localhost:$WebPort' -ForegroundColor Cyan
@@ -403,6 +417,12 @@ bun run vite --host 0.0.0.0 --port $WebPort --strictPort
 "@
 
 $backendProcess = Start-Process -FilePath $powerShellPath -WindowStyle Normal -WorkingDirectory $backendDir -PassThru -ArgumentList @("-NoLogo", "-NoExit", "-NoProfile", "-Command", $backendCommand)
+$backendDeadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $backendDeadline) {
+    if ((Get-ListeningPids $BackendPort).Count -gt 0) { break }
+    if ($backendProcess.HasExited) { break }
+    Start-Sleep -Milliseconds 200
+}
 $webProcess = Start-Process -FilePath $powerShellPath -WindowStyle Normal -WorkingDirectory $webDir -PassThru -ArgumentList @("-NoLogo", "-NoExit", "-NoProfile", "-Command", $webCommand)
 
 [pscustomobject]@{

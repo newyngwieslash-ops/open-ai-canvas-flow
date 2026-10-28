@@ -253,6 +253,12 @@ func (r *Repository) withStoryboardResourceWrite(assetIDs, resourceIDs []string,
 	return r.WithStoryboardAssetOwners(r.db.Statement.Context, owners, apply)
 }
 
+// WithStoryboardUserAssetsWrite coordinates owner locks before transactions that
+// register or replace user assets and optional project links.
+func (r *Repository) WithStoryboardUserAssetsWrite(userID string, fn func(*Repository) error) error {
+	return r.withStoryboardUserAssetsWrite(userID, fn)
+}
+
 // withStoryboardUserAssetsWrite covers collection replacement and new assets,
 // including links that appear after the initial owner discovery.
 func (r *Repository) withStoryboardUserAssetsWrite(userID string, fn func(*Repository) error) error {
