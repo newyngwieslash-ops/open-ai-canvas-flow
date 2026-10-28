@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	SystemChannelExportFormat  = "yingce.system-channels"
-	SystemChannelExportVersion = 1
-	maxImportedSystemChannels  = 200
-	maxImportedChannelModels   = 500
+	SystemChannelExportFormat       = "ymzy.system-channels"
+	LegacySystemChannelExportFormat = "yingce.system-channels"
+	SystemChannelExportVersion      = 1
+	maxImportedSystemChannels       = 200
+	maxImportedChannelModels        = 500
 )
 
 type SystemChannelExport struct {
@@ -131,7 +132,7 @@ func (s *Service) ImportSystemChannels(actor *model.User, payload SystemChannelE
 	if err := s.RequireAdmin(actor); err != nil {
 		return nil, err
 	}
-	if payload.Format != SystemChannelExportFormat {
+	if payload.Format != SystemChannelExportFormat && payload.Format != LegacySystemChannelExportFormat {
 		return nil, BadAuthRequest("不是系统渠道导出文件")
 	}
 	if payload.Version != SystemChannelExportVersion {

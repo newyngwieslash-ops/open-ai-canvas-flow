@@ -355,3 +355,50 @@ func TestStoryboardAssetGeneratedNotFoundMapping(t *testing.T) {
 	}
 }
 
+func TestStoryboardAssetGeneratedWarnsOnMissingRefsAndMissingEnvironment(t *testing.T) {
+	s, db := generatedFixture(t)
+	if err := db.AutoMigrate(&model.ProjectAssetCandidate{}, &model.WorkflowInstance{}, &model.WorkflowStepInstance{}, &model.WorkflowStepTask{}, &model.ProductionTaskLink{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Asset{}).Where("id = ?", "empty").Update("primary_version_id", "ve").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.AssetVersion{ID: "ve", AssetID: "empty", Version: 1, Status: "draft", DefinitionJSON: `{"referenceImage":{"resourceId":"original"}}`}).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{
+		ID:        "generated-env-check",
+		UserID:    "u",
+		ProjectID: "p",
+		Type:      "canvas_text",
+		Operation: "storyboard",
+		Status:    model.TaskStatusSucceeded,
+		InputJSON: `{"mode":"text","chapterAssetContext":{"projectId":"p","unitId":"unit","operation":"storyboard","allowedAssetIds":["a","empty"]}}`,
+		ResultJSON: `{"rows":[` +
+			`{"plotDescription":"missing field"},` +
+			`{"plotDescription":"only character","projectAssetRefs":[{"assetId":"a","category":"character"}]},` +
+			`{"plotDescription":"with environment","projectAssetRefs":[{"assetId":"a","category":"character"},{"assetId":"empty","category":"environment"}]}` +
+			`]}`,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := s.ResolveGeneratedProjectUnitShotAssetBindings(context.Background(), "u", "p", "unit", GeneratedBindingRequest{TaskID: "generated-env-check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(resolved.Rows))
+	}
+	if len(resolved.Rows[0].Issues) != 1 || resolved.Rows[0].Issues[0].Kind != "missing_asset_refs" {
+		t.Fatalf("expected missing_asset_refs on row 0, got %+v", resolved.Rows[0].Issues)
+	}
+	if len(resolved.Rows[1].Issues) != 1 || resolved.Rows[1].Issues[0].Kind != "missing_environment" {
+		t.Fatalf("expected missing_environment on row 1, got %+v", resolved.Rows[1].Issues)
+	}
+	if len(resolved.Rows[2].Issues) != 0 {
+		t.Fatalf("expected 0 issues on row 2 with environment bound, got %+v", resolved.Rows[2].Issues)
+	}
+}
+
+

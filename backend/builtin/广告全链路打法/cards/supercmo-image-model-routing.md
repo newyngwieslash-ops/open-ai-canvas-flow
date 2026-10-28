@@ -1,6 +1,6 @@
 ---
 name: supercmo-image-model-routing
-description: 当用户要生成一张通用图（非产品摄影/非产品广告），或不确定该用哪个生图模型，或生图结果文字糊/画风不对/人脸崩时调用。核心能力：按"图要干什么"路由模型（要字→gpt-image-2/要绘→nano-banana-2/要真人→nano-banana-pro/改图→gpt-image-2/保脸改图→seedream-5）+ 五级优先序（用户点名>要字>非摄影>改图>风格 cues）。关键触发：生图、哪个模型、图片生成、文字糊、画风不对、改图、换背景。工位边界：产品摄影转产品摄影技能、带标题优惠的产品广告转图片广告技能；本技能管通用图。影策侧模型以 generate_media 实际清单为准。
+description: 当用户要生成一张通用图（非产品摄影/非产品广告），或不确定该用哪个生图模型，或生图结果文字糊/画风不对/人脸崩时调用。核心能力：按"图要干什么"路由模型（要字→gpt-image-2/要绘→nano-banana-2/要真人→nano-banana-pro/改图→gpt-image-2/保脸改图→seedream-5）+ 五级优先序（用户点名>要字>非摄影>改图>风格 cues）。关键触发：生图、哪个模型、图片生成、文字糊、画风不对、改图、换背景。工位边界：产品摄影转产品摄影技能、带标题优惠的产品广告转图片广告技能；本技能管通用图。源铭振跃侧模型以 generate_media 实际清单为准。
 source_book: "superCMO generating-images（GitHub: SupercmoHQ/superCMO-skills，Apache-2.0）"
 source_chapter: SKILL.md Step 1-2
 tags: [生图路由, 模型选择, 通用图像, 改图, 文字可读, AI生成友好]
@@ -60,4 +60,4 @@ evidence: E4
 
 - **不接产品摄影/产品广告的单**：分诊转交。
 - **不跳过指南直接写**。
-- **影策适配边界**：上游模型名（gpt-image-2/nano-banana/seedream）不照搬——以影策 generate_media 实际模型清单映射，缺模型时按"要字/要绘/要真人/改图"的能力维度选最接近的，并向用户说明。
+- **源铭振跃适配边界**：上游模型名（gpt-image-2/nano-banana/seedream）不照搬——以源铭振跃 generate_media 实际模型清单映射，缺模型时按"要字/要绘/要真人/改图"的能力维度选最接近的，并向用户说明。

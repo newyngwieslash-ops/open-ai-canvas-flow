@@ -45,7 +45,7 @@ evidence: E4
 
 - timestamp-30s / 长视频任务。
 - 「动作挤/台词赶/反应提前」的修复。
-- 影策 Agent 生成时间线后的审计项。
+- 源铭振跃 Agent 生成时间线后的审计项。
 
 ## E — 可执行步骤 (Execution)
 

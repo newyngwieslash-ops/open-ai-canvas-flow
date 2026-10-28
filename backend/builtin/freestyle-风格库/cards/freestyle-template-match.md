@@ -45,7 +45,7 @@ evidence: E4
 
 - 用 GPT-Image2 风格库做任何图。
 - 用户说「找个合适的模板」。
-- 影策 Agent 生图前的模板决策。
+- 源铭振跃 Agent 生图前的模板决策。
 
 ## E — 可执行步骤 (Execution)
 

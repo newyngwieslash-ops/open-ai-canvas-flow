@@ -41,8 +41,8 @@ const (
 )
 
 const (
-	defaultAppearanceBrandName = "影策"
-	defaultAppearanceBrandSlug = "open-ai-canvas"
+	defaultAppearanceBrandName = "源铭振跃"
+	defaultAppearanceBrandSlug = "ymzy"
 	defaultAppearanceSkinID    = "classic"
 	defaultAppearanceLogoURL   = "/logo.svg"
 	defaultAppearanceVideoURL  = "https://boss-shjd.biliapi.net/updream/aniforge/video/video_bbcb00bd-650d-4249-9346-5cd21fd2484c_m1hc-u0-1pu13x-3v1s.mp4"
@@ -297,7 +297,7 @@ func (s *Service) ResetAppearance(actor *model.User) (*AdminAppearanceSetting, e
 		return nil, err
 	}
 	after := defaultAppearanceSetting()
-	if err := s.appendAdminAudit(actor, "appearance.reset", "system_setting", appearanceSettingKey, "恢复影策默认品牌标识", map[string]any{"before": before, "after": after}); err != nil {
+	if err := s.appendAdminAudit(actor, "appearance.reset", "system_setting", appearanceSettingKey, "恢复源铭振跃默认品牌标识", map[string]any{"before": before, "after": after}); err != nil {
 		return nil, err
 	}
 	return s.AdminAppearance(actor)
@@ -445,12 +445,15 @@ func (s *Service) readAppearance() (*model.SystemSetting, AppearanceSetting, err
 	}
 	value.SchemaVersion = appearanceSchemaVersion
 	value.BrandName = strings.TrimSpace(value.BrandName)
-	if value.BrandName == "" {
+	if value.BrandName == "" || value.BrandName == "影策" {
 		value.BrandName = defaultAppearanceBrandName
 	}
 	value.BrandSlug = strings.ToLower(strings.TrimSpace(value.BrandSlug))
-	if value.BrandSlug == "" {
+	if value.BrandSlug == "" || value.BrandSlug == "open-ai-canvas" || value.BrandSlug == "yingce" {
 		value.BrandSlug = defaultAppearanceBrandSlug
+	}
+	if strings.TrimSpace(value.Canvas.AgentName) == "影策" {
+		value.Canvas.AgentName = "源铭振跃"
 	}
 	value.AuthHeroTitle = normalizeAppearanceCopy(value.AuthHeroTitle)
 	if value.AuthHeroTitle == "" {

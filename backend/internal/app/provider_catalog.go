@@ -118,7 +118,7 @@ func (s *Service) AdminProviderCatalog(ctx context.Context, actor *model.User, r
 	}
 	view := &ProviderCatalogView{Source: snapshot.State, Tags: []providercatalog.Tag{}, Providers: []ProviderCatalogItem{}}
 	if snapshot.State == providercatalog.SourceUnavailable {
-		view.Notice = "无法访问 ai.yingce.tv 服务商目录，请确认远程目录已部署且 HTTPS 可用。可继续使用自定义配置。"
+		view.Notice = "无法访问远程推荐服务商目录，请检查网络连接或稍后重试。可继续使用自定义配置。"
 	} else if snapshot.State == providercatalog.SourceCache {
 		view.Notice = "远程目录暂不可用，正在使用本地缓存。"
 	}

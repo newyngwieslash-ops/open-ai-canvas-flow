@@ -175,10 +175,10 @@ test("object storage can adopt the configured English brand identifier without r
     expect(source).toContain("setting.pathPrefix || DEFAULT_OSS_PATH_PREFIX");
 });
 
-test("appearance management exposes a server-side reset to the built-in Yingce brand", async () => {
+test("appearance management exposes a server-side reset to the built-in brand", async () => {
     const [pageSource, apiSource] = await Promise.all([Promise.resolve(moduleGroupSource("pages/admin/settings/appearance-settings-page.tsx")), Bun.file(new URL("../src/services/api/appearance.ts", import.meta.url)).text()]);
 
-    expect(pageSource).toContain("恢复影策默认");
+    expect(pageSource).toContain("恢复源铭振跃默认");
     expect(pageSource).toContain("resetAdminAppearance()");
     expect(pageSource).toContain("已上传文件仍保留在存储资源中");
     expect(apiSource).toContain('http.delete<{ setting: AdminAppearance }>("/admin/settings/appearance")');
@@ -193,9 +193,8 @@ test("metadata uses the displayed wordmark while the stored appearance keeps the
     expect(registered.get("property=og:title")?.content).toBe("源铭振跃");
     expect(registered.get("name=twitter:title")?.content).toBe("源铭振跃");
     expect(registered.get("property=og:site_name")?.content).toBe("源铭振跃");
-    // 版权页脚与原始配置不改：展示映射只作用于浏览器标签与分享卡。
     expect(legacy.brandName).toBe(DEFAULT_PUBLIC_APPEARANCE.brandName);
-    expect(legacy.footerCopyright).toContain("影策");
+    expect(legacy.footerCopyright).toContain("源铭振跃");
 
     const custom = normalizePublicAppearance({ brandName: "HIMA Studio", brandSlug: "hima-studio", seoTitle: "HIMA Studio - AI 影视工作台" });
     const customDocument = createMetadataDocument();
@@ -221,7 +220,7 @@ test("the welcome page consumes the displayed brand for title, opening chapter a
 
     expect(pageSource).toContain("displayBrandName(appearance.brandName)");
     expect(pageSource).toContain("getWelcomeChapters(brandName)");
-    expect(pageSource).toContain("document.title = `${brandName} · 让一个故事从文字走向银幕`");
+    expect(pageSource).toContain("`${brandName} · 让一个故事从文字走向银幕`");
     expect(pageSource).toContain("aria-label={`${brandName}创作之旅`}");
     expect(pageSource).not.toContain("影策 · 让一个故事");
     expect(storySource).not.toContain('title: "影策"');

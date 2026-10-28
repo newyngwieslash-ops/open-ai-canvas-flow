@@ -355,8 +355,8 @@ export default function WorkflowProductionWorkbench(props: Props) {
             if (!isAiConfigReady(config, routedModel)) throw new Error("当前模型渠道配置不完整，请先到设置中补齐");
             const basePrompt = mode === "video"
                 ? [values.videoPrompt || values.plotDescription, values.action, values.dialogue && `台词：${values.dialogue}`, values.continuityNotes].filter(Boolean).join("\n")
-                : [values.imagePrompt || values.plotDescription, values.action, "黑白分镜草图，清晰动作节拍，电影构图"].filter(Boolean).join("\n");
-            const resolvedPrompt = resolveShotAssetMentionPrompt(basePrompt, shotAssetReferenceContext, { dialogue: values.dialogue });
+                : [values.imagePrompt || values.plotDescription, values.action, activeStage === "previz" ? "黑白分镜草图，清晰动作节拍，电影构图" : ""].filter(Boolean).join("\n");
+            const resolvedPrompt = resolveShotAssetMentionPrompt(basePrompt, shotAssetReferenceContext, { dialogue: values.dialogue, mode });
             const skillExecution = await skillRuntime.prepare({
                 profile: "shortDrama",
                 prompt: resolvedPrompt,

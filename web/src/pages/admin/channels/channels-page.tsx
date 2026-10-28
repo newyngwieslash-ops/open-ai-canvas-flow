@@ -237,7 +237,7 @@ export default function ChannelsPage() {
             message.error("导入文件不是有效的 JSON");
             return;
         }
-        if (payload?.format !== "yingce.system-channels" || !Array.isArray(payload.channels)) {
+        if ((payload?.format !== "ymzy.system-channels" && payload?.format !== "yingce.system-channels") || !Array.isArray(payload.channels)) {
             message.error("不是系统渠道导出文件");
             return;
         }

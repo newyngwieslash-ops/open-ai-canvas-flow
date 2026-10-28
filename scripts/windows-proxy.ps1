@@ -1,4 +1,4 @@
-# Go uses proxy environment variables, not Windows Internet Settings.
+﻿# Go uses proxy environment variables, not Windows Internet Settings.
 # Inherit the user's enabled static proxy only when no explicit proxy was set.
 function Import-CanvasWindowsProxy {
     if ($env:HTTPS_PROXY -or $env:HTTP_PROXY -or $env:ALL_PROXY) { return }

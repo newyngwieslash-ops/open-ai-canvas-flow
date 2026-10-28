@@ -3,7 +3,7 @@ name: "图片编辑工作流"
 description: "基于画布图片节点，用自然语言和参考图完成图片编辑。"
 metadata:
   version: "1.0.0"
-  author: "影策"
+  author: "源铭振跃"
   owner: "yingce-system"
   skillId: "yingce-image-editing"
   tag: creative

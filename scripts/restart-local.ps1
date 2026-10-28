@@ -1,4 +1,4 @@
-﻿# 影策本地二次开发重启。
+﻿# 源铭振跃 (YMZY) 本地二次开发重启。
 # 前端默认 5178（受限时改用 15178），后端默认 8178（受限时改用 18178）。
 # 数据目录、Go 缓存、Vite 代理约定见 docs/content/docs/backend/local-development.mdx
 
@@ -89,7 +89,7 @@ function Write-RestartLog {
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
 }
 
-Set-Content -LiteralPath $logFile -Value ("# 影策 restart  {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding UTF8
+Set-Content -LiteralPath $logFile -Value ("# YMZY restart  {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding UTF8
 
 function ConvertTo-PowerShellLiteral([string]$Value) {
     return "'" + $Value.Replace("'", "''") + "'"
@@ -175,8 +175,6 @@ function Get-RepoProcessRoot([int]$ProcessId) {
         if (-not $record) { break }
         if (Test-TextFromRepo ((@($record.CommandLine, $record.ExecutablePath, $record.Name) -join " "))) {
             $root = $current
-        } else {
-            break
         }
         $name = [string]$record.Name
         if ($name -match '(?i)^(explorer|services|svchost|wininit|winlogon)\.exe$') { break }
@@ -327,11 +325,13 @@ if ($Check) {
 $killIds = New-Object "System.Collections.Generic.HashSet[int]"
 foreach ($procId in @($webOcc.Ours + $backendOcc.Ours)) {
     [void]$killIds.Add((Get-RepoProcessRoot $procId))
+    [void]$killIds.Add([int]$procId)
 }
 foreach ($port in @(5178, 15178, 8178, 18178)) {
     foreach ($procId in @(Get-ListeningPids $port)) {
         if (Test-ProcessFromRepo $procId) {
             [void]$killIds.Add((Get-RepoProcessRoot $procId))
+            [void]$killIds.Add([int]$procId)
         }
     }
 }
@@ -382,9 +382,11 @@ $backendAddr = "127.0.0.1:{0}" -f $BackendPort
 $proxyTarget = "http://127.0.0.1:{0}" -f $BackendPort
 
 # 禁用控制台快速编辑模式，防止鼠标误点选中控制台文本导致 Go 后端或 Vite 输出阻塞挂起。
+# 注意：Start-Process -ArgumentList 通过命令行传递 -Command 时，Windows CommandLineToArgvW 会剥离未转义的双引号，
+# 因此 C# DllImport 中的双引号必须写为 \"kernel32.dll\"，否则 Add-Type 会编译失败并被静默吞掉。
 $disableQuickEdit = @"
 try {
-    Add-Type -Name ConMode -Namespace Win32 -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint m);'
+    Add-Type -Name ConMode -Namespace Win32 -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m);'
     `$hIn = [Win32.ConMode]::GetStdHandle(-10)
     `$mode = [uint32]0
     if ([Win32.ConMode]::GetConsoleMode(`$hIn, [ref]`$mode)) {
@@ -402,7 +404,7 @@ Set-Location -LiteralPath $backendDirLiteral
 `$env:CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS = '$allowedPrivateUpstreamHosts'
 `$env:GOCACHE = $goBuildLiteral
 `$env:GOMODCACHE = $goModLiteral
-Write-Host '影策后端: http://$backendAddr' -ForegroundColor Cyan
+Write-Host '源铭振跃 (YMZY) 后端: http://$backendAddr' -ForegroundColor Cyan
 Write-Host '已放行本机模型上游: $allowedPrivateUpstreamHosts' -ForegroundColor DarkGray
 go run ./cmd/server
 "@
@@ -412,7 +414,7 @@ $webCommand = @"
 $disableQuickEdit
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = '$proxyTarget'
-Write-Host '影策前端: http://localhost:$WebPort' -ForegroundColor Cyan
+Write-Host '源铭振跃 (YMZY) 前端: http://localhost:$WebPort' -ForegroundColor Cyan
 bun run vite --host 0.0.0.0 --port $WebPort --strictPort
 "@
 

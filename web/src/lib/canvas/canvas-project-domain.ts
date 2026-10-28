@@ -116,7 +116,8 @@ export function storyboardRowsOutputContract(requirement: string) {
         "  narrativeIntent、viewerPOV、performanceBlocking、shotSize（景别）、emotion、lightingAndAtmosphere、",
         "  audioEffects、camera、motion、timeBeats、imageGenerationPrompt（首帧画面提示词）、",
         "  videoMotionPrompt（运镜与结尾状态）、continuityOut、negativePrompt、",
-        "  mustHave（数组，最多 3 项）、optionalDetails（数组）。",
+        "  mustHave（数组，最多 3 项）、optionalDetails（数组）、",
+        "  projectAssetRefs（本镜引用的项目资产数组，每项为 {\"assetId\": string, \"category\": \"character\"|\"environment\"|\"prop\"}；包含本镜所在场景及出场角色/道具，无引用时填 []）。",
         "- 镜头数量以完整覆盖剧情因果、人物关系和关键台词为准，不要为压缩数量删减关键情节。",
     ].join("\n");
 }

@@ -1,4 +1,4 @@
-﻿# 影策画布一键启动器
+﻿# 源铭振跃 (YMZY) 画布一键启动器
 # 启动后端(8080) + 前端(3000) + cloudflared 隧道(公网 canvas.yingce.cc.cd)，打开浏览器
 
 [CmdletBinding()]
@@ -37,7 +37,7 @@ function Test-Http([string]$Url) {
 
 # 0) 已全部就绪则直接打开
 if ((Test-PortListen 8080) -and (Test-PortListen 3000)) {
-    Write-Host "影策画布已在运行，正在打开..." -ForegroundColor Green
+    Write-Host "源铭振跃 (YMZY) 画布已在运行，正在打开..." -ForegroundColor Green
     Start-Process $localUrl
     exit 0
 }
@@ -93,7 +93,7 @@ $deadline = (Get-Date).AddMinutes(3)
 do {
     Start-Sleep -Seconds 2
     if (Test-Http $healthUrl) {
-        Write-Host "影策画布已启动，正在打开浏览器..." -ForegroundColor Green
+        Write-Host "源铭振跃 (YMZY) 画布已启动，正在打开浏览器..." -ForegroundColor Green
         Start-Sleep -Seconds 1
         Start-Process $localUrl
         Write-Host "本地: http://localhost:3000" -ForegroundColor Green

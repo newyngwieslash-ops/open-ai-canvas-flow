@@ -1,9 +1,9 @@
 ---
-name: 影策短剧制作工作流
+name: 源铭振跃短剧制作工作流
 description: 将小说、故事素材或剧本整理为短剧剧本、分镜和可复用资产，并按实际能力与授权生成、核验视频。
 metadata:
   version: "1.4.0"
-  author: 影策
+  author: 源铭振跃
   owner: yingce-system
   skillId: "yingce-short-drama-workflow"
   tag: drama
@@ -11,7 +11,7 @@ metadata:
   source: 3
 ---
 
-# 影策短剧制作工作流
+# 源铭振跃短剧制作工作流
 
 ## 系统执行合同
 

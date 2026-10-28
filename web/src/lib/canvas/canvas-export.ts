@@ -41,6 +41,6 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
         }
         items.push({ project, files, drawingDocuments });
     }
-    const manifest: CanvasExportFile = { app: "yingce", version: 4, exportedAt: new Date().toISOString(), projects: items };
+    const manifest: CanvasExportFile = { app: "ymzy", version: 4, exportedAt: new Date().toISOString(), projects: items };
     saveAs(await archive.finish("projects.json", manifest), `${downloadName(fileName)}.zip`);
 }

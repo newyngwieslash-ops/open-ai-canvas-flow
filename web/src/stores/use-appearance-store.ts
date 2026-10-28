@@ -10,8 +10,8 @@ export const DEFAULT_PUBLIC_APPEARANCE: PublicAppearance = {
     updates: DEFAULT_UPDATE_ANNOUNCEMENT,
     canvas: DEFAULT_CANVAS_APPEARANCE,
     schemaVersion: 10,
-    brandName: "影策",
-    brandSlug: "open-ai-canvas",
+    brandName: "源铭振跃",
+    brandSlug: "ymzy",
     authHeroTitle: "让一个故事，\n从文字走向银幕。",
     authHeroDescription: "",
     logoUrl: "/logo.svg",
@@ -22,10 +22,10 @@ export const DEFAULT_PUBLIC_APPEARANCE: PublicAppearance = {
     authVideoAutoplay: true,
     skinId: "classic",
     activeSkin: DEFAULT_CLASSIC_SKIN,
-    seoTitle: "影策",
-    seoDescription: "影策，面向 AI 影视与短剧创作的工作台。",
+    seoTitle: "源铭振跃",
+    seoDescription: "源铭振跃，面向 AI 影视与短剧创作的工作台。",
     seoKeywords: "",
-    footerCopyright: `© ${new Date().getFullYear()} 影策. All rights reserved.`,
+    footerCopyright: `© ${new Date().getFullYear()} 源铭振跃. All rights reserved.`,
     icpFilingEnabled: false,
     icpFilingNumber: "",
     redeemPurchaseUrl: "",
@@ -50,7 +50,8 @@ export const useAppearanceStore = create<AppearanceStore>((set) => ({
 }));
 
 export function normalizePublicAppearance(value?: Partial<PublicAppearance> | null): PublicAppearance {
-    const brandName = String(value?.brandName || "").trim();
+    const rawBrandName = String(value?.brandName || "").trim();
+    const brandName = rawBrandName === "影策" ? DEFAULT_PUBLIC_APPEARANCE.brandName : rawBrandName;
     const brandSlug = normalizeBrandSlug(value?.brandSlug);
     const authHeroTitle = normalizeAppearanceCopy(value?.authHeroTitle, DEFAULT_PUBLIC_APPEARANCE.authHeroTitle);
     const authHeroDescription = normalizeAppearanceCopy(value?.authHeroDescription, DEFAULT_PUBLIC_APPEARANCE.authHeroDescription, true);
@@ -58,18 +59,25 @@ export function normalizePublicAppearance(value?: Partial<PublicAppearance> | nu
     const logoUrl = safeAppearanceURL(value?.logoUrl, DEFAULT_PUBLIC_APPEARANCE.logoUrl);
     const darkLogoUrl = safeAppearanceURL(value?.darkLogoUrl, logoUrl);
     const resolvedBrandName = brandName || DEFAULT_PUBLIC_APPEARANCE.brandName;
-    const seoTitle = normalizeAppearanceCopy(value?.seoTitle, resolvedBrandName);
-    const seoDescription = normalizeAppearanceCopy(value?.seoDescription, `${resolvedBrandName}，面向 AI 影视与短剧创作的工作台。`, true);
+    const rawSeoTitle = typeof value?.seoTitle === "string" && value.seoTitle.trim() === "影策" ? resolvedBrandName : value?.seoTitle;
+    const seoTitle = normalizeAppearanceCopy(rawSeoTitle, resolvedBrandName);
+    const rawSeoDescription = typeof value?.seoDescription === "string" ? value.seoDescription.replace(/^影策(?=，)/, resolvedBrandName) : value?.seoDescription;
+    const seoDescription = normalizeAppearanceCopy(rawSeoDescription, `${resolvedBrandName}，面向 AI 影视与短剧创作的工作台。`, true);
     const seoKeywords = normalizeAppearanceCopy(value?.seoKeywords, "", true);
-    const footerCopyright = normalizeAppearanceCopy(value?.footerCopyright, `© ${new Date().getFullYear()} ${resolvedBrandName}. All rights reserved.`);
+    const rawFooterCopyright = typeof value?.footerCopyright === "string" ? value.footerCopyright.replace(/影策(?=\.\s*All rights reserved\.)/, resolvedBrandName) : value?.footerCopyright;
+    const footerCopyright = normalizeAppearanceCopy(rawFooterCopyright, `© ${new Date().getFullYear()} ${resolvedBrandName}. All rights reserved.`);
     const icpFilingNumber = normalizeAppearanceCopy(value?.icpFilingNumber, "", true);
     const redeemPurchaseUrl = typeof value?.redeemPurchaseUrl === "string" ? safeAppearanceURL(value.redeemPurchaseUrl, "") : "";
+    const normalizedCanvas = { ...DEFAULT_CANVAS_APPEARANCE, ...value?.canvas };
+    if (normalizedCanvas.agentName.trim() === "影策") {
+        normalizedCanvas.agentName = DEFAULT_CANVAS_APPEARANCE.agentName;
+    }
     return {
         ...DEFAULT_PUBLIC_APPEARANCE,
         ...value,
         schemaVersion: 10,
         updates: normalizeUpdateAnnouncement(value?.updates),
-        canvas: { ...DEFAULT_CANVAS_APPEARANCE, ...value?.canvas },
+        canvas: normalizedCanvas,
         brandName: resolvedBrandName,
         brandSlug,
         authHeroTitle,
@@ -168,7 +176,7 @@ export function appearanceLogoURL(appearance: PublicAppearance, theme: "light" |
 }
 
 export function brandStudioLabel(appearance: PublicAppearance) {
-    if (appearance.brandName === DEFAULT_PUBLIC_APPEARANCE.brandName && appearance.brandSlug === DEFAULT_PUBLIC_APPEARANCE.brandSlug) return "YINGCE STUDIO";
+    if ((appearance.brandName === DEFAULT_PUBLIC_APPEARANCE.brandName || appearance.brandName === "影策") && (appearance.brandSlug === DEFAULT_PUBLIC_APPEARANCE.brandSlug || appearance.brandSlug === "open-ai-canvas")) return "YMZY STUDIO";
     return appearance.brandSlug.replace(/-+/g, " ").toLocaleUpperCase();
 }
 
@@ -176,6 +184,7 @@ function normalizeBrandSlug(value: unknown) {
     const candidate = String(value || "")
         .trim()
         .toLocaleLowerCase();
+    if (candidate === "open-ai-canvas" || candidate === "yingce") return DEFAULT_PUBLIC_APPEARANCE.brandSlug;
     return /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(candidate) ? candidate : DEFAULT_PUBLIC_APPEARANCE.brandSlug;
 }
 
