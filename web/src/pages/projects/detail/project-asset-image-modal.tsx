@@ -20,7 +20,7 @@ import { configuredModelMatchesCapability, useConfigStore, useEffectiveConfig } 
 import { modelCompatibilityError, resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
 import { generateCharacterTurnaround } from "./project-character-media";
 import { generateProjectVisualImage } from "./project-visual-asset";
-import { currentAssetImageId, directCharacterRepresentations, nextCandidateCursor, referenceImageForAsset, referenceModelError, requireRemoteImage, type ReferenceSource } from "./project-reference-image";
+import { characterHasTurnaround, currentAssetImageId, directCharacterRepresentations, nextCandidateCursor, referenceImageForAsset, referenceModelError, requireRemoteImage, type ReferenceSource } from "./project-reference-image";
 
 type Props = { project: Project; asset?: ProjectAsset; folderId?: string; initialMode?: "direct" | "generate"; onClose: () => void; onSaved: () => void };
 type SelectedImage = { resourceId: string; name: string };
@@ -37,7 +37,7 @@ export function ProjectAssetImageModal({ project, asset: initialAsset, folderId,
     const [instructions, setInstructions] = useState(String(initialAsset?.character?.definition.appearance || initialAsset?.visual?.definition.prompt || ""));
     const [image, setImage] = useState<SelectedImage>();
     const [source, setSource] = useState<ReferenceSource>(!initialAsset || initialAsset.referenceImage ? "original" : currentAssetImageId(initialAsset) ? "current" : "none");
-    const [turnaround, setTurnaround] = useState(false);
+    const [turnaround, setTurnaround] = useState(() => characterHasTurnaround(initialAsset));
     const [picker, setPicker] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
@@ -87,12 +87,13 @@ export function ProjectAssetImageModal({ project, asset: initialAsset, folderId,
     const refreshAsset = async () => {
         const result = await listProjectAssets(project.id);
         const latest = result.assets.find((item) => item.id === asset?.id);
-        if (alive() && latest) setAsset(latest);
+        if (alive() && latest) { setAsset(latest); setTurnaround(characterHasTurnaround(latest)); }
         if (alive()) onSaved();
     };
     const saved = async (next: ProjectAsset) => {
         if (!alive()) return;
         setAsset(next);
+        setTurnaround(characterHasTurnaround(next));
         onSaved();
         void queryClient.invalidateQueries({ queryKey: ["asset-library"] });
         try { await loadAssetsForUse([next.id], { refresh: true }); }
@@ -149,10 +150,11 @@ export function ProjectAssetImageModal({ project, asset: initialAsset, folderId,
             return;
         }
         if (mode === "direct") {
-            if (!image || !asset.primaryVersionId) throw new Error("请选择成品图片并确认资产版本已加载");
+            const resourceId = image?.resourceId || currentAssetImageId(asset);
+            if (!resourceId || !asset.primaryVersionId) throw new Error("请选择成品图片并确认资产版本已加载");
             const result = asset.category === "character"
-                ? await replaceProjectCharacterRepresentations(project.id, asset.id, directCharacterRepresentations(image.resourceId, turnaround), asset.primaryVersionId)
-                : await bindProjectAssetImage(project.id, asset.id, { resourceId: image.resourceId, expectedVersionId: asset.primaryVersionId });
+                ? await replaceProjectCharacterRepresentations(project.id, asset.id, directCharacterRepresentations(resourceId, turnaround), asset.primaryVersionId)
+                : await bindProjectAssetImage(project.id, asset.id, { resourceId, expectedVersionId: asset.primaryVersionId });
             await saved(result.asset);
             if (alive()) { setImage(undefined); message.success("成品图片已保存"); }
         } else {

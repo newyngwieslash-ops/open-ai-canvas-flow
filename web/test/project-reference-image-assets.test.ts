@@ -3,7 +3,7 @@ import { projectVisualImageRequest } from "../src/pages/projects/detail/project-
 import { defaultConfig } from "../src/stores/use-config-store";
 import type { ProjectAsset } from "../src/services/api/projects";
 import { characterTurnaroundRequest } from "../src/pages/projects/detail/project-character-media";
-import { requireRemoteImage, referenceImageForAsset, directCharacterRepresentations, referenceModelError, nextCandidateCursor, isActiveAssetImageTask } from "../src/pages/projects/detail/project-reference-image";
+import { characterHasTurnaround, currentAssetImageId, requireRemoteImage, referenceImageForAsset, directCharacterRepresentations, referenceModelError, nextCandidateCursor, isActiveAssetImageTask } from "../src/pages/projects/detail/project-reference-image";
 
 const asset: ProjectAsset = { id: "scene", title: "藏书阁", category: "environment", mediaType: "entity", status: "confirmed", primaryVersionId: "v1", versionCount: 1, usages: [], position: 0, updatedAt: "", visual: { status: "missing", definition: { prompt: "木质书架" } } };
 
@@ -16,6 +16,12 @@ describe("项目参考图手动候选", () => {
     test("普通照片只写primary，三视图必须明确声明", () => {
         expect(directCharacterRepresentations("image", false)).toEqual([{ role: "primary", resourceId: "image" }]);
         expect(directCharacterRepresentations("image", true).map((item) => item.role)).toEqual(["primary", "turnaround_sheet"]);
+        const portraitCharacter: ProjectAsset = { ...asset, category: "character", character: { version: 1, visualStatus: "partial", voiceStatus: "missing", definition: {}, representations: directCharacterRepresentations("image", false) } };
+        const turnaroundCharacter: ProjectAsset = { ...asset, category: "character", character: { version: 2, visualStatus: "ready", voiceStatus: "missing", definition: {}, representations: directCharacterRepresentations("image", true) } };
+        expect(characterHasTurnaround(portraitCharacter)).toBe(false);
+        expect(characterHasTurnaround(turnaroundCharacter)).toBe(true);
+        expect(currentAssetImageId(portraitCharacter)).toBe("image");
+        expect(currentAssetImageId(turnaroundCharacter)).toBe("image");
     });
     test("原图、当前图、无参考相互独立，缺失来源拒绝", () => {
         const current = { ...asset, referenceImage: { resourceId: "original" }, mediaType: "image", storageKey: "resource:current" };

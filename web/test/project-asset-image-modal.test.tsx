@@ -390,3 +390,121 @@ test("候选由任务查询恢复，已采用/过期不允许再次覆盖，满�
         expect(calls.some((params) => params?.assetImageCandidates && params.beforeTaskId === "task-49")).toBe(true);
     } finally { await view.dispose(); useUserStore.setState({ user: previous }); }
 });
+
+test("已有角色直用保存后保留弹窗，支持直接切换包含角色三视图复选框再次保存并同步初始状态", async () => {
+    const previousUser = useUserStore.getState().user;
+    const previousAssets = useAssetStore.getState().assets;
+    const previousScope = getActiveUserScope();
+    const previousHydrated = useUserStore.getState().hydrated;
+    const storage = new Map<string, unknown>();
+    const storageSpies = [
+        spyOn(localforage, "getItem").mockImplementation(async (key) => storage.get(key) ?? null),
+        spyOn(localforage, "setItem").mockImplementation(async (key, value) => { storage.set(key, value); return value; }),
+        spyOn(localforage, "removeItem").mockImplementation(async (key) => { storage.delete(key); }),
+    ];
+    useUserStore.setState({ user: { id: "tester" } as NonNullable<typeof previousUser> });
+    const sourceImage = { id: "source", kind: "image", title: "小男孩.png", coverUrl: "", tags: [], status: "confirmed", createdAt: "", updatedAt: "", data: { storageKey: "resource:boy-img", dataUrl: "", width: 3840, height: 2160, bytes: 100, mimeType: "image/png" } } as (typeof previousAssets)[number];
+    useAssetStore.setState({ assets: [sourceImage] });
+    const remoteAssets = new Map([[sourceImage.id, sourceImage]]);
+    const characterAsset: ProjectAsset = {
+        ...asset,
+        id: "char-1",
+        title: "小男孩",
+        category: "character",
+        primaryVersionId: "v1",
+        character: { version: 1, visualStatus: "missing", voiceStatus: "missing", definition: { appearance: "幼童脸庞" }, representations: [] },
+    };
+    const putPayloads: Array<{ representations: Array<{ role: string; resourceId: string }>; expectedVersionId: string }> = [];
+    let currentAsset = characterAsset;
+    apiClient.defaults.adapter = async (config) => {
+        if (config.method === "post" && config.url === "/assets/batch") {
+            const { ids } = JSON.parse(config.data) as { ids: string[] };
+            const assets = ids.flatMap((id) => remoteAssets.has(id) ? [structuredClone(remoteAssets.get(id)!)] : []);
+            return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: { assets }, msg: "" } };
+        }
+        if (config.method === "put" && config.url === "/projects/project/characters/char-1/representations") {
+            const body = JSON.parse(config.data);
+            putPayloads.push(body);
+            const nextVersion = `v${putPayloads.length + 1}`;
+            const hasTurnaround = body.representations.some((item: { role: string }) => item.role === "turnaround_sheet");
+            currentAsset = {
+                ...currentAsset,
+                primaryVersionId: nextVersion,
+                character: {
+                    ...currentAsset.character!,
+                    version: putPayloads.length + 1,
+                    visualStatus: hasTurnaround ? "ready" : "partial",
+                    representations: body.representations,
+                },
+            };
+            return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: { asset: currentAsset }, msg: "" } };
+        }
+        return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: [], msg: "" } };
+    };
+    let closeCalls = 0;
+    let savedCalls = 0;
+    let view = await fixture(characterAsset, () => { savedCalls++; }, "direct", { onClose: () => { closeCalls++; } });
+    const checkbox = () => document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    try {
+        setActiveUserScope("tester");
+        await initializeRemoteUserDataSession("tester");
+        await act(async () => useUserStore.setState({ hydrated: true }));
+        await act(async () => { await settle(); });
+        expect(checkbox().checked).toBe(false);
+        await act(async () => { button("上传或选择一张成品图").click(); await settle(); });
+        await act(async () => (document.querySelector(".asset-picker-card-action") as HTMLElement).click());
+        await act(async () => button("使用已选素材").click());
+        const deadline = Date.now() + 2_000;
+        while (!button("取消本次选择") && Date.now() < deadline) await act(async () => { await settle(); });
+        expect(button("取消本次选择")).toBeDefined();
+
+        // 第一次保存成品资产（未勾选三视图）：保存成功、保留弹窗、清空临时选图
+        await act(async () => { button("保存成品资产").click(); await settle(); });
+        expect(closeCalls).toBe(0);
+        expect(savedCalls).toBe(1);
+        expect(button("取消本次选择")).toBeUndefined();
+        expect(putPayloads).toHaveLength(1);
+        expect(putPayloads[0]).toEqual({
+            expectedVersionId: "v1",
+            representations: [{ role: "primary", resourceId: "boy-img" }],
+        });
+
+        // 不重新选图，直接勾选“包含角色三视图”复选框再次点击【保存成品资产】
+        await act(async () => { checkbox().click(); await settle(); });
+        expect(checkbox().checked).toBe(true);
+        await act(async () => { button("保存成品资产").click(); await settle(); });
+        expect(document.body.textContent).not.toContain("请选择成品图片并确认资产版本已加载");
+        expect(closeCalls).toBe(0);
+        expect(savedCalls).toBe(2);
+        expect(putPayloads).toHaveLength(2);
+        expect(putPayloads[1]).toEqual({
+            expectedVersionId: "v2",
+            representations: [
+                { role: "primary", resourceId: "boy-img" },
+                { role: "turnaround_sheet", resourceId: "boy-img" },
+            ],
+        });
+
+        // 重新打开弹窗时，复选框根据已有 turnaround_sheet 初始化为选中，取消勾选可再次保存
+        await view.dispose();
+        view = await fixture(currentAsset, () => { savedCalls++; }, "direct", { onClose: () => { closeCalls++; } });
+        await act(async () => { await settle(); });
+        expect(checkbox().checked).toBe(true);
+        await act(async () => { checkbox().click(); await settle(); });
+        expect(checkbox().checked).toBe(false);
+        await act(async () => { button("保存成品资产").click(); await settle(); });
+        expect(putPayloads).toHaveLength(3);
+        expect(putPayloads[2]).toEqual({
+            expectedVersionId: "v3",
+            representations: [{ role: "primary", resourceId: "boy-img" }],
+        });
+    } finally {
+        await view.dispose();
+        resetRemoteUserDataSync();
+        useAssetStore.setState({ assets: previousAssets });
+        await flushAssetStorePersistence();
+        setActiveUserScope(previousScope);
+        useUserStore.setState({ user: previousUser, hydrated: previousHydrated });
+        storageSpies.forEach((spy) => spy.mockRestore());
+    }
+});

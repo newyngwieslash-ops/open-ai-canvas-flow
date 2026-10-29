@@ -16,9 +16,14 @@ export function directCharacterRepresentations(resourceId: string, turnaround: b
     return [{ role: "primary", resourceId }, ...(turnaround ? [{ role: "turnaround_sheet", resourceId }] : [])];
 }
 
+export function characterHasTurnaround(asset?: ProjectAsset) {
+    return asset?.category === "character" && Boolean(asset.character?.representations.some((item) => item.role === "turnaround_sheet"));
+}
+
 export function currentAssetImageId(asset: ProjectAsset) {
     return asset.category === "character"
-        ? asset.character?.representations.find((item) => item.role === "primary")?.resourceId || ""
+        ? (asset.character?.representations.find((item) => item.role === "primary")
+            || asset.character?.representations.find((item) => item.role === "turnaround_sheet"))?.resourceId || ""
         : resourceIdFromStorageKey(asset.storageKey) || "";
 }
 
