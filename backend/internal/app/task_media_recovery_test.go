@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,9 +149,42 @@ func TestMediaRecoveryDownloadFailureResumesSameTaskAfterRestart(t *testing.T) {
 func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	s, db := newMediaRecoveryTestService(t)
-	seedOSSEnabled(t, db, "media-user", "http://127.0.0.1:1")
+	picture := mediaTestPNG(t)
+	var storageReady atomic.Bool
+	var uploads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("media recovery should upload the staged object, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !storageReady.Load() {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "<Error><Code>ServiceUnavailable</Code><Message>storage unavailable</Message></Error>")
+			return
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Equal(payload, picture) {
+			t.Errorf("recovery changed staged media: %v", err)
+		}
+		uploads.Add(1)
+		w.Header().Set("ETag", `"recovered-object"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	setting := model.UserOSSSetting{
+		ID: newID(), UserID: "media-user", Enabled: true,
+		ValueJSON: fmt.Sprintf(`{"provider":"s3","endpoint":%q,"bucket":"test-bucket","accessKeyId":"test-id","accessKeySecret":"test-secret","region":"us-east-1"}`, server.URL),
+	}
+	if err := db.Create(&setting).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.repo.SaveSystemSetting(&model.SystemSetting{Key: ossSettingKey, ValueJSON: `{"allowUserS3":true}`}); err != nil {
+		t.Fatal(err)
+	}
 	task := seedMediaTask(t, db, providerConfig{})
-	temp, err := s.stageInlineMedia(mediaTestPNG(t))
+	temp, err := s.stageInlineMedia(picture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +204,8 @@ func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 	if _, err := os.Stat(s.mediaTempPath(temp)); err != nil {
 		t.Fatal("upload failure discarded download", err)
 	}
-	// Simulate fixing storage configuration on the same existing object identity.
-	resource.Provider, resource.ObjectKey = "local", "recovered/picture.png"
-	if err := s.repo.SaveResource(resource); err != nil {
-		t.Fatal(err)
-	}
+	// Recovery must preserve the producer's physical identity while the storage endpoint recovers.
+	storageReady.Store(true)
 	output, err := s.resumeTaskMedia(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
@@ -183,8 +214,11 @@ func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 		t.Fatal(err)
 	}
 	ready, _ := s.resourceForUploadKey(task.UserID, mediaUploadKey(task.ID, 0))
-	if ready.ID != resource.ID || ready.Status != model.ResourceStatusReady {
+	if ready.ID != resource.ID || ready.Status != model.ResourceStatusReady || ready.Provider != resource.Provider || ready.ObjectKey != resource.ObjectKey {
 		t.Fatal("resource identity changed")
+	}
+	if uploads.Load() != 1 {
+		t.Fatalf("expected one successful staged upload, got %d", uploads.Load())
 	}
 	var count int64
 	db.Model(&model.Resource{}).Where("user_id = ?", task.UserID).Count(&count)

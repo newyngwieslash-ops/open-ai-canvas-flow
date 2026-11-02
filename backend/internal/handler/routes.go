@@ -47,7 +47,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		req.RequestID = RequestID(c)
 		task, err := svc.CreateTask(user.ID, req)
 		if err != nil {
-			fail(c, http.StatusBadRequest, err)
+			var appErr *service.AppError
+			if errors.As(err, &appErr) && appErr.Reason == service.ReasonTaskActiveLimitExceeded {
+				failService(c, err)
+			} else {
+				fail(c, http.StatusBadRequest, err)
+			}
 			return
 		}
 		ok(c, task)
@@ -200,7 +205,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		task, err := svc.RetryTask(user.ID, c.Param("id"))
 		if err != nil {
-			fail(c, http.StatusBadRequest, err)
+			var appErr *service.AppError
+			if errors.As(err, &appErr) && appErr.Reason == service.ReasonTaskActiveLimitExceeded {
+				failService(c, err)
+			} else {
+				fail(c, http.StatusBadRequest, err)
+			}
 			return
 		}
 		ok(c, task)

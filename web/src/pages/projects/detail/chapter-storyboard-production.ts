@@ -3,6 +3,9 @@ import { formatShotOrdinal } from "@/lib/shot-label";
 import { ApiError } from "@/services/api/request";
 import { replaceProjectUnitShots, resolveGeneratedProjectUnitShotAssetBindings, type BindingIssue, type GeneratedBindingBaseline, type GeneratedBindingResolution, type ProjectDetail, type ShotRevisionInput } from "@/services/api/projects";
 import { ensureShotAssetMentionPrompt } from "./workflow-shot-references";
+import { getActiveUserScope } from "@/lib/user-scope";
+import { useUserStore } from "@/stores/use-user-store";
+import { batchHasUnsettledItems, resolveBatchStorage, withBatchChapterLock } from "./workflow-batch-storage";
 
 export type ChapterStoryboardAsset = {
     id: string;
@@ -76,7 +79,7 @@ export function clearPendingGeneratedStoryboardSave(projectId?: string, unitId?:
     }
 }
 
-export async function saveGeneratedChapterStoryboard(detail: ProjectDetail, unitId: string, result: { taskId: string; rows: StoryboardRow[] }, confirmIssues?: (issues: Array<BindingIssue & { rowIndex: number }>, resolution: GeneratedBindingResolution) => Promise<boolean | string[][]>) {
+export async function saveGeneratedChapterStoryboard(detail: ProjectDetail, unitId: string, result: { taskId: string; rows: StoryboardRow[] }, confirmIssues?: (issues: Array<BindingIssue & { rowIndex: number }>, resolution: GeneratedBindingResolution) => Promise<boolean | string[][]>, beforeReplace?: () => void) {
     const pendingKey = pendingGeneratedStoryboardKey(detail.project.id, unitId, result.taskId);
     let pending = pendingGeneratedStoryboardSaves.get(pendingKey);
     if (!pending) {
@@ -107,6 +110,7 @@ export async function saveGeneratedChapterStoryboard(detail: ProjectDetail, unit
         pendingGeneratedStoryboardSaves.set(pendingKey, pending);
     }
     try {
+        beforeReplace?.();
         await replaceProjectUnitShots(detail.project.id, unitId, pending.shots, pending.expectedShotIds, pending.generatedBinding);
         pendingGeneratedStoryboardSaves.delete(pendingKey);
         return { shotCount: pending.shots.length, issues: pending.issues };
@@ -116,6 +120,35 @@ export async function saveGeneratedChapterStoryboard(detail: ProjectDetail, unit
         }
         throw error;
     }
+}
+
+// Browser entry for every chapter replacement, including automatic recovery on the chapters page.
+export async function saveGeneratedChapterStoryboardWithBatchGuard(
+    detail: ProjectDetail,
+    unitId: string,
+    result: Parameters<typeof saveGeneratedChapterStoryboard>[2],
+    confirmIssues?: Parameters<typeof saveGeneratedChapterStoryboard>[3],
+    assertCallerCurrent?: () => void,
+) {
+    const ownerScope = getActiveUserScope();
+    const assertCurrent = () => {
+        const session = useUserStore.getState();
+        if (!session.hydrated || !session.user?.id || session.user.id !== ownerScope || getActiveUserScope() !== ownerScope) {
+            throw new DOMException("Aborted", "AbortError");
+        }
+        assertCallerCurrent?.();
+    };
+    assertCurrent();
+    const identity = { ownerScope, projectId: detail.project.id, unitId };
+    const execute = async () => {
+        const log = await resolveBatchStorage(identity).read();
+        assertCurrent();
+        if (batchHasUnsettledItems(log)) throw new Error("当前章节正在参与批量任务，请先完成核对或停止剩余提交后再替换");
+        return saveGeneratedChapterStoryboard(detail, unitId, result, confirmIssues, assertCurrent);
+    };
+    return typeof navigator !== "undefined" && typeof navigator.locks?.request === "function"
+        ? withBatchChapterLock(identity, execute)
+        : execute();
 }
 
 export function chapterStoryboardCharacters(detail: ProjectDetail, unitId?: string): ChapterStoryboardCharacter[] {

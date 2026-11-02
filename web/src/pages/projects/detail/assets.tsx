@@ -119,8 +119,8 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         placeholderData: keepPreviousData,
     });
     const foldersQuery = useQuery({ queryKey: ["project", detail.project.id, "asset-folders"], queryFn: () => listProjectAssetFolders(detail.project.id) });
-    // 左侧分类计数不能依赖跟随当前 tab 的候选查询，否则"角色"的数字会随所在 tab 的待确认数漂移；
-    // 这里独立取"全部待确认"和"角色待确认"两个总数，计数与当前所处分类解耦。
+    // 左侧分类计数不能依赖跟随当前 tab 的候选查询，否则各分类数字会随所在 tab 的待确认数漂移；
+    // 这里独立取"全部待确认"及角色、场景、道具三类待确认总数，计数与当前所处分类解耦。
     const pendingCountQuery = useQuery({
         queryKey: ["project", detail.project.id, "asset-candidates", "pending-count"],
         queryFn: () => listProjectAssetCandidates(detail.project.id, { page: 1, pageSize: 1, status: "pending_confirmation" }),
@@ -128,6 +128,14 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
     const characterPendingCountQuery = useQuery({
         queryKey: ["project", detail.project.id, "asset-candidates", "character-pending-count"],
         queryFn: () => listProjectAssetCandidates(detail.project.id, { page: 1, pageSize: 1, category: "character", status: "pending_confirmation" }),
+    });
+    const environmentPendingCountQuery = useQuery({
+        queryKey: ["project", detail.project.id, "asset-candidates", "environment-pending-count"],
+        queryFn: () => listProjectAssetCandidates(detail.project.id, { page: 1, pageSize: 1, category: "environment", status: "pending_confirmation" }),
+    });
+    const propPendingCountQuery = useQuery({
+        queryKey: ["project", detail.project.id, "asset-candidates", "prop-pending-count"],
+        queryFn: () => listProjectAssetCandidates(detail.project.id, { page: 1, pageSize: 1, category: "prop", status: "pending_confirmation" }),
     });
     // 章节提取会产出角色、场景和道具三类候选；待确认列表必须跟随当前分类，否则非角色候选永远无法确认。
     const candidateCategory = category === "all" ? undefined : category;
@@ -209,11 +217,16 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         { key: "", label: "素材库 / 根目录" },
         ...assetFolders.map((folder) => ({ key: folder.id, label: projectAssetFolderLabel(assetFolders, folder) })),
     ], [assetFolders]);
+    const pendingCategoryCountMap: Partial<Record<AssetCategory, number>> = {
+        character: characterPendingCountQuery.data?.total || 0,
+        environment: environmentPendingCountQuery.data?.total || 0,
+        prop: propPendingCountQuery.data?.total || 0,
+    };
     const categoryCounts = categories.map((value) => ({
         value,
         count: value === "all"
             ? totalAssetCount + (pendingCountQuery.data?.total || 0)
-            : (categoryCountMap[value] || 0) + (value === "character" ? characterPendingCountQuery.data?.total || 0 : 0),
+            : (categoryCountMap[value] || 0) + (pendingCategoryCountMap[value as AssetCategory] || 0),
     }));
     const audioPickerItems = useMemo<AssetLibraryPickerItem[]>(() => {
         const localItems = personalAssets.flatMap((asset) => {

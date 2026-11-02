@@ -39,7 +39,9 @@ func (w *taskLifecycleCoordinator) retryTask(userID string, id string) (*model.T
 	if err != nil {
 		return nil, err
 	}
-	if task.Operation == profileAnalysisOperation { return nil, profileError(409, "not_adoptable") }
+	if task.Operation == profileAnalysisOperation {
+		return nil, profileError(409, "not_adoptable")
+	}
 	if task.MediaRecoveryJSON != "" {
 		return nil, BadAuthRequest("作品已生成，请使用重试保存，不要重复生成")
 	}
@@ -94,7 +96,7 @@ func (w *taskLifecycleCoordinator) retryTask(userID string, id string) (*model.T
 		return nil, BadAuthRequest("积分不足，请先使用兑换码充值")
 	}
 	if errors.Is(err, repository.ErrActiveTaskLimit) {
-		return nil, BadAuthRequest(fmt.Sprintf("同时排队或运行的任务最多 %d 个，请等待已有任务完成", policy.Task.ActiveTaskLimit))
+		return nil, taskActiveLimitError(policy.Task.ActiveTaskLimit)
 	}
 	if errors.Is(err, repository.ErrTaskNotRetryable) {
 		return nil, BadAuthRequest("任务已被其他请求重新入队，请勿重复重试")
@@ -125,7 +127,9 @@ func (w *taskLifecycleCoordinator) cancelTaskWithIntent(_ context.Context, userI
 		if task.Status == model.TaskStatusCancelled {
 			return taskForOutput(*task), nil
 		}
-		if task.Operation == profileAnalysisOperation { return nil, &AppError{Status:409, Code:409, Reason:"task_state_changed", Message:"任务状态已变化，请刷新"} }
+		if task.Operation == profileAnalysisOperation {
+			return nil, &AppError{Status: 409, Code: 409, Reason: "task_state_changed", Message: "任务状态已变化，请刷新"}
+		}
 		return nil, fmt.Errorf("任务当前状态为 %s，无法取消", task.Status)
 	}
 
@@ -158,7 +162,9 @@ func (w *taskLifecycleCoordinator) cancelTaskWithIntent(_ context.Context, userI
 		if latest.Status == model.TaskStatusCancelled {
 			return taskForOutput(*latest), nil
 		}
-		if task.Operation == profileAnalysisOperation { return nil, &AppError{Status:409, Code:409, Reason:"task_state_changed", Message:"任务状态已变化，请刷新"} }
+		if task.Operation == profileAnalysisOperation {
+			return nil, &AppError{Status: 409, Code: 409, Reason: "task_state_changed", Message: "任务状态已变化，请刷新"}
+		}
 		return nil, errors.New("任务状态已变化，请刷新后重试")
 	}
 

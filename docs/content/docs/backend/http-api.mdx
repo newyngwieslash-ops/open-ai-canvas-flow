@@ -525,6 +525,7 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | --- | --- | --- | --- |
 | 0 | 200 | — | 成功 |
 | 400 | 400 | `invalid_argument` | 请求不合法 |
+| 400 | 400 | `task_active_limit_exceeded` | 当前账号排队/运行中的活动任务已达 `activeTaskLimit`（`POST /tasks` 与 `POST /tasks/:id/retry` 均未入队且未预占积分，可退避等待已有任务结束后重试） |
 | 401 | 401 | `unauthorized` | 未登录 |
 | 403 | 403 | `forbidden` | 无权限 |
 | 404 | 404 | `not_found` | 资源不存在 |
@@ -540,6 +541,12 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | 42901 | 429 | `rate_limited` | 请求限流（可带 Retry-After） |
 
 模型错误把已有字符串码放进 `reason`（如 `model_capability_not_supported`），`code` 仍为 400。
+
+任务提交（`POST /api/tasks`）与任务重试（`POST /api/tasks/:id/retry`）的四类失败区分：
+- `400 / code=400 / reason=task_active_limit_exceeded`：当前账号同时处于 `queued` 或 `running` 的任务已达到 `activeTaskLimit`；确定本次请求未入队且未预占积分（不承诺参考媒体上传零副作用），客户端可按有界退避等待已有任务完成后重试。
+- `429 / code=42901 / reason=rate_limited`：进入任务创建前被创建频率限制拒绝，带 `Retry-After` 响应头；确定未创建任务且未预占积分，客户端按 `Retry-After`（或默认退避）等待。
+- 其他 `400 / reason=invalid_argument`（或模型/配额/权限明确 4xx）：参数、状态或余额等确定性拒绝，不得当作容量排队自动退避重发。
+- 网络断开、超时、无响应或 `5xx`：非幂等任务创建/重试的受理结果不确定，即使 `retryable=true` 也严禁自动重放 POST，须通过任务详情/列表核对。
 
 常量：后端标准原因定义在 `backend/internal/kernel/error_codes.go`，由 `app` 和 `service` 兼容导出；前端业务模块按 `ApiError.reason` 分支。
 

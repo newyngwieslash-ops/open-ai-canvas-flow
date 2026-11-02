@@ -49,6 +49,7 @@ const (
 	ReasonStoryboardAssetBindingCapacityExceeded ErrorReason = "storyboard_asset_binding_capacity_exceeded"
 	ReasonStoryboardAssetBindingConflict         ErrorReason = "storyboard_asset_binding_conflict"
 	ReasonStoryboardAssetBindingBusy             ErrorReason = "storyboard_asset_binding_busy"
+	ReasonTaskActiveLimitExceeded                ErrorReason = "task_active_limit_exceeded"
 )
 
 func ReasonForStatus(status int) ErrorReason {

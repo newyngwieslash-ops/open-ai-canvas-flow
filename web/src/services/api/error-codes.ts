@@ -61,3 +61,9 @@ export function storyboardAssetBindingErrorMessage(reason?: string) {
         default: return "绑定操作未完成，请刷新后重试。";
     }
 }
+
+export const TASK_SUBMISSION_REASONS = {
+    activeLimitExceeded: "task_active_limit_exceeded",
+    rateLimited: "rate_limited",
+} as const;
+

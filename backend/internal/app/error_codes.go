@@ -4,11 +4,11 @@ import "yingce/backend/internal/kernel"
 
 // 错误码和原因已迁到 kernel；此处保留兼容别名。
 const (
-	CodeOK                  = kernel.CodeOK
-	CodeInvalidArgument     = kernel.CodeInvalidArgument
-	CodeUnauthorized        = kernel.CodeUnauthorized
-	CodeForbidden           = kernel.CodeForbidden
-	CodeNotFound            = kernel.CodeNotFound
+	CodeOK                                     = kernel.CodeOK
+	CodeInvalidArgument                        = kernel.CodeInvalidArgument
+	CodeUnauthorized                           = kernel.CodeUnauthorized
+	CodeForbidden                              = kernel.CodeForbidden
+	CodeNotFound                               = kernel.CodeNotFound
 	CodeConflict                               = kernel.CodeConflict
 	CodeUnprocessableEntity                    = kernel.CodeUnprocessableEntity
 	CodeTooManyRequests                        = kernel.CodeTooManyRequests
@@ -45,6 +45,7 @@ const (
 	ReasonStoryboardAssetBindingCapacityExceeded = kernel.ReasonStoryboardAssetBindingCapacityExceeded
 	ReasonStoryboardAssetBindingConflict         = kernel.ReasonStoryboardAssetBindingConflict
 	ReasonStoryboardAssetBindingBusy             = kernel.ReasonStoryboardAssetBindingBusy
+	ReasonTaskActiveLimitExceeded                = kernel.ReasonTaskActiveLimitExceeded
 )
 
 func ReasonForStatus(status int) ErrorReason {

@@ -32,7 +32,7 @@
     max-width: 100%;
     min-width: 0;
     min-height: 0;
-    grid-template-rows: minmax(0, 1fr) clamp(168px, 20vh, 210px);
+    grid-template-rows: minmax(0, 1fr) auto;
     overflow: hidden;
     background: var(--workspace-content);
 }
@@ -771,10 +771,15 @@ video.workflow-preview-media {
     background: var(--workspace-surface);
 }
 
+.workflow-shot-timeline { height: var(--workflow-timeline-height, clamp(208px, 24vh, 244px)); }
+.workflow-timeline-resizer { display: flex; height: 10px; margin-bottom: -4px; flex: 0 0 10px; cursor: row-resize; touch-action: none; user-select: none; align-items: center; justify-content: center; }
+.workflow-timeline-resizer > span { width: 36px; height: 3px; border-radius: var(--r-full); background: var(--workspace-border-strong); transition: background-color var(--motion-instant) ease-out, width var(--motion-instant) ease-out; }
+.workflow-timeline-resizer:hover > span, .workflow-timeline-resizer:focus-visible > span { width: 52px; background: var(--workspace-accent); }
+.workflow-timeline-resizer:focus-visible { outline: none; }
 .workflow-shot-timeline > header {
     display: flex;
-    min-height: 42px;
-    flex: 0 0 42px;
+    min-height: 36px;
+    flex: 0 0 36px;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
@@ -799,8 +804,8 @@ video.workflow-preview-media {
 
 .workflow-timeline-shot,
 .workflow-add-shot-card {
-    width: 184px;
-    min-width: 184px;
+    width: clamp(184px, calc((var(--workflow-timeline-height, 224px) - 56px) * 0.92), 360px);
+    min-width: clamp(184px, calc((var(--workflow-timeline-height, 224px) - 56px) * 0.92), 360px);
     overflow: hidden;
     border: 1px solid var(--workspace-border);
     border-radius: var(--r-md);
@@ -809,7 +814,8 @@ video.workflow-preview-media {
     transition: border-color var(--motion-instant) ease-out, background-color var(--motion-instant) ease-out, box-shadow var(--motion-instant) ease-out;
 }
 
-.workflow-timeline-shot { position: relative; display: flex; flex-direction: column; }
+.workflow-timeline-shot { position: relative; display: flex; flex-direction: column; gap: 5px; padding: 6px; }
+.workflow-timeline-rows { display: grid; min-height: 0; flex: 1 1 auto; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 5px; }
 
 .workflow-timeline-shot:hover,
 .workflow-timeline-shot:focus-visible { border-color: var(--workspace-border-strong); background: var(--surface-hover); }
@@ -819,8 +825,9 @@ video.workflow-preview-media {
 
 .workflow-timeline-media {
     display: grid;
-    height: 72px;
-    flex: 0 0 72px;
+    border: 1px solid var(--workspace-border);
+    border-radius: var(--r-sm);
+    flex: 1 1 auto;
     place-items: center;
     overflow: hidden;
     background: color-mix(in srgb, var(--foreground) 5%, var(--workspace-surface));
@@ -829,14 +836,16 @@ video.workflow-preview-media {
 .workflow-timeline-media img,
 .workflow-timeline-media video { width: 100%; height: 100%; object-fit: cover; }
 .workflow-timeline-media > svg { width: 20px; height: 20px; }
-.workflow-timeline-copy { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; padding: 8px 10px 34px; }
-.workflow-timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workflow-timeline-media { position: relative; min-height: 0; }
+.workflow-timeline-media.is-current-stage { border-color: color-mix(in srgb, var(--workspace-accent) 48%, var(--workspace-border)); }
+.workflow-timeline-heading { display: flex; flex: 0 0 18px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; }
+
 .workflow-timeline-heading strong { font-size: var(--fs-micro); font-weight: 700; font-variant-numeric: tabular-nums; }
 .workflow-timeline-heading b { color: var(--foreground); font-size: var(--fs-caption); font-weight: 750; font-variant-numeric: tabular-nums; }
-.workflow-timeline-title { display: block; min-height: 16px; overflow: hidden; margin-top: 5px; color: color-mix(in srgb, var(--foreground) 72%, transparent); font-size: var(--fs-label); font-style: normal; font-weight: 550; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-timeline-title { overflow: hidden; color: color-mix(in srgb, var(--foreground) 64%, transparent); font-size: var(--fs-micro); font-style: normal; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-timeline-meta { display: block; overflow: hidden; margin-top: 4px; color: color-mix(in srgb, var(--foreground) 38%, transparent); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-.workflow-timeline-status { position: absolute; right: 10px; bottom: 8px; left: 10px; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; }
-.workflow-timeline-status > span:first-child { min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--foreground) 45%, transparent); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.workflow-timeline-status { position: absolute; right: 0; bottom: 0; left: 0; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 6px; background: linear-gradient(to top, color-mix(in srgb, var(--workspace-surface-strong) 92%, #000 8%), color-mix(in srgb, var(--workspace-surface-strong) 68%, transparent)); backdrop-filter: blur(4px); }
+.workflow-timeline-status > span:first-child { min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--foreground) 78%, transparent); font-size: var(--fs-micro); font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 
 .workflow-add-shot-card {
     display: grid;
@@ -889,7 +898,7 @@ video.workflow-preview-media {
 }
 
 @media (max-width: 760px) {
-    .workflow-production-shell { grid-template-rows: minmax(0, 1fr) 148px; }
+    .workflow-production-shell { grid-template-rows: minmax(0, 1fr) 176px; }
     .workflow-production-main { display: block; overflow: hidden; }
     .workflow-shot-editor { height: 100%; }
     .workflow-preview-panel { display: none; }
@@ -899,12 +908,12 @@ video.workflow-preview-media {
     .workflow-shot-form-scroll { padding-inline: 14px; }
     .workflow-timeline-shot,
     .workflow-add-shot-card { width: 138px; min-width: 138px; }
-    .workflow-timeline-media { height: 52px; flex-basis: 52px; }
+
     .workflow-timeline-title,
     .workflow-timeline-meta,
     .workflow-timeline-status > span:first-child { display: none; }
     .workflow-timeline-copy { padding: 6px 8px 30px; }
-    .workflow-timeline-status { right: 8px; bottom: 6px; left: 8px; justify-content: flex-end; }
+    .workflow-timeline-status { justify-content: flex-end; }
     .workflow-overview-scroll { padding: 20px 16px 48px; }
 }
 
@@ -919,4 +928,65 @@ video.workflow-preview-media {
     .workflow-timeline-shot,
     .workflow-add-shot-card,
     .workflow-disclosure-chevron { transition: none; }
+}
+
+
+.workflow-chapter-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2) var(--space-3-half);
+    border-bottom: 1px solid var(--workspace-border);
+    background: var(--workspace-surface);
+}
+.workflow-chapter-actions-label {
+    font-size: var(--fs-caption);
+    color: var(--muted-foreground);
+}
+.workflow-chapter-batch-bar {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2) var(--space-3-half);
+    border-bottom: 1px solid var(--workspace-border);
+    background: var(--workspace-surface-strong);
+    font-size: var(--fs-caption);
+}
+.workflow-batch-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    max-height: min(80dvh, calc(100dvh - 160px));
+    min-height: 0;
+    overflow-y: auto;
+}
+.workflow-batch-dialog > * {
+    flex-shrink: 0;
+}
+.workflow-batch-dialog-controls {
+    max-height: 30dvh;
+    overflow-y: auto;
+}
+.workflow-batch-dialog-list {
+    min-height: min(180px, 25dvh);
+    max-height: 40dvh;
+    overflow-y: auto;
+}
+.workflow-batch-dialog footer {
+    position: sticky;
+    bottom: calc(-1 * var(--space-4));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding-block: var(--space-2);
+    background: var(--workspace-surface);
 }

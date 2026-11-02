@@ -2153,11 +2153,30 @@ paths:
     post:
       tags: [tasks]
       summary: 创建生成任务
-      description: 项目图片 input.metadata.operation 为 character_turnaround 或 project_asset_image。adoptionMode=manual|auto，缺省 auto，未知值拒绝。manual 要求 projectAssetVersionId 和 referenceSource=original|current|none，角色目标 characterAssetId，场景道具目标 projectAssetId。仅单参考单输出，服务端核实来源及参考图能力；manual 成功只保存 assetImageCandidate，不自动采用。角色生成只产生三视图。
+      description: 项目图片 input.metadata.operation 为 character_turnaround 或 project_asset_image。adoptionMode=manual|auto，缺省 auto，未知值拒绝。manual 要求 projectAssetVersionId 和 referenceSource=original|current|none，角色目标 characterAssetId，场景道具目标 projectAssetId。仅单参考单输出，服务端核实来源及参考图能力；manual 成功只保存 assetImageCandidate，不自动采用。角色生成只产生三视图。当账号排队或运行中的任务达到 activeTaskLimit 时返回 HTTP 400（code=400, reason=task_active_limit_exceeded，未入队且未预占积分）；触发创建频率限制时返回 HTTP 429（code=42901, reason=rate_limited）。
       responses:
         "200":
           $ref: "#/components/responses/Envelope"
         "400":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /tasks/{id}/retry:
+    post:
+      tags: [tasks]
+      summary: 按原任务 ID 重新入队失败或已取消任务
+      description: 仅当前用户归属且满足重试条件的 failed/cancelled 任务可重新入队。当账号排队或运行中的任务达到 activeTaskLimit 时返回 HTTP 400（code=400, reason=task_active_limit_exceeded，未入队且未预占积分）；其余参数或状态不满足时返回 HTTP 400（reason=invalid_argument）。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
           $ref: "#/components/responses/Error"
   /tasks/{id}/recover-media:
     post:
@@ -2778,6 +2797,7 @@ components:
                 - storyboard_asset_binding_capacity_exceeded
                 - storyboard_asset_binding_conflict
                 - storyboard_asset_binding_busy
+                - task_active_limit_exceeded
   responses:
     ModelQuote:
       description: 当前参数对应的费用报价，位于信封 data.quote

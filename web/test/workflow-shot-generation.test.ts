@@ -162,7 +162,9 @@ test("background generation submission returns after task creation without waiti
 
 test("image mode omits voice metadata and only previz stage appends monochrome sketch suffix", async () => {
     const workbenchSource = await Bun.file(new URL("../src/pages/projects/detail/workflow-production-workbench.tsx", import.meta.url)).text();
-    expect(workbenchSource).toContain('activeStage === "previz" ? "黑白分镜草图，清晰动作节拍，电影构图" : ""');
+    const imageGenSource = await Bun.file(new URL("../src/pages/projects/detail/workflow-image-generation.ts", import.meta.url)).text();
+    expect(workbenchSource).toContain("prepareWorkflowImageSubmission");
+    expect(imageGenSource).toContain('stage === "previz" ? "黑白分镜草图，清晰动作节拍，电影构图" : ""');
     expect(workbenchSource).toContain("resolveShotAssetMentionPrompt(basePrompt, shotAssetReferenceContext, { dialogue: values.dialogue, mode })");
 
     const domainSource = await Bun.file(new URL("../src/lib/canvas/canvas-project-domain.ts", import.meta.url)).text();
@@ -205,4 +207,10 @@ test("image mode omits voice metadata and only previz stage appends monochrome s
     expect(imagePrompt).toContain("镜头台词：张天昊：今日试剑。");
     expect(imagePrompt).not.toContain("声音参考");
     expect(imagePrompt).not.toContain("声音画像");
+
+    expect(workbenchSource).toContain('className="workflow-timeline-rows"');
+    expect(workbenchSource).toContain('{ type: "storyboard", label: "分镜图", artifact: storyboard }');
+    expect(workbenchSource).toContain('{ type: "action_board", label: "动作预演", artifact: previz }');
+    expect(workbenchSource).not.toContain("const preview = video?.resourceId ? video : previz?.resourceId ? previz : storyboard?.resourceId");
+    expect(workbenchSource).toContain('className="workflow-timeline-resizer"');
 });

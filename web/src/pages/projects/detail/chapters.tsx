@@ -57,6 +57,8 @@ import { WorkspaceState } from "@/components/layout/workspace-state";
 import { resolveProjectCanvasStyle } from "@/components/canvas/canvas-style-picker-modal";
 import { decodeNovelText, splitTextIntoChapters } from "@/lib/canvas/canvas-document";
 import { navigateToSettings } from "@/lib/settings-navigation";
+import { getActiveUserScope } from "@/lib/user-scope";
+import { useUserStore } from "@/stores/use-user-store";
 import {
     createProjectAssetCandidates,
     createProjectUnit,
@@ -71,7 +73,7 @@ import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { listGenerationTasks, queryGenerationTask, type GenerationTask } from "@/services/api/task-center";
 
 import { formatCount, formatTime, statusLabel, type ProjectDetailViewProps } from "./shared";
-import { chapterStoryboardCharacters, chapterStoryboardReplaceImpact, saveGeneratedChapterStoryboard } from "./chapter-storyboard-production";
+import { chapterStoryboardCharacters, chapterStoryboardReplaceImpact, saveGeneratedChapterStoryboardWithBatchGuard } from "./chapter-storyboard-production";
 import { useGeneratedBindingSelection } from "./chapter-generated-binding-selection";
 import { useChapterAssetCandidates } from "./chapter-asset-candidates";
 import { chapterAssetsFromGenerationTask, chapterStoryboardAssetScopeInfo, chapterStoryboardFromGenerationTask, chapterTaskIdentity, extractChapterAssets, generateChapterStoryboard, type ChapterStoryboardAssetScope } from "./project-chapter-ai";
@@ -94,6 +96,21 @@ export default function ProjectChaptersView({ detail, refreshProject }: ProjectD
     const { chapterId = "" } = useParams();
     const initialSelectedId = detail.units.some((unit) => unit.id === chapterId) ? chapterId : detail.units[0]?.id || "";
     const [selectedId, setSelectedId] = useState(initialSelectedId);
+    const ownerId = useUserStore(state => state.user?.id);
+    const saveEpochRef = useRef(0);
+    useEffect(() => {
+        saveEpochRef.current += 1;
+        return () => { saveEpochRef.current += 1; };
+    }, [detail.project.id, ownerId]);
+    const captureSaveGuard = () => {
+        const epoch = saveEpochRef.current;
+        const owner = getActiveUserScope();
+        return () => {
+            if (saveEpochRef.current !== epoch || getActiveUserScope() !== owner || useUserStore.getState().user?.id !== owner) {
+                throw new DOMException("Aborted", "AbortError");
+            }
+        };
+    };
     const [createOpen, setCreateOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
@@ -376,8 +393,8 @@ export default function ProjectChaptersView({ detail, refreshProject }: ProjectD
         refreshProject();
         return created.candidates.length;
     };
-    const storeGeneratedStoryboard = async (unitId: string, result: ReturnType<typeof chapterStoryboardFromGenerationTask>) => {
-        const saved = await saveGeneratedChapterStoryboard(detail, unitId, result, generatedBindingSelection.select);
+    const storeGeneratedStoryboard = async (unitId: string, result: ReturnType<typeof chapterStoryboardFromGenerationTask>, assertCurrent: () => void) => {
+        const saved = await saveGeneratedChapterStoryboardWithBatchGuard(detail, unitId, result, generatedBindingSelection.select, assertCurrent);
         await Promise.all([
             queryClient.invalidateQueries({ queryKey: ["project", detail.project.id] }),
             queryClient.invalidateQueries({ queryKey: ["projects"] }),
@@ -427,6 +444,7 @@ export default function ProjectChaptersView({ detail, refreshProject }: ProjectD
         setStoryboardOpen(false);
         beginChapterOperation(unit.id, "storyboard");
         message.info("分镜生成任务已开始，可继续编辑或切换章节");
+        const assertSaveCurrent = captureSaveGuard();
         try {
             const result = await generateChapterStoryboard({
                 projectId: detail.project.id,
@@ -446,7 +464,7 @@ export default function ProjectChaptersView({ detail, refreshProject }: ProjectD
                 skills: availableSkills,
                 selectedSkillIds,
             }, { onTaskUpdate: (task) => updateChapterOperation(unit.id, "storyboard", task) });
-            const shotCount = await storeGeneratedStoryboard(unit.id, result);
+            const shotCount = await storeGeneratedStoryboard(unit.id, result, assertSaveCurrent);
             message.success(result.skillCount ? `已生成 ${shotCount} 个分镜，并应用 ${result.skillCount} 个技能` : `已生成 ${shotCount} 个分镜`);
             navigate(`/projects/${detail.project.id}/workflow/${unit.id}/storyboard`);
         } catch (error) {
@@ -490,12 +508,13 @@ export default function ProjectChaptersView({ detail, refreshProject }: ProjectD
                 continue;
             }
             recoveringTaskIdsRef.current.add(task.id);
+            const assertSaveCurrent = captureSaveGuard();
             void queryGenerationTask(task.id).then(async (completedTask) => {
                 if (kind === "characters") {
                     await storeExtractedAssets(taskChapterId, chapterAssetsFromGenerationTask(completedTask));
                     message.success("已恢复刷新前完成的章节资产提取结果");
                 } else {
-                    await storeGeneratedStoryboard(taskChapterId, chapterStoryboardFromGenerationTask(completedTask));
+                    await storeGeneratedStoryboard(taskChapterId, chapterStoryboardFromGenerationTask(completedTask), assertSaveCurrent);
                     message.success("已恢复刷新前完成的章节分镜");
                 }
                 recoveredTaskIdsRef.current.add(task.id);
