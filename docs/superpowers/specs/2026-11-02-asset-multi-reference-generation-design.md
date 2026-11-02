@@ -2,6 +2,8 @@
 comet_change: add-asset-multi-reference-generation
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-02-add-asset-multi-reference-generation
+status: final
 ---
 
 # 同一资产有序多参考图版本化管理与单候选生成技术设计

@@ -2,6 +2,7 @@
 change: add-asset-multi-reference-generation
 design-doc: docs/superpowers/specs/2026-11-02-asset-multi-reference-generation-design.md
 base-ref: e2f6656b802b9f76cac1e8a1b3ed691674045e8c
+archived-with: 2026-11-02-add-asset-multi-reference-generation
 ---
 
 # 同一资产多参考图版本化管理与单候选生成实施计划
