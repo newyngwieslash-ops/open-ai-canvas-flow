@@ -1,0 +1,16 @@
+{
+  "change": "rename-product-brand-to-yuanming-zhenyue",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "61e6c25ed876253ab147a4a239712342654767b1defa6ef450311945b9456055",
+  "files": [
+    { "path": "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/proposal.md", "sha256": "4d064b1a365df5708c65a7e4628602c638690c34234425fdfc391ca0305ad42d" },
+    { "path": "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/design.md", "sha256": "c4d45001f1c51ef9760982434861dd9727912c845a607f78a80da1eaf19a9da3" },
+    { "path": "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/tasks.md", "sha256": "3f45ff5fa011e4820f49c62d50006c8f0db039cc91a5c948f477a63165b8afb0" },
+    { "path": "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/.openspec.yaml", "sha256": "c5936a7e8ac90455175dd905c9e8fb9d33cf82476be795f24133b51ef95c3d96" },
+    { "path": "docs/openspec/changes/rename-product-brand-to-yuanming-zhenyue/specs/product-brand-identity/spec.md", "sha256": "8a48f996fa57f0c643f1af3839ecacf579dfc494b1aa437aecd1f78bb3bef81e" }
+  ]
+}
