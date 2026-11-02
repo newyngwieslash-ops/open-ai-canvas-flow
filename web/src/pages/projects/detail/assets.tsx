@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Dropdown, Form, Input, Modal, Popconfirm, Tabs, type FormInstance } from "antd";
 import { Box, Check, ChevronDown, Download, FileText, FolderOpen, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, MoveRight, Music2, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound, Video, VolumeX } from "lucide-react";
@@ -7,6 +7,7 @@ import { WorkspaceState } from "@/components/layout/workspace-state";
 import { PaginationBar } from "@/components/layout/workspace-page";
 import { AssetMediaPreview } from "@/components/asset-media-preview";
 import { CachedResourceImage } from "@/components/cached-resource-image";
+import { AppModal } from "@/components/ui/product/app-modal";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
 import { AssetLibraryPickerModal, type AssetLibraryPickerItem } from "@/components/assets/asset-library-picker-modal";
 import { useExternalAssetSources } from "@/hooks/use-external-asset-sources";
@@ -26,6 +27,7 @@ import {
     createProjectAssetVersion,
     createProjectCharacter,
     deleteProjectAssetFolder,
+    getProjectCharacter,
     linkProjectAsset,
     listProjectAssetCandidates,
     listProjectAssetFolders,
@@ -53,19 +55,16 @@ import { ProjectProfileAnalysisModal } from "./project-profile-analysis-modal";
 import { projectVisualTaskAssetId } from "./project-visual-asset";
 import { listGenerationTasks } from "@/services/api/task-center";
 import { ProjectVisualAssetCard } from "./project-visual-asset-card";
+// 角色字段清单与建议类型共用页面私有纯模块，保证 UI 显示与建议校验使用同一份字段列表。
+// CharacterForm 也以模块定义为准（M5 合并：消除与本地重复的两份表单类型）。
+import { characterFields, type CharacterForm } from "./character-script-suggestions";
+import { createRunningChannel, shouldApplySupplementFetch } from "./character-suggestion-session";
+import { CharacterSuggestionPanel, asSuggestionForm, type CharacterSuggestionPanelApi } from "./character-suggestion-panel";
 import { categoryLabels, categoryLabel, mediaLabel, StatusPill, formatTime, textValue, type ProjectDetailViewProps } from "./shared";
 
 const categories = ["all", ...ASSET_CATEGORIES];
 const ALL_FOLDERS = "__all_folders__";
 const pickerCategoryLabels = { all: "全部素材", ...categoryLabels };
-const characterFields = [
-    ["role", "剧情定位与人物关系"], ["aliases", "别名"], ["appearance", "稳定外貌"], ["physique", "身高、体型与体态"],
-    ["clothing", "默认服装造型"], ["personality", "性格与表演基线"], ["props", "固定道具"],
-    ["consistencyPrompt", "跨镜头一致性约束"], ["multiViewPrompt", "三视图补充约束"],
-    ["voiceLanguage", "语言与口音"], ["voiceAge", "声音年龄感"], ["voiceTimbre", "音色气质"],
-] as const;
-
-type CharacterForm = { name: string } & Record<(typeof characterFields)[number][0], string>;
 
 export default function ProjectAssetsView({ detail, refreshProject }: ProjectDetailViewProps) {
     const { message, modal } = App.useApp();
@@ -413,6 +412,32 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
         const definition = asset === "new" ? {} : asset.character?.definition || {};
         form.setFieldsValue({ name: asset === "new" ? "" : asset.title, ...Object.fromEntries(characterFields.map(([key]) => [key, fieldValue(definition[key])])) } as CharacterForm);
     };
+    // 编辑器弹窗打开状态与编辑对象的 ref 镜像：补充 GET 是异步流程，await 期间用户可能
+    // 关窗或切换编辑对象（Fix Round 1 · Important 2）。resolve 后经 shouldApplySupplementFetch
+    // （已测纯判定）核对，弹窗已关闭或编辑对象被切换则丢弃结果，不自动重开弹窗——
+    // 与编辑器 requestSave 的 openRef 防护同一层语义（design §7）。
+    const editorOpenRef = useRef(false);
+    const editorAssetIdRef = useRef("");
+    useEffect(() => {
+        editorOpenRef.current = Boolean(editorAsset);
+        editorAssetIdRef.current = editorAsset === "new" ? "new" : (editorAsset?.id || "");
+    }, [editorAsset]);
+    // 补充已有角色（Task 4 / design §7）：读取目标角色最新版本后进入原编辑模式。
+    // 表单回填走 openCharacterEditor（既有值原样保留）；保存经 saveCharacter 自动走
+    // updateProjectCharacter（editorAsset 非 "new"）。不合并候选、不自动覆盖既有值。
+    const supplementCharacter = async (assetId: string) => {
+        // 发起时弹窗必然打开（候选来自弹窗内建议面板）；记录发起上下文供 resolve 后核对。
+        const openedFromNew = editorAssetIdRef.current === "new";
+        try {
+            const latest = await getProjectCharacter(detail.project.id, assetId);
+            if (!shouldApplySupplementFetch({ modalOpen: editorOpenRef.current, editorAssetId: editorAssetIdRef.current, requestedAssetId: assetId, openedFromNew })) return;
+            setPreviewAsset(null);
+            openCharacterEditor(latest.asset);
+        } catch (error) {
+            if (!editorOpenRef.current) return; // 关窗后到达的失败同样不弹任何提示
+            message.error(error instanceof Error ? error.message : "角色读取失败，无法补充该角色");
+        }
+    };
     const openImages = (asset: ProjectAsset) => {
         if (asset.category === "character" || asset.category === "environment" || asset.category === "prop") setImageStudio({ asset, mode: "direct" });
         else setImageAsset(asset);
@@ -552,7 +577,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
             <ProjectAssetPreviewModal asset={previewAsset} personalAsset={previewAsset && !previewAsset.visual ? personalAssets.find((item) => item.id === previewAsset.id) : undefined} onClose={() => setPreviewAsset(null)} onDownload={() => previewAsset && downloadPreviewAsset(previewAsset)} onReplaceImage={() => { if (!previewAsset || !assetSupportsImageBinding(previewAsset)) return; setPreviewAsset(null); openImages(previewAsset); }} />
             {analysisAsset ? <ProjectProfileAnalysisModal project={detail.project} asset={analysisAsset} onClose={() => setAnalysisAsset(null)} onSaved={refreshProject} /> : null}
             {imageStudio ? <ProjectAssetImageModal key={`${detail.project.id}:${imageStudio.asset?.id || "new"}`} project={detail.project} asset={imageStudio.asset} folderId={folderId === ALL_FOLDERS ? undefined : folderId || undefined} initialMode={imageStudio.mode} onClose={() => setImageStudio(null)} onSaved={refreshProject} /> : null}
-            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} form={form} loading={saveCharacter.isPending} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} />
+            <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} projectId={detail.project.id} editorAssetId={editorAsset === "new" ? "new" : (editorAsset?.id || "")} form={form} loading={saveCharacter.isPending} messageApi={message} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} onSupplementCharacter={(assetId) => void supplementCharacter(assetId)} />
             <Modal className="workspace-modal workspace-modal-compact" title={folderEditor?.folder ? "重命名文件夹" : "新建文件夹"} open={Boolean(folderEditor)} okText={folderEditor?.folder ? "保存" : "创建"} cancelText="取消" okButtonProps={{ loading: createFolderMutation.isPending || renameFolderMutation.isPending }} onCancel={() => { setFolderEditor(null); setFolderName(""); }} onOk={saveFolder}>
                 <div className="grid gap-2"><span className="text-[var(--fs-label)] text-foreground/48">位置：{folderEditor ? projectAssetFolderParentLabel(assetFolders, folderEditor.parentId) : ""}</span><Input autoFocus maxLength={60} value={folderName} placeholder="输入文件夹名称" onChange={(event) => setFolderName(event.target.value)} onPressEnter={saveFolder} /></div>
             </Modal>
@@ -755,14 +780,89 @@ function projectAssetFolderDescendantAssetCount(folders: ProjectAssetFolder[], f
     return Array.from(descendantIds).reduce((total, id) => total + (folderCounts[id] || 0), 0);
 }
 
-function CharacterEditorModal({ open, editing, form, loading, onClose, onSave }: { open: boolean; editing: boolean; form: FormInstance<CharacterForm>; loading: boolean; onClose: () => void; onSave: () => void }) {
+function CharacterEditorModal({ open, editing, projectId, editorAssetId, form, loading, onClose, onSave, onSupplementCharacter, messageApi }: {
+    open: boolean;
+    editing: boolean;
+    projectId: string;
+    editorAssetId: string;
+    form: FormInstance<CharacterForm>;
+    loading: boolean;
+    onClose: () => void;
+    onSave: () => void;
+    // 用户选择"补充此角色"：父组件 getProjectCharacter 读最新版本并切换到原编辑模式。
+    onSupplementCharacter: (assetId: string) => void;
+    messageApi: { warning: (content: string) => void };
+}) {
+    // 建议面板运行时挂载的 API：保存门禁（未开启建议流程时放行原保存）、保存前复查
+    // （重名/来源过期，Task 4）与关闭时会话失效。
+    const panelApiRef = useRef<CharacterSuggestionPanelApi>({ reviewGate: () => "", preSaveCheck: async () => "", invalidateSession: () => undefined });
+    // 运行通知通道由编辑器创建并持有：面板经 api 对象拿到同一引用后只写快照。
+    // 订阅绑在通道上，面板 api 对象替换（useMemo 依赖翻转）不会孤儿化订阅——
+    // 旧实现把回调挂在面板对象上，第一次 api 替换后保存禁用通知即丢失（Fix Round 2）。
+    const runningChannelRef = useRef(createRunningChannel());
+    // 建议面板运行中提取/分析时禁用保存（design §4「运行中禁用创建/保存」）。
+    const runningSubscribe = useCallback((onStoreChange: () => void) => {
+        return runningChannelRef.current.subscribe(onStoreChange);
+    }, []);
+    const runningSnapshot = useSyncExternalStore(runningSubscribe, () => runningChannelRef.current.getRunning());
+    // 弹窗打开状态 ref：保存前复查是异步流程，await 期间用户可能关闭弹窗；
+    // 关闭后不再执行保存（不在弹窗已关闭后自动弹出并写入，design §7）。
+    const openRef = useRef(open);
+    useEffect(() => {
+        openRef.current = open;
+        if (open) return;
+        // 弹窗关闭：失效当前建议会话（守卫 + abort），旧响应不再应用（design §5）。
+        panelApiRef.current.invalidateSession();
+    }, [open]);
+    const requestSave = () => {
+        const blocked = panelApiRef.current.reviewGate();
+        if (blocked) {
+            messageApi.warning(blocked);
+            return;
+        }
+        void (async () => {
+            // 保存前复查：重新查重 + 来源新鲜度。拦截文案非空 → 回审核，不写入。
+            const preSaveBlock = await panelApiRef.current.preSaveCheck();
+            if (!openRef.current) return; // await 期间弹窗已关闭：不自动弹出、不写入
+            if (preSaveBlock) {
+                messageApi.warning(preSaveBlock);
+                return;
+            }
+            onSave();
+        })();
+    };
+    const savingDisabled = runningSnapshot;
     const field = (key: CharacterFormKey) => characterFields.find(([name]) => name === key)!;
     const textArea = (key: CharacterFormKey, rows = 3) => <Form.Item name={key} label={field(key)[1]}><Input.TextArea rows={rows} placeholder={key === "appearance" ? "先描述用户能看到的稳定特征…" : undefined} /></Form.Item>;
     const input = (key: CharacterFormKey) => <Form.Item name={key} label={field(key)[1]}><Input /></Form.Item>;
-    return <Modal className="workspace-modal workspace-modal-wide library-modal" title={null} open={open} forceRender okText={editing ? "保存角色设定" : "创建角色卡"} cancelText="取消" okButtonProps={{ loading }} onCancel={onClose} onOk={onSave} styles={{ body: { paddingTop: 0 } }}>
-        <div className="mb-1 pb-4"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
-        <Form form={form} layout="vertical" requiredMark={false} className="pt-2"><Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item><Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} /></Form>
-    </Modal>;
+    return (
+        <AppModal
+            flush
+            className="workspace-modal workspace-modal-wide library-modal"
+            title={null}
+            open={open}
+            forceRender
+            onCancel={onClose}
+            styles={{ body: { minHeight: 0, flex: 1 }, header: { margin: 0 }, footer: { margin: 0 } }}
+            footer={(
+                <div className="flex items-center justify-end gap-2 px-6 py-4" style={{ borderTop: "1px solid var(--workspace-border)" }}>
+                    <Button onClick={onClose}>取消</Button>
+                    <Button type="primary" loading={loading} disabled={savingDisabled} onClick={requestSave}>{editing ? "保存角色设定" : "创建角色卡"}</Button>
+                </div>
+            )}
+        >
+            <div className="flex min-h-0 flex-col" style={{ height: "min(860px, calc(100dvh - 120px))" }}>
+                <div className="shrink-0 px-6 pt-5 pb-1"><div className="text-[var(--fs-label)] font-medium text-foreground/52">角色设定</div><h2 className="mt-1 text-xl font-semibold">{editing ? "调整角色设定" : "建立一张角色卡"}</h2></div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6" style={{ scrollbarGutter: "stable" }}>
+                    <CharacterSuggestionPanel projectId={projectId} editorAssetId={editorAssetId} form={asSuggestionForm(form)} watchForm={form} runningChannel={runningChannelRef.current} onSupplementCharacter={onSupplementCharacter} onApiReady={(api) => { panelApiRef.current = api; }} />
+                    <Form form={form} layout="vertical" requiredMark={false} className="pt-2">
+                        <Form.Item name="name" label="角色名称" rules={[{ required: true, message: "请输入角色名称" }]}><Input size="large" placeholder="例如：林默" /></Form.Item>
+                        <Tabs items={[{ key: "identity", label: "身份与外观", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{input("role")}{input("aliases")}{textArea("appearance", 4)}{input("physique")}{input("clothing")}{input("props")}{textArea("consistencyPrompt", 4)}{textArea("multiViewPrompt", 3)}</div> }, { key: "performance", label: "表演与声音", forceRender: true, children: <div className="grid gap-x-5 sm:grid-cols-2">{textArea("personality", 4)}{input("voiceLanguage")}{input("voiceAge")}{input("voiceTimbre")}</div> }]} />
+                    </Form>
+                </div>
+            </div>
+        </AppModal>
+    );
 }
 
 type CharacterFormKey = (typeof characterFields)[number][0];
