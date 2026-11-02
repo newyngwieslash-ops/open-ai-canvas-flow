@@ -398,10 +398,51 @@ function clamp(value: number, min: number, max: number) {
     return Math.min(Math.max(value, min), max);
 }
 
+type AlignmentPoint = { value: number; order: number };
+
 export type NodeAlignmentContext = {
     movingBounds: { left: number; top: number; right: number; bottom: number };
-    targets: Array<{ x: number[]; y: number[] }>;
+    x: AlignmentPoint[][];
+    y: AlignmentPoint[][];
 };
+
+function nearestAlignmentPoint(points: AlignmentPoint[], value: number, threshold: number) {
+    let low = 0;
+    let high = points.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (points[middle].value < value) low = middle + 1;
+        else high = middle;
+    }
+    let best: { delta: number; point: AlignmentPoint } | undefined;
+    for (const index of [low - 1, low]) {
+        const point = points[index];
+        if (!point) continue;
+        const delta = point.value - value;
+        if (Math.abs(delta) > threshold) continue;
+        if (!best || Math.abs(delta) < Math.abs(best.delta) || (Math.abs(delta) === Math.abs(best.delta) && point.order < best.point.order)) best = { delta, point };
+    }
+    return best;
+}
+
+function buildAlignmentTables(targets: Array<{ x: number[]; y: number[] }>, axis: "x" | "y") {
+    return [0, 1, 2].map((anchorIndex) => {
+        const points = targets.map((target, nodeOrder) => ({ value: target[axis][anchorIndex], order: nodeOrder * 3 + anchorIndex }))
+            .filter((point) => Number.isFinite(point.value))
+            .sort((a, b) => a.value - b.value || a.order - b.order);
+        return points.filter((point, index) => index === 0 || point.value !== points[index - 1].value);
+    });
+}
+
+function resolveAlignmentAxis(tables: AlignmentPoint[][], values: number[], threshold: number) {
+    let best: ReturnType<typeof nearestAlignmentPoint>;
+    for (let index = 0; index < 3; index += 1) {
+        const candidate = nearestAlignmentPoint(tables[index], values[index], threshold);
+        if (!candidate) continue;
+        if (!best || Math.abs(candidate.delta) < Math.abs(best.delta) || (Math.abs(candidate.delta) === Math.abs(best.delta) && candidate.point.order < best.point.order)) best = candidate;
+    }
+    return best;
+}
 
 export function createNodeAlignmentContext(nodes: CanvasNodeData[], initialPositions: Array<{ id: string; x: number; y: number }>): NodeAlignmentContext | null {
     const movingIds = new Set(initialPositions.map((item) => item.id));
@@ -424,7 +465,7 @@ export function createNodeAlignmentContext(nodes: CanvasNodeData[], initialPosit
             y: [node.position.y, node.position.y + node.height / 2, node.position.y + node.height],
         }];
     });
-    return { movingBounds: { left, top, right, bottom }, targets };
+    return { movingBounds: { left, top, right, bottom }, x: buildAlignmentTables(targets, "x"), y: buildAlignmentTables(targets, "y") };
 }
 
 export function calculateNodeAlignment(context: NodeAlignmentContext | null, rawOffset: Position, threshold: number) {
@@ -432,31 +473,11 @@ export function calculateNodeAlignment(context: NodeAlignmentContext | null, raw
     const { left, top, right, bottom } = context.movingBounds;
     const movingX = [left + rawOffset.x, (left + right) / 2 + rawOffset.x, right + rawOffset.x];
     const movingY = [top + rawOffset.y, (top + bottom) / 2 + rawOffset.y, bottom + rawOffset.y];
-    let bestXDelta: number | undefined;
-    let bestXGuide: number | undefined;
-    let bestYDelta: number | undefined;
-    let bestYGuide: number | undefined;
-    context.targets.forEach(({ x: targetsX, y: targetsY }) => {
-        movingX.forEach((value, anchorIndex) => {
-            const target = targetsX[anchorIndex];
-            const delta = target - value;
-            if (Math.abs(delta) <= threshold && (bestXDelta === undefined || Math.abs(delta) < Math.abs(bestXDelta))) {
-                bestXDelta = delta;
-                bestXGuide = target;
-            }
-        });
-        movingY.forEach((value, anchorIndex) => {
-            const target = targetsY[anchorIndex];
-            const delta = target - value;
-            if (Math.abs(delta) <= threshold && (bestYDelta === undefined || Math.abs(delta) < Math.abs(bestYDelta))) {
-                bestYDelta = delta;
-                bestYGuide = target;
-            }
-        });
-    });
+    const x = resolveAlignmentAxis(context.x, movingX, threshold);
+    const y = resolveAlignmentAxis(context.y, movingY, threshold);
     return {
-        offset: { x: rawOffset.x + (bestXDelta || 0), y: rawOffset.y + (bestYDelta || 0) },
-        guides: { vertical: bestXGuide, horizontal: bestYGuide },
+        offset: { x: rawOffset.x + (x?.delta || 0), y: rawOffset.y + (y?.delta || 0) },
+        guides: { vertical: x?.point.value, horizontal: y?.point.value },
     };
 }
 

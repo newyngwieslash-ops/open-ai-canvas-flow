@@ -1,14 +1,19 @@
 // @ 引用候选菜单：分组列表、预览与定位。
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
-import { type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState } from "react";
+import { type MouseEvent, type PointerEvent, type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { type AssetCategory } from "@/stores/use-asset-store";
 import { ASSET_CATEGORY_LABELS } from "@/lib/asset-category";
+import { CachedResourceImage } from "@/components/cached-resource-image";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ChevronRight, FileText, Folder, Image as ImageIcon, Music2, Pencil, Search, UserRound, Video, Workflow } from "lucide-react";
 import { CanvasNodeType } from "@/types/canvas";
 import { primeVideoPreviewFrame } from "./canvas-mention-chips";
 import { pointForOffset } from "./canvas-mention-editable";
+
+const VIRTUAL_MENTION_LIST_THRESHOLD = 80;
+const VIRTUAL_MENTION_ROW_HEIGHT = 44;
 
 export function MentionMenu({
     anchor,
@@ -36,6 +41,7 @@ export function MentionMenu({
     onSelect: (reference: CanvasResourceReference) => void;
 }) {
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
     const selectedRef = useRef(false);
     const [category, setCategory] = useState<AssetCategory | null>(null);
     const [position, setPosition] = useState(() => mentionMenuPosition(anchor, cursorOffset, preferredWidth));
@@ -117,9 +123,9 @@ export function MentionMenu({
                     }}
                 />
             </div>
-            <div className="canvas-resource-mention-scroll thin-scrollbar">
+            <div ref={scrollRef} className="canvas-resource-mention-scroll thin-scrollbar">
                 {query ? (
-                    <MentionReferenceList references={visibleReferences} activeReferenceId={activeReferenceId} onSelect={selectReference} />
+                    <MentionReferenceList references={visibleReferences} activeReferenceId={activeReferenceId} scrollParentRef={scrollRef} onSelect={selectReference} />
                 ) : category ? (
                     <>
                         <button type="button" className="canvas-resource-mention-back" onClick={() => setCategory(null)}>
@@ -127,7 +133,7 @@ export function MentionMenu({
                             <span>{ASSET_CATEGORY_LABELS[category]}</span>
                             <small>{visibleReferences.length}</small>
                         </button>
-                        <MentionReferenceList references={visibleReferences} activeReferenceId={activeReferenceId} onSelect={selectReference} />
+                        <MentionReferenceList references={visibleReferences} activeReferenceId={activeReferenceId} scrollParentRef={scrollRef} onSelect={selectReference} />
                     </>
                 ) : (
                     <>
@@ -137,7 +143,7 @@ export function MentionMenu({
                                     <span>画布节点</span>
                                     <small>{connectedNodes.length}</small>
                                 </h4>
-                                <MentionReferenceList references={connectedNodes} activeReferenceId={activeReferenceId} onSelect={selectReference} />
+                                <MentionReferenceList references={connectedNodes} activeReferenceId={activeReferenceId} scrollParentRef={scrollRef} onSelect={selectReference} />
                             </section>
                         ) : null}
                         {skillReferences.length ? (
@@ -146,7 +152,7 @@ export function MentionMenu({
                                     <span>技能库</span>
                                     <small>{skillReferences.length}</small>
                                 </h4>
-                                <MentionReferenceList references={skillReferences} activeReferenceId={activeReferenceId} onSelect={selectReference} />
+                                <MentionReferenceList references={skillReferences} activeReferenceId={activeReferenceId} scrollParentRef={scrollRef} onSelect={selectReference} />
                             </section>
                         ) : null}
                         {categoryItems.length ? (
@@ -173,21 +179,46 @@ export function MentionMenu({
     );
 }
 
-export function MentionReferenceList({ references, activeReferenceId, onSelect }: { references: CanvasResourceReference[]; activeReferenceId?: string; onSelect: (reference: CanvasResourceReference) => void }) {
+export function MentionReferenceList({
+    references,
+    activeReferenceId,
+    scrollParentRef,
+    onSelect,
+}: {
+    references: CanvasResourceReference[];
+    activeReferenceId?: string;
+    scrollParentRef?: RefObject<HTMLDivElement | null>;
+    onSelect: (reference: CanvasResourceReference) => void;
+}) {
     const activeRef = useRef<HTMLButtonElement | null>(null);
+    const virtualized = references.length >= VIRTUAL_MENTION_LIST_THRESHOLD && Boolean(scrollParentRef);
+    const virtualizer = useVirtualizer({
+        count: virtualized ? references.length : 0,
+        getScrollElement: () => scrollParentRef?.current ?? null,
+        estimateSize: () => VIRTUAL_MENTION_ROW_HEIGHT,
+        overscan: 8,
+        initialRect: { width: 320, height: 280 },
+    });
 
     useLayoutEffect(() => {
+        if (!activeReferenceId) return;
+        if (virtualized) {
+            const index = references.findIndex((item) => item.id === activeReferenceId);
+            if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
+            return;
+        }
         activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }, [activeReferenceId]);
+    }, [activeReferenceId, references, virtualized, virtualizer]);
 
     if (!references.length) return <div className="canvas-resource-mention-empty">没有匹配的引用</div>;
-    return references.map((reference) => (
+
+    const renderRow = (reference: CanvasResourceReference, isActive: boolean, ref?: RefObject<HTMLButtonElement | null>) => (
         <button
             key={reference.id}
-            ref={reference.id === activeReferenceId ? activeRef : null}
+            ref={ref}
             type="button"
-            className={`canvas-resource-mention-item ${reference.kind === "skill" ? "is-skill" : ""} ${reference.id === activeReferenceId ? "is-active" : ""}`}
-            aria-selected={reference.id === activeReferenceId}
+            className={`canvas-resource-mention-item ${reference.kind === "skill" ? "is-skill" : ""} ${isActive ? "is-active" : ""}`}
+            aria-selected={isActive}
             onPointerDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -199,7 +230,7 @@ export function MentionReferenceList({ references, activeReferenceId, onSelect }
                 onSelect(reference);
             }}
         >
-            <ReferencePreview reference={reference} />
+            <ReferencePreview reference={reference} active={isActive} />
             <span className="canvas-resource-mention-copy">
                 <span className="canvas-resource-mention-title-row">
                     <strong title={reference.label}>{reference.label}</strong>
@@ -220,16 +251,48 @@ export function MentionReferenceList({ references, activeReferenceId, onSelect }
                 ) : null}
             </span>
         </button>
-    ));
+    );
+
+    if (virtualized) {
+        const items = virtualizer.getVirtualItems();
+        return (
+            <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+                {items.map((item) => {
+                    const reference = references[item.index];
+                    if (!reference) return null;
+                    return (
+                        <div key={reference.id} data-index={item.index} ref={virtualizer.measureElement} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${item.start}px)` }}>
+                            {renderRow(reference, reference.id === activeReferenceId)}
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+
+    return references.map((reference) => renderRow(reference, reference.id === activeReferenceId, reference.id === activeReferenceId ? activeRef : undefined));
 }
 
-export function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
-    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-image" />;
+export function ReferencePreview({ reference, active = false }: { reference: CanvasResourceReference; active?: boolean }) {
+    const Icon = reference.sourceType === CanvasNodeType.Drawing ? Pencil : reference.kind === "character" ? UserRound : reference.kind === "audio" ? Music2 : reference.kind === "video" ? Video : reference.kind === "image" ? ImageIcon : FileText;
+    const fallback = (
+        <span className="canvas-resource-mention-preview is-fallback">
+            <Icon aria-hidden />
+        </span>
+    );
+    if (reference.kind === "image" && (reference.storageKey || reference.previewUrl)) {
+        return <CachedResourceImage storageKey={reference.storageKey} src={reference.previewUrl} variant="thumbnail" fallback={fallback} alt="" className="canvas-resource-mention-preview is-image" />;
+    }
+    if (reference.kind === "video" && reference.previewStorageKey) {
+        return <CachedResourceImage storageKey={reference.previewStorageKey} src={reference.previewUrl} variant="thumbnail" fallback={fallback} alt="" className="canvas-resource-mention-preview is-video" loading="lazy" decoding="async" />;
+    }
     if (reference.kind === "video" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-video" loading="lazy" decoding="async" />;
-    if (reference.kind === "video" && reference.mediaUrl) {
+    if (reference.kind === "video" && reference.mediaUrl && active) {
         return <video src={reference.mediaUrl} aria-hidden="true" muted playsInline preload="metadata" className="canvas-resource-mention-preview is-video" onLoadedMetadata={(event) => primeVideoPreviewFrame(event.currentTarget)} />;
     }
-    if (reference.kind === "character" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-character" />;
+    if (reference.kind === "character" && (reference.storageKey || reference.previewUrl)) {
+        return <CachedResourceImage storageKey={reference.storageKey} src={reference.previewUrl} variant="thumbnail" fallback={fallback} alt="" className="canvas-resource-mention-preview is-character" />;
+    }
     if (reference.kind === "skill") {
         return (
             <span className="canvas-resource-mention-preview is-skill">
@@ -237,12 +300,7 @@ export function ReferencePreview({ reference }: { reference: CanvasResourceRefer
             </span>
         );
     }
-    const Icon = reference.sourceType === CanvasNodeType.Drawing ? Pencil : reference.kind === "character" ? UserRound : reference.kind === "audio" ? Music2 : reference.kind === "video" ? Video : reference.kind === "image" ? ImageIcon : FileText;
-    return (
-        <span className="canvas-resource-mention-preview is-fallback">
-            <Icon aria-hidden />
-        </span>
-    );
+    return fallback;
 }
 
 export type MentionAnchorRect = Pick<DOMRect, "left" | "right" | "top" | "bottom" | "width" | "height">;

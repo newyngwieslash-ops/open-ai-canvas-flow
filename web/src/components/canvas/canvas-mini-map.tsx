@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isFrameNode, visibleCanvasMinimapNodes } from "@/lib/canvas/canvas-frame";
+import { retainCanvasLayoutNodes } from "@/lib/canvas/canvas-layout-snapshot";
 import { subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/types/canvas";
@@ -22,11 +23,18 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
     const theme = canvasThemes[useActiveTheme()];
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const viewportRectRef = useRef<HTMLDivElement>(null);
     const liveViewportRef = useRef(viewport);
     const [isDragging, setIsDragging] = useState(false);
     const width = MINIMAP_WIDTH;
     const height = MINIMAP_HEIGHT;
-    const displayNodes = useMemo(() => visibleCanvasMinimapNodes(nodes), [nodes]);
+    const layoutNodesRef = useRef<CanvasNodeData[]>(nodes);
+    const layoutNodes = useMemo(() => {
+        const retained = retainCanvasLayoutNodes(layoutNodesRef.current, nodes);
+        layoutNodesRef.current = retained;
+        return retained;
+    }, [nodes]);
+    const displayNodes = useMemo(() => visibleCanvasMinimapNodes(layoutNodes), [layoutNodes]);
     const { worldBounds, scale, offset } = useMemo(() => {
         if (!displayNodes.length) return { worldBounds: { x: -500, y: -500, w: 1000, h: 1000 }, scale: 0.16, offset: { x: 40, y: 0 } };
         let minX = Infinity;
@@ -61,14 +69,21 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
         const p2 = toMinimap(vx + viewportSize.width / viewport.k, vy + viewportSize.height / viewport.k);
         return { x: p1.x, y: p1.y, w: Math.max(p2.x - p1.x, 4), h: Math.max(p2.y - p1.y, 4) };
     }, [toMinimap, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width]);
-    const updateViewportRect = useCallback((nextViewport: ViewportTransform) => {
-        liveViewportRef.current = nextViewport;
-        drawMinimap(canvasRef.current, displayNodes, toMinimap, nextViewport, viewportSize, theme);
-    }, [displayNodes, theme, toMinimap, viewportSize]);
+    const updateViewportRect = useCallback((next: ViewportTransform) => {
+        liveViewportRef.current = next;
+        const element = viewportRectRef.current;
+        if (!element) return;
+        const start = toMinimap(-next.x / next.k, -next.y / next.k);
+        const end = toMinimap((-next.x + viewportSize.width) / next.k, (-next.y + viewportSize.height) / next.k);
+        element.style.left = `${start.x}px`;
+        element.style.top = `${start.y}px`;
+        element.style.width = `${Math.max(end.x - start.x, 4)}px`;
+        element.style.height = `${Math.max(end.y - start.y, 4)}px`;
+    }, [toMinimap, viewportSize.width, viewportSize.height]);
 
     useEffect(() => {
-        drawMinimap(canvasRef.current, displayNodes, toMinimap, viewport, viewportSize, theme);
-    }, [displayNodes, theme, toMinimap, viewport, viewportSize]);
+        drawMinimap(canvasRef.current, displayNodes, toMinimap, theme);
+    }, [displayNodes, theme, toMinimap]);
     useEffect(() => updateViewportRect(viewport), [updateViewportRect, viewport]);
     useEffect(() => {
         const canvasContainer = canvasContainerRef?.current;
@@ -110,13 +125,13 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                 }}
             >
                 <canvas ref={canvasRef} width={width} height={height} className="pointer-events-none block size-full" aria-label="画布小地图" />
-                <div className="pointer-events-none absolute rounded-[var(--r-xs)]" style={{ left: viewportRect.x, top: viewportRect.y, width: viewportRect.w, height: viewportRect.h, background: `${theme.node.activeStroke}12`, boxShadow: `inset 0 0 0 1px ${theme.node.activeStroke}66` }} />
+                <div ref={viewportRectRef} className="pointer-events-none absolute rounded-[var(--r-xs)]" style={{ left: viewportRect.x, top: viewportRect.y, width: viewportRect.w, height: viewportRect.h, background: `${theme.node.activeStroke}12`, boxShadow: `inset 0 0 0 1px ${theme.node.activeStroke}66` }} />
             </div>
         </div>
     );
 }
 
-function drawMinimap(canvas: HTMLCanvasElement | null, nodes: CanvasNodeData[], toMinimap: (x: number, y: number) => { x: number; y: number }, viewport: ViewportTransform, viewportSize: { width: number; height: number }, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {
+function drawMinimap(canvas: HTMLCanvasElement | null, nodes: CanvasNodeData[], toMinimap: (x: number, y: number) => { x: number; y: number }, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {
     if (!canvas) return;
     const context = canvas.getContext("2d");
     if (!context) return;
@@ -135,11 +150,4 @@ function drawMinimap(canvas: HTMLCanvasElement | null, nodes: CanvasNodeData[], 
         if (context.fillStyle !== "transparent") context.fillRect(pos.x, pos.y, rectWidth, rectHeight);
         if (frame) context.strokeRect(pos.x, pos.y, rectWidth, rectHeight);
     }
-    const vx = -viewport.x / viewport.k;
-    const vy = -viewport.y / viewport.k;
-    const p1 = toMinimap(vx, vy);
-    const p2 = toMinimap(vx + viewportSize.width / viewport.k, vy + viewportSize.height / viewport.k);
-    context.globalAlpha = 1;
-    context.strokeStyle = theme.node.activeStroke;
-    context.strokeRect(p1.x, p1.y, Math.max(p2.x - p1.x, 4), Math.max(p2.y - p1.y, 4));
 }

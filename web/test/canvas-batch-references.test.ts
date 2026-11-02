@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { applyBatchReferenceEdits, batchCellHandle, parseBatchCellHandle, reconcileBatchCellConnections, batchRowInputSignature, batchRowInputChanged } from "@/lib/canvas/canvas-batch-references";
+import { applyBatchReferenceEdits, batchCellHandle, parseBatchCellHandle, reconcileBatchCellConnections, syncBatchColumnReferences, batchRowInputSignature, batchRowInputChanged } from "@/lib/canvas/canvas-batch-references";
 import { batchInputColumns, createBatchRowsFromColumns, insertBatchRow, reorderBatchReferenceColumns } from "@/lib/canvas/canvas-batch-table";
 import { removeCanvasNodes } from "@/lib/canvas/canvas-project-domain";
 import { applyCanvasConnectionPromptSync } from "@/lib/canvas/canvas-resource-references";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { performanceNode } from "./helpers/canvas-performance-fixture";
 
 function fixture() {
     const image = (id: string): CanvasNodeData => ({ id, type: CanvasNodeType.Image, title: id, position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { storageKey: `resource:${id}` } });
@@ -97,4 +98,16 @@ test("input changes retain old result and distinguish current prompt and shared 
     const synced = createBatchRowsFromColumns("creative", [["a"], [], ["b"]], [data.rows[0]]);
     expect(synced[0].inputNodeIds).toEqual(["a", "", "b"]);
     expect(synced[0].outputNodeId).toBe("out");
+});
+
+test("non-table nodes bypass both table projections", () => {
+    const nodes = [performanceNode("plain")];
+    const edges = new Proxy([], {
+        get(target, key, receiver) {
+            if (key === Symbol.iterator || key === "filter") throw new Error("unexpected edge scan");
+            return Reflect.get(target, key, receiver);
+        },
+    });
+    expect(syncBatchColumnReferences(nodes, edges)).toBe(nodes);
+    expect(reconcileBatchCellConnections(nodes, edges)).toBe(edges);
 });

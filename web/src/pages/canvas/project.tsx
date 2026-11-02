@@ -221,7 +221,6 @@ function CanvasViewportPage() {
     const canvasStorageScope = getActiveUserScope();
     const containerRef = useRef<HTMLDivElement>(null);
     const didInitialCenterRef = useRef(false);
-    const toolbarHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const assetHandoffRef = useRef("");
 
     const effectiveConfig = useEffectiveConfig();
@@ -273,7 +272,6 @@ function CanvasViewportPage() {
     const [shareModalOpen, setShareModalOpen] = useState(false);
     const [tapNowImportOpen, setTapNowImportOpen] = useState(false);
     const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
-    const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [arkPrivateAssetUploadNodeId, setArkPrivateAssetUploadNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
@@ -311,6 +309,7 @@ function CanvasViewportPage() {
 
     useEffect(() => {
         persistCanvasHideNodeConnections(hideNodeConnections);
+        if (!hideNodeConnections) setHoveredNodeId(null);
     }, [hideNodeConnections]);
 
     useEffect(() => {
@@ -699,7 +698,6 @@ function CanvasViewportPage() {
         setSelectedConnectionId,
         setContextMenu,
         setDialogNodeId,
-        setToolbarNodeId,
     });
 
     useEffect(() => {
@@ -931,7 +929,6 @@ function CanvasViewportPage() {
         setDialogNodeId,
         setContextMenu,
         setHoveredNodeId,
-        setToolbarNodeId,
         setRunningNodeId,
         startUploadStatus,
         startGenerationRequest,
@@ -947,7 +944,6 @@ function CanvasViewportPage() {
         (removedIds: Set<string>, nextNodes: CanvasNodeData[], removedNodes: CanvasNodeData[]) => {
             const clearDeletedId = (current: string | null) => (current && removedIds.has(current) ? null : current);
             setHoveredNodeId(clearDeletedId);
-            setToolbarNodeId(clearDeletedId);
             setDialogNodeId(clearDeletedId);
             setTextEditorNodeId(clearDeletedId);
             setCharacterReferenceNodeId(clearDeletedId);
@@ -1147,7 +1143,6 @@ function CanvasViewportPage() {
     const handleNodeInteractionStart = useCallback((selectionModifier: boolean) => {
         setContextMenu(null);
         setHoveredNodeId(null);
-        setToolbarNodeId(null);
         if (selectionModifier) setDialogNodeId(null);
     }, []);
 
@@ -1219,7 +1214,6 @@ function CanvasViewportPage() {
     const handleCanvasDeselect = useCallback(() => {
         setContextMenu(null);
         setHoveredNodeId(null);
-        setToolbarNodeId(null);
         setDialogNodeId(null);
     }, []);
 
@@ -1243,26 +1237,6 @@ function CanvasViewportPage() {
         onLinkedFolderDrop: archiveNodesToLinkedFolder,
         onDeselect: handleCanvasDeselect,
     });
-
-    const keepNodeToolbar = useCallback(
-        (nodeId: string) => {
-            if (nodeDraggingRef.current || nodeImageSettingsOpen) return;
-            if (toolbarHideTimerRef.current) {
-                clearTimeout(toolbarHideTimerRef.current);
-                toolbarHideTimerRef.current = null;
-            }
-            setToolbarNodeId(nodeId);
-        },
-        [nodeImageSettingsOpen],
-    );
-
-    const hideNodeToolbar = useCallback(() => {
-        if (toolbarHideTimerRef.current) clearTimeout(toolbarHideTimerRef.current);
-        toolbarHideTimerRef.current = setTimeout(() => {
-            setToolbarNodeId(null);
-            toolbarHideTimerRef.current = null;
-        }, 120);
-    }, []);
 
     const {
         collapsingBatchIds,
@@ -1290,7 +1264,6 @@ function CanvasViewportPage() {
         setSelectedNodeIds,
         setSelectedConnectionId,
         setDialogNodeId,
-        setToolbarNodeId,
         setHoveredNodeId,
     });
 
@@ -1427,10 +1400,10 @@ function CanvasViewportPage() {
         cropNode,
         displayConnections,
         frameChildrenById,
+        getNodeMentionReferences,
         infoNode,
         maskEditNode,
         imageEditNode,
-        mentionReferencesByNodeId,
         nodeById,
         nodeRenderLODById,
         previewNode,
@@ -1438,6 +1411,7 @@ function CanvasViewportPage() {
         resourceReferenceByNodeId,
         selectedNodeBounds,
         selectedVideoNodes,
+        semanticNodes,
         skillMentionReferences,
         superResolveNode,
         toolbarNode,
@@ -1473,13 +1447,14 @@ function CanvasViewportPage() {
         dialogNodeId,
     });
 
-    const handleSelectedImageWheel = useCanvasImageWheelResize({ projectId, nodesRef, selectedNodeIdsRef, historyPausedRef, setNodes, onResize: handleNodeResize });
+    const handleSelectedImageWheel = useCanvasImageWheelResize({ containerRef, projectId, nodesRef, selectedNodeIdsRef, historyPausedRef, setNodes, onResize: handleNodeResize });
+    const effectiveHoveredNodeId = hideNodeConnections ? hoveredNodeId : null;
     const visibleDisplayConnections = useMemo(
         () =>
             filterBatchCellConnections(
                 filterCanvasDisplayConnections(displayConnections, {
                     enabled: hideNodeConnections,
-                    hoveredNodeId,
+                    hoveredNodeId: effectiveHoveredNodeId,
                     selectedNodeIds,
                     activeNodeId,
                     selectedConnectionId,
@@ -1487,26 +1462,31 @@ function CanvasViewportPage() {
                 batchScrollById,
                 selectedConnectionId,
             ),
-        [activeNodeId, batchScrollById, displayConnections, hideNodeConnections, hoveredNodeId, selectedConnectionId, selectedNodeIds],
+        [activeNodeId, batchScrollById, displayConnections, hideNodeConnections, effectiveHoveredNodeId, selectedConnectionId, selectedNodeIds],
     );
     useEffect(() => {
+        const changes = new Map<string, { before: string; after: string; composer: boolean }>();
+        for (const node of semanticNodes) {
+            const before = node.metadata?.composerContent ?? node.metadata?.prompt;
+            if (!before?.includes("@[node:")) continue;
+            const references = getNodeMentionReferences(node.id);
+            if (!references.length) continue;
+            const after = normalizeCanvasNodeMentionTokens(before, references);
+            if (after !== before) changes.set(node.id, { before, after, composer: node.metadata?.composerContent !== undefined });
+        }
+        if (!changes.size) return;
         setNodes((current) => {
             let changed = false;
             const next = current.map((node) => {
-                const references = mentionReferencesByNodeId.get(node.id);
-                const savedPrompt = node.metadata?.composerContent ?? node.metadata?.prompt;
-                if (!references?.length || !savedPrompt?.includes("@[node:")) return node;
-                const normalizedPrompt = normalizeCanvasNodeMentionTokens(savedPrompt, references);
-                if (normalizedPrompt === savedPrompt) return node;
+                const patch = changes.get(node.id);
+                if (!patch || (node.metadata?.composerContent ?? node.metadata?.prompt) !== patch.before) return node;
+                if ((node.metadata?.composerContent !== undefined) !== patch.composer) return node;
                 changed = true;
-                return {
-                    ...node,
-                    metadata: node.metadata?.composerContent !== undefined ? { ...node.metadata, composerContent: normalizedPrompt } : { ...node.metadata, prompt: normalizedPrompt },
-                };
+                return { ...node, metadata: { ...node.metadata, [patch.composer ? "composerContent" : "prompt"]: patch.after } };
             });
             return changed ? next : current;
         });
-    }, [mentionReferencesByNodeId, setNodes]);
+    }, [semanticNodes, getNodeMentionReferences, setNodes]);
     const dialogNode = dialogNodeId ? nodeById.get(dialogNodeId) || null : null;
     // dragPreview is published on the same pointer-down frame as isNodeDragging.
     // Treat either signal as moving so floating editors disappear before the
@@ -1538,7 +1518,6 @@ function CanvasViewportPage() {
         setSelectedConnectionId(null);
         setContextMenu(null);
         setDialogNodeId(null);
-        setToolbarNodeId(null);
         if (node.metadata?.workflowKind === "character" && node.metadata.characterAssetId) {
             setCharacterReferenceNodeId(node.id);
             return;
@@ -1552,7 +1531,6 @@ function CanvasViewportPage() {
         setSelectedConnectionId(null);
         setContextMenu(null);
         setDialogNodeId(null);
-        setToolbarNodeId(null);
         setDrawingNodeId(node.id);
     }, []);
 
@@ -1562,7 +1540,6 @@ function CanvasViewportPage() {
         setSelectedConnectionId(null);
         setContextMenu(null);
         setDialogNodeId(null);
-        setToolbarNodeId(null);
         setArtCritiqueNodeId(node.id);
     }, []);
     const duplicateNodeFromContent = useCallback((node: CanvasNodeData) => duplicateNode(node.id), [duplicateNode]);
@@ -1926,7 +1903,6 @@ function CanvasViewportPage() {
             });
             setSelectedConnectionId(null);
             closeConnectionCreateMenu();
-            setToolbarNodeId(null);
             setDialogNodeId(null);
             setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId: id });
         },
@@ -2206,9 +2182,9 @@ function CanvasViewportPage() {
                     node={panelNode}
                     isRunning={isCanvasNodeGenerating(panelNode, runningNodeId)}
                     mentionReferences={[
-                        ...(mentionReferencesByNodeId.get(panelNode.id) || EMPTY_RESOURCE_REFERENCES),
+                        ...(getNodeMentionReferences(panelNode.id) || EMPTY_RESOURCE_REFERENCES),
                         ...buildCanvasResourceReferences(nodesRef.current, connectionsRef.current).filter(
-                            (reference) => reference.kind === "text" && reference.nodeId !== panelNode.id && !(mentionReferencesByNodeId.get(panelNode.id) || []).some((active) => active.nodeId === reference.nodeId),
+                            (reference) => reference.kind === "text" && reference.nodeId !== panelNode.id && !(getNodeMentionReferences(panelNode.id) || []).some((active) => active.nodeId === reference.nodeId),
                         ),
                     ]}
                     onAddReference={(nodeId, reference) => {
@@ -2238,7 +2214,6 @@ function CanvasViewportPage() {
                     workspaceMode={workspaceMode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
-                        if (open) setToolbarNodeId(null);
                     }}
                     onListGenerate={(nodeId, listPrompt) => {
                         void handleListGenerate({
@@ -2267,7 +2242,7 @@ function CanvasViewportPage() {
             handleReorderNodeReferences,
             handleReplaceNodeReference,
             handleReplaceNodeReferenceFiles,
-            mentionReferencesByNodeId,
+            getNodeMentionReferences,
             message,
             projectId,
             runningNodeId,
@@ -2332,8 +2307,7 @@ function CanvasViewportPage() {
                         nodes={nodesRef.current}
                         batch={visibleGenerationBatch(contentNode)}
                         pipeline={pipeline}
-                        scale={viewport.k}
-                        mentionReferences={mentionReferencesByNodeId.get(contentNode.id) || EMPTY_RESOURCE_REFERENCES}
+                        mentionReferences={getNodeMentionReferences(contentNode.id) || EMPTY_RESOURCE_REFERENCES}
                         onOpen={() => setScriptEditorNodeId(contentNode.id)}
                         onCreateImageNodes={() => createScriptImageNodes(contentNode.id)}
                         onCreateVideoNodes={() => createScriptVideoNodes(contentNode.id)}
@@ -2418,7 +2392,7 @@ function CanvasViewportPage() {
             handleConnectStart,
             handleGenerateNode,
             handleNodeResize,
-            mentionReferencesByNodeId,
+            getNodeMentionReferences,
             mergeVideosByIds,
             openPrevisWorkbench,
             openStoryInput,
@@ -2434,7 +2408,6 @@ function CanvasViewportPage() {
             theme,
             updateBatchRow,
             updateScriptRow,
-            viewport.k,
             workspaceMode,
         ],
     );
@@ -2443,17 +2416,26 @@ function CanvasViewportPage() {
         (nodeId: string) => {
             if (nodeDraggingRef.current) return;
             setHoveredNodeId(nodeId);
-            keepNodeToolbar(nodeId);
         },
-        [keepNodeToolbar],
+        [],
     );
     const handleCanvasNodeHoverEnd = useCallback(
         (nodeId: string) => {
             setHoveredNodeId((current) => (current === nodeId ? null : current));
-            hideNodeToolbar();
         },
-        [hideNodeToolbar],
+        [],
     );
+    const handleConnectionSelect = useCallback((connectionId: string) => {
+        setSelectedConnectionId(connectionId);
+        setSelectedNodeIds(new Set());
+        setContextMenu(null);
+    }, [setSelectedConnectionId, setSelectedNodeIds, setContextMenu]);
+    const handleConnectionContextMenu = useCallback((event: ReactMouseEvent, connectionId: string) => {
+        setSelectedConnectionId(connectionId);
+        setSelectedNodeIds(new Set());
+        closeConnectionCreateMenu();
+        setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
+    }, [setSelectedConnectionId, setSelectedNodeIds, closeConnectionCreateMenu, setContextMenu]);
     const retryCanvasNode = useCallback(
         (node: CanvasNodeData) => {
             if (node.metadata?.imageLayerWorkflow && !node.metadata.experimentalLayerPlan && !node.metadata.layerDecomposition) {
@@ -2823,7 +2805,7 @@ function CanvasViewportPage() {
                                                     batchMotionById={batchMotionById}
                                                     showImageInfo={showImageInfo}
                                                     resourceReferenceByNodeId={resourceReferenceByNodeId}
-                                                    mentionReferencesByNodeId={mentionReferencesByNodeId}
+                                                    getNodeMentionReferences={getNodeMentionReferences}
                                                     mediaEffectsDisabledNodeId={emotionNodeId}
                                                     selectedNodeBounds={selectedNodeBounds}
                                                     batchSourceNodeIds={batchSourceNodeIds}
@@ -2831,20 +2813,11 @@ function CanvasViewportPage() {
                                                     isNodeDragging={isNodeDragging}
                                                     selectionBoundsElementRef={selectionBoundsElementRef}
                                                     renderCanvasNodeContent={renderCanvasNodeContent}
-                                                    onConnectionSelect={(connectionId) => {
-                                                        setSelectedConnectionId(connectionId);
-                                                        setSelectedNodeIds(new Set());
-                                                        setContextMenu(null);
-                                                    }}
-                                                    onConnectionContextMenu={(event, connectionId) => {
-                                                        setSelectedConnectionId(connectionId);
-                                                        setSelectedNodeIds(new Set());
-                                                        closeConnectionCreateMenu();
-                                                        setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
-                                                    }}
+                                                    onConnectionSelect={handleConnectionSelect}
+                                                    onConnectionContextMenu={handleConnectionContextMenu}
                                                     onNodeMouseDown={handleNodeMouseDown}
-                                                    onNodeHoverStart={handleCanvasNodeHoverStart}
-                                                    onNodeHoverEnd={handleCanvasNodeHoverEnd}
+                                                    onNodeHoverStart={hideNodeConnections ? handleCanvasNodeHoverStart : undefined}
+                                                    onNodeHoverEnd={hideNodeConnections ? handleCanvasNodeHoverEnd : undefined}
                                                     onConnectStart={handleConnectStart}
                                                     onNodeResize={handleNodeResize}
                                                     onToggleFrame={handleFrameToggle}
@@ -3072,8 +3045,6 @@ function CanvasViewportPage() {
                                 workspaceMode={workspaceMode}
                                 viewport={viewport}
                                 containerRef={containerRef}
-                                onKeep={keepNodeToolbar}
-                                onLeave={hideNodeToolbar}
                                 onInfo={(node) => (node.metadata?.workflowKind === "character" && node.metadata.characterAssetId ? openTextNodeEditor(node) : setInfoNodeId(node.id))}
                                 onEditText={openTextNodeEditor}
                                 onDecreaseFont={(node) => handleFontSizeChange(node.id, Math.max(10, (node.metadata?.fontSize || 14) - 2))}
@@ -3138,7 +3109,7 @@ function CanvasViewportPage() {
                                     onWheel={(event) => event.stopPropagation()}
                                 >
                                     <CanvasZoomControls
-                                        scale={viewport.k}
+                                        scale={viewport.k || 1}
                                         containerRef={containerRef}
                                         onScaleChange={setZoomScale}
                                         onFitContent={fitCanvasContent}

@@ -21,7 +21,7 @@ import { useSyncProgressStore } from "@/stores/use-sync-progress-store";
 import { useCanvasHistoryStore } from "@/stores/canvas/use-canvas-history-store";
 import { repairMissingCanvasAssets, rebindInconsistentCanvasAssets } from "@/services/canvas-asset-repair";
 import { canvasNodeToAsset } from "@/lib/canvas/canvas-node-asset";
-import { applyAgentCanvasPatch, mergeThreeWayValue, type AgentCanvasPatch } from "@/lib/canvas/agent-canvas-patch";
+import { applyAgentCanvasPatch, applyAgentCanvasPatchBatch, mergeThreeWayValue, type AgentCanvasPatch } from "@/lib/canvas/agent-canvas-patch";
 import { collectLocalMediaKeys, ensureRemoteResourceReferences, restoreRemoteTextNodeContents } from "./user-data-sync-media";
 import { submitCanvasMutationBatches, type CanvasMutationBatchState } from "./canvas-mutation-batches";
 import { canvasEditLeases } from "./canvas-edit-leases";
@@ -490,11 +490,17 @@ export async function applyAgentCanvasPatches(id: string, patches: AgentCanvasPa
             seenRevisions.add(patch.revision!);
             orderedPatches.push(patch);
         }
+        const applicablePatches: AgentCanvasPatch[] = [];
+        let expectedRevision = remote.revision!;
         for (const patch of orderedPatches) {
-            if (patch.revision! <= remote.revision!) continue;
-            if (patch.baseRevision !== remote.revision || patch.revision !== patch.baseRevision! + 1) throw new Error("Agent 画布增量版本不连续，请重新读取画布");
-            remote = { ...applyAgentCanvasPatch(remote, patch), revision: patch.revision };
-            projected = { ...applyAgentCanvasPatch(projected, patch), revision: patch.revision };
+            if (patch.revision! <= expectedRevision) continue;
+            if (patch.baseRevision !== expectedRevision || patch.revision !== patch.baseRevision! + 1) throw new Error("Agent 画布增量版本不连续，请重新读取画布");
+            applicablePatches.push(patch);
+            expectedRevision = patch.revision!;
+        }
+        if (applicablePatches.length) {
+            remote = { ...applyAgentCanvasPatchBatch(remote, applicablePatches), revision: expectedRevision };
+            projected = { ...applyAgentCanvasPatchBatch(projected, applicablePatches), revision: expectedRevision };
         }
         if (projected === current) return current;
         const hash = await canvasContentHash(remote);
@@ -1144,12 +1150,13 @@ async function performRemoteUserDataSave(input?: string | readonly string[]) {
 }
 
 function canvasOperationValueEqual(left: unknown, right: unknown) {
-    return canonicalize(left) === canonicalize(right);
+    return left === right || canonicalize(left) === canonicalize(right);
 }
 
 function diffCanvasObject(before: Record<string, unknown>, after: Record<string, unknown>, prefix = "") {
     const patch: Record<string, unknown> = {};
     const previous: Record<string, unknown> = {};
+    if (before === after) return { patch, previous };
     const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
     for (const key of keys) {
         const path = prefix ? `${prefix}.${key}` : key;
@@ -1157,6 +1164,7 @@ function diffCanvasObject(before: Record<string, unknown>, after: Record<string,
         const hasAfter = Object.prototype.hasOwnProperty.call(after, key);
         const oldValue = before[key];
         const newValue = after[key];
+        if (oldValue === newValue) continue;
         if (oldValue === undefined && newValue === undefined) continue;
         if (hasBefore && hasAfter && oldValue && newValue && typeof oldValue === "object" && typeof newValue === "object" && !Array.isArray(oldValue) && !Array.isArray(newValue)) {
             const nested = diffCanvasObject(oldValue as Record<string, unknown>, newValue as Record<string, unknown>, path);
@@ -1592,9 +1600,8 @@ async function saveRemoteUserDataBatch(uploaded: Map<string, string>, options: {
     const currentProjects = useCanvasStore.getState().projects;
     const currentAssets = useAssetStore.getState().assets;
     const dirtyProjects = currentProjects.filter((project) => {
-        const dirty = !remoteDeletedProjects.has(project.id) && (pendingCanvasMutations.has(project.id) || !sameCanvasContent(acknowledgedProjects.get(project.id), project));
-        const selected = selectedProjectIds === undefined || selectedProjectIds.has(project.id);
-        return selected && dirty;
+        if (selectedProjectIds !== undefined && !selectedProjectIds.has(project.id)) return false;
+        return !remoteDeletedProjects.has(project.id) && (pendingCanvasMutations.has(project.id) || !sameCanvasContent(acknowledgedProjects.get(project.id), project));
     });
     const canvasAssetIds = selectedProjectIds?.size ? new Set(currentProjects.filter((project) => selectedProjectIds.has(project.id)).flatMap((project) => [...collectAssetIds(project)])) : undefined;
     const dirtyAssets = currentAssets.filter((asset) => {

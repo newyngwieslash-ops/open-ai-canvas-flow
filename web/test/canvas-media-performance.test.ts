@@ -397,4 +397,15 @@ describe("passive video previews", () => {
         expect(canvasVideoAssetPreviewUrl("https://example.com/video.mp4", "https://example.com/video.mp4")).toBe("");
         expect(canvasVideoAssetPreviewUrl("https://example.com/video.mp4", "https://example.com/poster.jpg")).toBe("https://example.com/poster.jpg");
     });
+
+    test("shell image gating preserves the retained renderer", () => {
+        expect(canvasNodeContentSource).toContain('const loadEnabled = renderLOD !== "shell" && nearViewport;');
+        expect(canvasNodeContentSource).toContain("useNodeResourceUrl(node, loadEnabled, resourceVariant)");
+        expect(canvasNodeContentSource).toContain("Preserve the decoded image across LOD changes");
+        const result = Bun.spawnSync([process.execPath, "test", "./test/fixtures/canvas-image-lod.harness.tsx"], { cwd: resolve(import.meta.dir, ".."), timeout: 15000 });
+        const output = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
+        expect(output).toContain("1 pass");
+        expect(output).toContain("0 fail");
+        expect(result.exitCode).toBe(0);
+    });
 });

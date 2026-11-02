@@ -51,6 +51,8 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "onChange" | "val
     activeDropReferenceId?: string | null;
     onReferenceFilesDrop?: (reference: CanvasResourceReference, files: File[]) => void;
     autoLinkEnabled?: boolean;
+    projectId?: string;
+    referencesResolved?: boolean;
 };
 
 // 回车提交语义由调用方决定：false 只在 ⌘/Ctrl+Enter 提交，"both" 两种都提交；Shift+Enter 始终换行。
@@ -63,7 +65,7 @@ function shouldSubmitOnEnter(event: { key: string; ctrlKey: boolean; metaKey: bo
 }
 
 export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Props>(function CanvasResourceMentionTextarea(
-    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, ...props },
+    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, projectId, referencesResolved = false, ...props },
     forwardedRef,
 ) {
     const rawTheme = useActiveTheme();
@@ -87,9 +89,31 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const [autoLinkPosition, setAutoLinkPosition] = useState<{ left: number; top: number } | null>(null);
     const [nativeDropReferenceId, setNativeDropReferenceId] = useState<string | null>(null);
     const [previewReference, setPreviewReference] = useState<CanvasResourceReference | null>(null);
-    const canvasReferences = useResolvedCanvasResourceReferences(references);
     const rawAssetReferences = useMemo(() => includeAssetLibrary ? buildAssetMentionReferences(assets) : [], [assets, includeAssetLibrary]);
-    const assetReferences = useResolvedCanvasResourceReferences(rawAssetReferences);
+    const canvasRequestedIds = useMemo(() => {
+        const ids = new Set<string>();
+        for (const item of references) {
+            if (!referencesResolved && (item.active || (highlightLabels && value.includes(canvasResourceMentionToken(item))))) {
+                ids.add(item.id);
+            } else if (mention && item.drawingId && !item.previewUrl) {
+                ids.add(item.id);
+            }
+        }
+        if (previewReference) ids.add(previewReference.id);
+        return ids;
+    }, [highlightLabels, mention, previewReference, references, referencesResolved, value]);
+    const assetRequestedIds = useMemo(() => {
+        const ids = new Set<string>();
+        if (highlightLabels) {
+            for (const item of rawAssetReferences) {
+                if (value.includes(canvasResourceMentionToken(item))) ids.add(item.id);
+            }
+        }
+        if (previewReference) ids.add(previewReference.id);
+        return ids;
+    }, [highlightLabels, previewReference, rawAssetReferences, value]);
+    const canvasReferences = useResolvedCanvasResourceReferences(references, { projectId, requestedIds: canvasRequestedIds });
+    const assetReferences = useResolvedCanvasResourceReferences(rawAssetReferences, { projectId, requestedIds: assetRequestedIds });
     const activeCanvasReferences = useMemo(() => canvasReferences.filter((item) => item.active), [canvasReferences]);
     // 工具标签只能经九宫格等面板入口插入，@ 引用菜单不再重复展示。
     const mentionCanvasReferences = useMemo(() => canvasReferences.filter((item) => item.kind !== "tool"), [canvasReferences]);

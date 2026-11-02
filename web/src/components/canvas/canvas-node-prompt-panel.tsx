@@ -113,7 +113,18 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
     const [paramsExpanded, setParamsExpanded] = useState(false); // #98 决策2：B区参数区折叠状态（手风琴）
     const [promptOptimizerOpen, setPromptOptimizerOpen] = useState(false);
     const [autoLinkEnabled, setAutoLinkEnabled] = useState(true);
-    const resolvedMentionReferences = useResolvedCanvasResourceReferences(mentionReferences, { projectId });
+    const promptPanelRequestedIds = useMemo(
+        () => new Set(
+            mentionReferences
+                .filter((item) => item.active || prompt.includes(canvasResourceMentionToken(item)))
+                .map((item) => item.id),
+        ),
+        [mentionReferences, prompt],
+    );
+    const resolvedMentionReferences = useResolvedCanvasResourceReferences(mentionReferences, {
+        projectId,
+        requestedIds: promptPanelRequestedIds,
+    });
     const promptToolReferences = useMemo(() => parseToolMentionTokens(prompt).map(({toolId, label, type, icon}) => buildToolMentionReference(toolId, label, type, icon)), [prompt]);
     const textareaReferences = useMemo(() => {
         if (!promptToolReferences.length) return resolvedMentionReferences;
@@ -554,6 +565,8 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                         onReplaceReferenceFiles={onReplaceReferenceFiles ? (oldReference, files) => onReplaceReferenceFiles(node.id, oldReference, files) : undefined}
                     />
                     <CanvasResourceMentionTextarea
+                        projectId={projectId}
+                        referencesResolved
                         value={prompt}
                         readOnly={Boolean(node.metadata?.locked)}
                         references={textareaReferences}

@@ -1,14 +1,22 @@
-import type { SelectionBox, ViewportTransform } from "@/types/canvas";
+import type { Position, SelectionBox, ViewportTransform } from "@/types/canvas";
 
 export const CANVAS_VIEWPORT_PREVIEW_EVENT = "canvas:viewport-preview";
 export const CANVAS_GRAPHICS_VIEWPORT_PREVIEW_EVENT = "canvas:graphics-viewport-preview";
 export const CANVAS_SELECTION_PREVIEW_EVENT = "canvas:selection-preview";
 export const CANVAS_NODE_DRAG_PREVIEW_EVENT = "canvas:node-drag-preview";
+export const CANVAS_NODE_GEOMETRY_PREVIEW_EVENT = "canvas:node-geometry-preview";
 
 export type CanvasNodeDragPreview = {
     x: number;
     y: number;
     nodeIds: ReadonlySet<string>;
+};
+
+export type CanvasNodeGeometryPreview = {
+    nodeId: string;
+    position: Position;
+    width: number;
+    height: number;
 };
 
 type NodeDragPreviewDomState = {
@@ -29,6 +37,8 @@ export type CanvasNodeSelectionPreview = {
 
 const nodeDragPreviewDomStates = new WeakMap<HTMLDivElement, NodeDragPreviewDomState>();
 const nodeSelectionPreviewDomStates = new WeakMap<HTMLDivElement, NodeSelectionPreviewDomState>();
+const nodeGeometryPreviewElements = new WeakMap<HTMLDivElement, HTMLElement>();
+const nodeGeometryPreviewSavedStyles = new WeakMap<HTMLElement, { transform: string; width: string; height: string }>();
 const liveViewportElements = new WeakMap<HTMLDivElement, { worldLayer: HTMLElement | null; gridLayer: HTMLElement | null }>();
 
 /** 网格层向左上多铺的像素，需大于最大网格间距，保证平移取模后仍覆盖视口。 */
@@ -157,6 +167,71 @@ export function subscribeCanvasNodeDragPreview(container: HTMLDivElement, listen
     const handlePreview = (event: Event) => listener((event as CustomEvent<CanvasNodeDragPreview | null>).detail);
     container.addEventListener(CANVAS_NODE_DRAG_PREVIEW_EVENT, handlePreview);
     return () => container.removeEventListener(CANVAS_NODE_DRAG_PREVIEW_EVENT, handlePreview);
+}
+
+function escapeNodeIdSelector(nodeId: string) {
+    return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(nodeId) : nodeId.replace(/["\\]/g, "\\$&");
+}
+
+export function applyCanvasNodeGeometryPreview(
+    container: HTMLDivElement | null,
+    preview: CanvasNodeGeometryPreview | null,
+    clearMode: "restore" | "committed" = "restore",
+) {
+    if (!container) return;
+    const previousElement = nodeGeometryPreviewElements.get(container) || null;
+    if (!preview) {
+        if (previousElement) {
+            const saved = nodeGeometryPreviewSavedStyles.get(previousElement);
+            if (clearMode === "restore" && saved) {
+                previousElement.style.transform = saved.transform;
+                previousElement.style.width = saved.width;
+                previousElement.style.height = saved.height;
+            }
+            nodeGeometryPreviewSavedStyles.delete(previousElement);
+            nodeGeometryPreviewElements.delete(container);
+        }
+        container.dispatchEvent(new CustomEvent<CanvasNodeGeometryPreview | null>(CANVAS_NODE_GEOMETRY_PREVIEW_EVENT, { detail: null }));
+        return;
+    }
+
+    if (previousElement && previousElement.dataset.nodeId !== preview.nodeId) {
+        const saved = nodeGeometryPreviewSavedStyles.get(previousElement);
+        if (saved) {
+            previousElement.style.transform = saved.transform;
+            previousElement.style.width = saved.width;
+            previousElement.style.height = saved.height;
+        }
+        nodeGeometryPreviewSavedStyles.delete(previousElement);
+        nodeGeometryPreviewElements.delete(container);
+    }
+
+    const element =
+        previousElement?.isConnected && previousElement.dataset.nodeId === preview.nodeId
+            ? previousElement
+            : container.querySelector<HTMLElement>(`[data-node-id="${escapeNodeIdSelector(preview.nodeId)}"]`);
+
+    if (element) {
+        if (!nodeGeometryPreviewSavedStyles.has(element)) {
+            nodeGeometryPreviewSavedStyles.set(element, {
+                transform: element.style.transform,
+                width: element.style.width,
+                height: element.style.height,
+            });
+        }
+        nodeGeometryPreviewElements.set(container, element);
+        element.style.transform = `translate(${preview.position.x}px, ${preview.position.y}px)`;
+        element.style.width = `${preview.width}px`;
+        element.style.height = `${preview.height}px`;
+    }
+
+    container.dispatchEvent(new CustomEvent<CanvasNodeGeometryPreview | null>(CANVAS_NODE_GEOMETRY_PREVIEW_EVENT, { detail: preview }));
+}
+
+export function subscribeCanvasNodeGeometryPreview(container: HTMLDivElement, listener: (preview: CanvasNodeGeometryPreview | null) => void) {
+    const handlePreview = (event: Event) => listener((event as CustomEvent<CanvasNodeGeometryPreview | null>).detail);
+    container.addEventListener(CANVAS_NODE_GEOMETRY_PREVIEW_EVENT, handlePreview);
+    return () => container.removeEventListener(CANVAS_NODE_GEOMETRY_PREVIEW_EVENT, handlePreview);
 }
 
 /**

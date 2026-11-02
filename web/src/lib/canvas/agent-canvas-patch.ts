@@ -166,10 +166,8 @@ function mergeConnectionOrder(previous: CanvasConnection[], incoming: CanvasConn
     return next;
 }
 
-export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvasPatch): CanvasProject {
-    if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
-    const byId = new Map(project.nodes.map((node) => [node.id, node]));
-    const nodeChanges = patch.nodes.map((change) => {
+function normalizeAgentNodeChanges(byId: ReadonlyMap<string, CanvasNodeData>, changes: AgentCanvasPatch["nodes"]) {
+    return changes.map((change) => {
         if (!change.after) return change;
         const current = byId.get(change.after.id);
         const beforeTask = change.before?.metadata?.taskId;
@@ -187,10 +185,46 @@ export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvas
         }
         return { ...change, before: { ...change.before!, metadata } };
     });
+}
+
+export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvasPatch): CanvasProject {
+    if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
+    const byId = new Map(project.nodes.map((node) => [node.id, node]));
+    const nodeChanges = normalizeAgentNodeChanges(byId, patch.nodes);
     const nodes = mergeItems(project.nodes, nodeChanges);
     const connections = mergeItems(project.connections, patch.connections);
     if (nodes === project.nodes && connections === project.connections) return project;
     return { ...project, nodes, connections, updatedAt: patch.updatedAt || project.updatedAt };
+}
+
+export function applyAgentCanvasPatchBatch(project: CanvasProject, patches: AgentCanvasPatch[]): CanvasProject {
+    for (const patch of patches) {
+        if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
+    }
+    const updateOnly = patches.every((patch) => patch.connections.length === 0 && patch.nodes.every((change) => change.before && change.after && change.before.id === change.after.id));
+    if (!updateOnly) return patches.reduce((current, patch) => applyAgentCanvasPatch(current, patch), project);
+    const byId = new Map(project.nodes.map((node) => [node.id, node]));
+    let changed = false;
+    let updatedAt = project.updatedAt;
+    for (const patch of patches) {
+        const normalized = normalizeAgentNodeChanges(byId, patch.nodes);
+        let patchChanged = false;
+        for (const { before, after } of normalized) {
+            const id = after!.id;
+            const current = byId.get(id);
+            const merged = mergeThreeWayValue(current ?? null, before, after) as CanvasNodeData;
+            if (merged !== current) {
+                byId.set(id, merged);
+                patchChanged = true;
+            }
+        }
+        if (patchChanged) {
+            changed = true;
+            updatedAt = patch.updatedAt || updatedAt;
+        }
+    }
+    if (!changed) return project;
+    return { ...project, nodes: project.nodes.map((node) => byId.get(node.id)!), updatedAt };
 }
 
 export function mergeAgentCanvasEditor(previous: CanvasProject, incoming: CanvasProject, nodes: CanvasNodeData[], connections: CanvasConnection[], editorProject?: CanvasProject) {

@@ -5,6 +5,58 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 项目角色图片直用弹窗保留与三视图复选框再次保存（2026-10-29）
+
+- 修复 `web/src/pages/projects/detail/project-asset-image-modal.tsx` 与 `web/src/pages/projects/detail/project-reference-image.ts`：
+  - 根据角色当前版本 `representations` 是否包含 `turnaround_sheet` 初始化并同步「这张成品已明确包含角色三视图（默认普通人像）」复选框状态（`characterHasTurnaround`）。
+  - 在 `直接使用成品`（`mode === "direct"`）模式下点击【保存成品资产】成功后保留弹窗，且支持在未重新选图时基于已绑定的 `当前成品`（`image?.resourceId || currentAssetImageId(asset)`）直接切换「包含角色三视图」复选框并再次保存，不再误报 `"请选择成品图片并确认资产版本已加载"`。
+- 自动化验证：`cd web && bun test test/project-reference-image-assets.test.ts test/project-asset-image-modal.test.tsx`（`27 pass, 0 fail`）、`bun run lint`、`bunx tsc --noEmit` 通过。
+- [ ] 真实浏览器路由 `/projects/:projectId/assets`：打开已有角色的「图片创作」弹窗，在「直接使用成品」下上传/选择图片点击【保存成品资产】后确认弹窗保持打开，直接勾选或取消「这张成品已明确包含角色三视图（默认普通人像）」并再次点击【保存成品资产】，确认角色卡状态在「成品已绑定 · 尚无完整三视图」与「三视图已绑定 / 形象已就绪」之间正常切换。
+
+## 项目角色与资产分类待确认计数修复（2026-10-29）
+
+- 修复 `web/src/pages/projects/detail/assets.tsx` 左侧「分类筛选」仅统计已确认资产与角色待确认候选、漏计「场景」（`environment`）和「道具」（`prop`）待确认候选的问题，使「角色」「场景」「道具」分类计数均包含各自待确认候选且与右侧待确认明细一致。
+- 自动化验证：`cd web && bun test ./test/project-assets-category-counts.test.tsx ./test/project-character-cover.test.ts ./test/project-asset-image-modal.test.tsx ./test/project-visual-asset.test.tsx`（`27 pass, 0 fail`）、`bun run typecheck`、`bun run lint` 全部通过。
+- [ ] 真实浏览器路由 `/projects/:projectId/assets`：章节提取资产后检查左侧「全部资产 / 角色 / 场景 / 道具」计数与右侧待确认卡片数量一致，点击「确认新增」后对应分类计数与已确认列表同步更新。
+
+## 短剧当前章节批量图片生成（2026-10-29，待真实浏览器与模型验收）
+
+- 初版已实现批量入口与自动化测试。独立审查随后发现候选安全分类、日志并发写入、提交前停止和父级章节替换互斥等缺口；下列初版测试结果仅说明已有用例通过，不表示全部异常矩阵完成。补修验证结果另列，不以测试名称代替断言证据：
+  - **后端容量错误合同**：`POST /api/tasks` 与 `POST /api/tasks/:id/retry` 在活动任务达到 `activeTaskLimit` 时返回 `HTTP 400 / code: 400 / reason: "task_active_limit_exceeded"`（未入队且未预占积分）；`go test ./internal/app ./internal/handler -run 'TestTaskActiveLimit' -count=1` 全部 PASS。
+  - **前端单镜与批量共享构造、候选分类、报价、用户隔离存储、单活动槽位调度、生命周期、弹窗与工作台入口**：
+    - `bun test test/workflow-image-generation.test.ts test/workflow-batch-plan.test.ts test/workflow-batch-storage.test.ts test/workflow-batch-runner.test.ts`：`22 pass, 0 fail`
+    - `bun test test/workflow-image-batch.test.tsx`：初版 `16 pass, 0 fail, 128 expect() calls`。使用真实工作台、hook、service 与受控 API 响应，验证基础逐镜参数、报价、任务提交、轮询及恢复交互；未直接请求 `recover-media`，不能据此声称真实媒体保存恢复已验收。停止内部准备窗口、同批次旧预览覆盖、真实列表截断及父级替换链需独立回归。
+    - 相邻回归：`bun test test/workflow-shot-generation.test.ts test/chapter-asset-binding-drawer.test.tsx test/chapter-generated-workflow-entry.test.tsx`（`16 pass, 0 fail`）
+    - 类型检查、Lint 与构建：`cd web && bun run typecheck && bun run lint && bun run build` 全部 exit 0。
+- 补修验证：核心专项 `25 pass / 248 assertions`，真实工作台与章节页集成 `35 pass / 204 assertions`，单镜、章节保存及资产绑定相邻回归 `29 pass / 132 assertions`，合计 **89 tests / 584 assertions / 0 fail**；最终完整前端 build（含类型检查）、lint 通过。补充测试明确验证旧批次预览/刷新不能覆盖新回执、所有范围的恢复保存/账单保护、实际 POST 前停止、父级及普通章节页替换互斥、跨章旧确认、无 Web Locks 的普通单镜回归和首次确认停止按钮。独立复审的 4 项重要发现已修复并通过复审。
+- 后端最终 `go test ./internal/app ./internal/handler -run 'TestMediaRecovery|TestTaskMediaRecovery|TestTaskActiveLimit' -count=1` 通过；容量竞态测试明确经过服务层与仓储层两次检查，原注入过早问题已纠正。
+- 验证警告：集成测试保留 AntD CSSMotion/Notification 的 `act` 警告及普通章节组件 Focusable ARIA 警告；Vite 保留大 chunk 提示。测试结果通过，但不把这些警告写成“零警告”。当前工作区不存在 `docs/package.json`，未执行或声称通过 `docs` 的 `types:check`。
+- 初版未启动服务或调用真实付费模型。补修轮已启动仅监听本机的真实前端，并连接独立受控 API 完成页面与模拟任务验收；不访问真实用户数据库或供应商。浏览器模拟任务、后端本地集成测试与真实供应商验收分别记录，不相互替代：
+- [x] 真实工作台路由连接受控 API：浅色批量弹窗、深色工作台在 1680px、1280px、1050px、760px、390px 检查，无整页横向溢出；390px 的三个本章按钮自然换行。修复 1280×720 候选列表被压到约 1px 的问题，复测列表高度 288px，390×844 下为 338px，费用与确认/取消区常驻可见。IAB 后台时间线冻结时只完成有限入场动画取最终态，未将其记作自然动效验收。
+- [ ] 前台浏览器自然动效、完整键盘焦点循环、三个生产阶段全部明暗组合与时间轴高度拖拽的人工验收；已有真实组件键盘和阶段参数回归，不能替代这些人工体验项。
+- [ ] 真实付费或授权测试图片模型端到端生成验收：分别执行本章「批量分镜图」（`storyboard`）与「批量动作预演」（黑白 `action_board`），确认不调用视频模型、不引用已有分镜图作为预演参考、不把非目标镜头标记为 `stale`。
+- [ ] 真实队列限额等待与部分失败验收：在活动任务达到 `activeTaskLimit` 时触发 `task_active_limit_exceeded` 退避等待，槽位释放后自动补位；单镜失败保留其余已完成产物并支持按原任务重试。
+- [x] 后端本地媒体恢复专项：同一受控存储端点先失败后恢复成功，保留资源物理身份并复用暂存字节，成功上传一次且资源记录仍为一个；容量与媒体恢复 app/handler 专项通过。修正旧测试直接把 OSS 资源改为 local 而违反生产身份校验的夹具，未放宽生产保护。
+- [ ] 真实供应商结果与真实对象存储故障恢复验收：上游已出图但保存失败时，由 `canRecoverMedia` 引导任务中心 `POST /api/tasks/:id/recover-media`，不得解析错误文案或重新计费生成。
+- [x] 真实浏览器受控任务：观察串行生成状态和模拟图片回填；批次在 11/12 后停止，刷新页面仍为 stopped、最后一镜未自动提交。此证据仅覆盖真实页面与本地日志，不代表真实供应商计费通过。
+- [ ] 真实部署多标签页、跨账号与断网人工验收。自动化已覆盖同批次旧预览、列表省略任务、POST 中卸载重挂、A→B→A 后旧回执和停止窗口；生产浏览器与网络环境仍需独立确认。
+
+## 画布全链路性能优化（包 A / 包 B / 包 C，2026-10-28）
+
+- 已完成 `docs/superpowers/plans/2026-10-28-canvas-performance-implementation.md` 全部 16 个任务的代码实现与自动化验证：
+  - **包 A（渲染失效、引用解析与媒体预算）**：`canvas-content.ts` 节点与数组级 `WeakMap` 归一化与 SHA-256 哈希复用；移除死状态 `toolbarNodeId`、`hideNodeConnections=false` 下关闭节点 hover 状态回传、`CanvasScriptNodeContent` `scaleRef` 回调稳定化；`createCanvasReferenceIndex` 图级引用缓存与可见节点按需派生；关闭态工作区侧栏零 `searchCanvasNodes`；小地图底图与视口框双层 canvas 分离；无 `batchTable` 时 `synchronizeBatchReferenceTables` 早退；`ImageContent` `shell` LOD 新请求门控与已解码 `src` 保留；`useResolvedCanvasResourceReferences` 按 `requestedIds`（正文已引用 + `@` 菜单可见 6 项）按需请求及 `ReferencePreview` 仅激活项挂载 `<video>`。
+  - **包 B（高频手势路径 O(N) 消除）**：`createNodeAlignmentIndex` 6 轴排序二分吸附查询；`findConnectionTargetNodeAtPoint` 局部空间索引窗口命中；批量连线预览 `previewPlanRef` 缓存与 Leafer `batchDraftEntries` `Path` 实例复用；`useCanvasImageWheelResize` Ctrl+滚轮缩放 rAF 预览、Leafer 连线实时跟随与尾帧单次 `onResize` 提交。
+  - **包 C（持久化、同步与 SSE 增量差分）**：`ensureRemoteResourceReferences` 写时复制引用保留；`selectedProjectIds` 定向同步跳过未选中项目 `sameCanvasContent`；`buildCanvasOperations` 与 `hasMeaningfulNodeChanges` 同引用节点 `O(1)` 跳过深比较；`useCanvasStore` 仅通知实际变更画布的本地持久化进度；`applyAgentCanvasPatchBatch` 纯 `update_node` 批量单次构建 `nodeIndexById` `Map`。
+- 自动化验证证据：
+  - `cd web && bun test`（37 个专项与回归测试文件）：`234 pass, 0 fail, 4354 expect() calls`。
+  - `cd web && bun run build`：`tsc --noEmit && vite build` 通过（exit 0）。
+  - `cd web && bun run lint`：`eslint src test` 通过（exit 0）。
+  - 合成性能夹具（`.local/cache/canvas-performance/{100,500,2000}.zip`）与结构对比报告（`.local/cache/canvas-performance/{baseline,after,comparison}.md`）已生成。
+  - 预存无关问题说明：`web/test/canvas-sync-progress.test.ts` 与 `web/test/canvas-converged-create-replay.test.ts` 因早期提交 `5d6195fd` 新增依赖未同步其临时目录复制脚本的正则替换表而失败，不属本次变更范围。
+- [ ] 真实浏览器路由 `/canvas/:id` 与 `/share/canvas/:token` 导入 100 / 500 / 2000 节点夹具：验证视口平移、滚轮缩放、小地图视口框实时跟随、明暗主题切换与空态/侧栏开合流畅度。
+- [ ] 真实浏览器高频手势验证：验证单节点/多选拖拽对齐吸附线、连线端口拖拽命中与批量连线草稿线、图片节点 `Ctrl + 滚轮` 连续缩放时连线实时跟随且松开 `Ctrl` 后单次落盘与可撤销。
+- [ ] 真实浏览器引用与媒体按需加载验证：在含大量素材的项目中打开节点提示词编辑器、输入 `@` 呼出引用菜单并上下切换候选，确认 Network 面板仅对已引用及当前可见候选项发起 `/api/resources/access`。
+
 ## 章节分镜资产自动绑定：生成、预览与追加待验收
 
 - 已实现完整候选分页、服务端可信摘要/允许集合、确定性 `projectAssetRefs` 解析、只读 `resolve-generated`、真实任务基线与逐行脚本同事务保存复核，以及存量镜头只读 `POST /shot-asset-bindings/preview`、受并发基线与 `WithStoryboardAssetOwners` 锁保护的原子 `POST /shot-asset-bindings/append`（含选择性 `stale` 失效与精确后态幂等重放）和章节/单镜“匹配镜头资产”抽屉（`ChapterAssetBindingDrawer`）。

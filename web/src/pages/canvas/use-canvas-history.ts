@@ -201,6 +201,7 @@ function createCanvasHistoryPatch(before: CanvasHistorySnapshot, after: CanvasHi
 }
 
 function createEntityPatch<T extends { id: string }>(before: T[], after: T[]): EntityPatch<T> | undefined {
+    if (before === after) return undefined;
     const beforeById = new Map(before.map((item) => [item.id, item]));
     const afterById = new Map(after.map((item) => [item.id, item]));
     const ids = new Set([...beforeById.keys(), ...afterById.keys()]);

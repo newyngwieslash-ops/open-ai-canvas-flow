@@ -26,8 +26,6 @@ type CanvasNodeToolbarProps = {
     node: CanvasNodeData | null;
     viewport: ViewportTransform;
     containerRef: RefObject<HTMLDivElement | null>;
-    onKeep: (nodeId: string) => void;
-    onLeave: () => void;
     onInfo: (node: CanvasNodeData) => void;
     onEditText: (node: CanvasNodeData) => void;
     onDecreaseFont: (node: CanvasNodeData) => void;
@@ -97,8 +95,6 @@ export function CanvasNodeToolbar({
     node,
     viewport,
     containerRef,
-    onKeep,
-    onLeave,
     onInfo,
     onEditText,
     onDecreaseFont,
@@ -339,8 +335,6 @@ export function CanvasNodeToolbar({
     const processMenuLabel = compact ? "工具" : isVideo ? "提取素材" : isImage ? "图片工具" : isAudio ? "音频处理" : "文本调整";
     const handleMenuOpenChange = (menuId: string, open: boolean) => {
         setOpenMenuId((current) => open ? menuId : current === menuId ? null : current);
-        if (open) onKeep(node.id);
-        else if (!toolbarRef.current?.contains(document.activeElement)) onLeave();
     };
     const dockStyle = canvasDockStyle(theme, theme.node.text);
 
@@ -349,14 +343,10 @@ export function CanvasNodeToolbar({
             ref={toolbarRef}
             className="canvas-node-toolbar absolute z-[var(--z-node-toolbar)] -translate-x-1/2 -translate-y-full"
             style={{ left: 0, top: 0, transform: `translate3d(${anchor.left}px, ${anchor.top}px, 0)`, width: "max-content", maxWidth: containerWidth, color: theme.node.text }}
-            onMouseEnter={() => onKeep(node.id)}
-            onMouseLeave={() => { if (!openMenuId) onLeave(); }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
             data-canvas-no-zoom
             onKeyDown={(event) => event.stopPropagation()}
-            onFocus={() => onKeep(node.id)}
-            onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !openMenuId) onLeave(); }}
         >
             <div
                 role="toolbar"

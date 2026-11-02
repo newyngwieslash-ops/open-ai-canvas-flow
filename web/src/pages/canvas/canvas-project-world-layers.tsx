@@ -48,7 +48,7 @@ type CanvasProjectWorldLayersProps = {
     batchMotionById: Map<string, { x: number; y: number; index: number }>;
     showImageInfo: boolean;
     resourceReferenceByNodeId: Map<string, CanvasResourceReference>;
-    mentionReferencesByNodeId: Map<string, CanvasResourceReference[]>;
+    getNodeMentionReferences: (nodeId: string) => CanvasResourceReference[];
     mediaEffectsDisabledNodeId?: string | null;
     selectedNodeBounds: NodeBounds;
     batchSourceNodeIds: string[];
@@ -59,8 +59,8 @@ type CanvasProjectWorldLayersProps = {
     onConnectionSelect: (connectionId: string) => void;
     onConnectionContextMenu: (event: ReactMouseEvent<SVGPathElement>, connectionId: string) => void;
     onNodeMouseDown: (event: ReactMouseEvent, nodeId: string) => void;
-    onNodeHoverStart: (nodeId: string) => void;
-    onNodeHoverEnd: (nodeId: string) => void;
+    onNodeHoverStart?: (nodeId: string) => void;
+    onNodeHoverEnd?: (nodeId: string) => void;
     onConnectStart: (event: ReactPointerEvent, nodeId: string, handleType: "source" | "target", handleId?: string, anchorRatio?: number) => void;
     onNodeResize: (nodeId: string, width: number, height: number, position?: Position) => void;
     onToggleFrame: (nodeId: string) => void;
@@ -181,7 +181,7 @@ export const CanvasProjectWorldLayers = memo(function CanvasProjectWorldLayers(p
                         showImageInfo={props.showImageInfo}
                         disableMediaEffects={props.mediaEffectsDisabledNodeId === node.id}
                         resourceLabel={props.resourceReferenceByNodeId.get(node.id)}
-                        mentionReferences={props.mentionReferencesByNodeId.get(node.id) || EMPTY_RESOURCE_REFERENCES}
+                        mentionReferences={props.getNodeMentionReferences(node.id) || EMPTY_RESOURCE_REFERENCES}
                         renderNodeContent={props.renderCanvasNodeContent}
                         drawingProjectId={props.projectId}
                         onMouseDown={props.onNodeMouseDown}

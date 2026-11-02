@@ -23,7 +23,6 @@ type UseCanvasNodeEditorOptions = {
     setSelectedNodeIds: Dispatch<SetStateAction<Set<string>>>;
     setSelectedConnectionId: Dispatch<SetStateAction<string | null>>;
     setDialogNodeId: Dispatch<SetStateAction<string | null>>;
-    setToolbarNodeId: Dispatch<SetStateAction<string | null>>;
     setHoveredNodeId: Dispatch<SetStateAction<string | null>>;
 };
 
@@ -36,7 +35,6 @@ export function useCanvasNodeEditor({
     setSelectedNodeIds,
     setSelectedConnectionId,
     setDialogNodeId,
-    setToolbarNodeId,
     setHoveredNodeId,
 }: UseCanvasNodeEditorOptions) {
     const { message } = App.useApp();
@@ -84,9 +82,8 @@ export function useCanvasNodeEditor({
         setSelectedNodeIds(new Set([nodeId]));
         setSelectedConnectionId(null);
         setDialogNodeId((current) => (current && childIds.has(current) ? null : current));
-        setToolbarNodeId(null);
         setHoveredNodeId(null);
-    }, [nodesRef, setDialogNodeId, setHoveredNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds, setToolbarNodeId]);
+    }, [nodesRef, setDialogNodeId, setHoveredNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
 
     const handleNodeTitleChange = useCallback((nodeId: string, title: string) => {
         const node = nodesRef.current.find((node) => node.id === nodeId);

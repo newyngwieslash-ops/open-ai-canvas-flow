@@ -20,7 +20,6 @@ type UseCanvasViewportControllerOptions = {
     setSelectedConnectionId: Dispatch<SetStateAction<string | null>>;
     setContextMenu: Dispatch<SetStateAction<ContextMenuState | null>>;
     setDialogNodeId: Dispatch<SetStateAction<string | null>>;
-    setToolbarNodeId: Dispatch<SetStateAction<string | null>>;
 };
 
 export function useCanvasViewportController({
@@ -35,7 +34,6 @@ export function useCanvasViewportController({
     setSelectedConnectionId,
     setContextMenu,
     setDialogNodeId,
-    setToolbarNodeId,
 }: UseCanvasViewportControllerOptions) {
     const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -75,9 +73,8 @@ export function useCanvasViewportController({
         setSelectedConnectionId(null);
         setContextMenu(null);
         setDialogNodeId(null);
-        setToolbarNodeId(null);
         transitionViewportTo(target);
-    }, [agentCreatedNodes, containerRef, nodesRef, size, viewportRef, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId, setToolbarNodeId, transitionViewportTo]);
+    }, [agentCreatedNodes, containerRef, nodesRef, size, viewportRef, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId, transitionViewportTo]);
 
     const screenToCanvas = useCallback((clientX: number, clientY: number): Position => {
         const rect = containerRef.current?.getBoundingClientRect();
@@ -116,9 +113,8 @@ export function useCanvasViewportController({
         setSelectedNodeIds(new Set());
         setSelectedConnectionId(null);
         setDialogNodeId(null);
-        setToolbarNodeId(null);
         setContextMenu({ type: "canvas", x: event.clientX, y: event.clientY, position: screenToCanvas(event.clientX, event.clientY), createOpen: true });
-    }, [screenToCanvas, setContextMenu, setDialogNodeId, setSelectedConnectionId, setSelectedNodeIds, setToolbarNodeId]);
+    }, [screenToCanvas, setContextMenu, setDialogNodeId, setSelectedConnectionId, setSelectedNodeIds]);
 
     const selectFocusedNode = useCallback((nodeId: string) => {
         const selection = new Set([nodeId]);
@@ -135,8 +131,7 @@ export function useCanvasViewportController({
         transitionViewportTo({ x: size.width / 2 - (node.position.x + node.width / 2) * scale, y: size.height / 2 - (node.position.y + node.height / 2) * scale, k: scale });
         selectFocusedNode(node.id);
         setDialogNodeId(null);
-        setToolbarNodeId(node.id);
-    }, [nodesRef, selectFocusedNode, setDialogNodeId, setToolbarNodeId, size.height, size.width, transitionViewportTo, viewportRef]);
+    }, [nodesRef, selectFocusedNode, setDialogNodeId, size.height, size.width, transitionViewportTo, viewportRef]);
 
     const focusCanvasNode = useCallback((nodeId: string) => {
         const node = nodesRef.current.find((item) => item.id === nodeId);

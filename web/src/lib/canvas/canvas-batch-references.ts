@@ -48,6 +48,7 @@ export function batchCellAnchor(node: CanvasNodeData, handle: string | undefined
 
 /** Column inputs update references in place, never reconstruct user/AI task rows. */
 export function syncBatchColumnReferences(nodes: CanvasNodeData[], connections: CanvasConnection[]) {
+    if (!nodes.some((node) => Boolean(node.metadata?.batchTable) && !node.metadata?.locked)) return nodes;
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const incoming = new Map<string, CanvasConnection[]>();
     for (const edge of connections) {
@@ -105,6 +106,7 @@ export function filterBatchCellConnections<T extends { connection: CanvasConnect
 
 /** Row references are the source of truth. Preserve existing edge IDs when the binding is unchanged. */
 export function reconcileBatchCellConnections(nodes: CanvasNodeData[], connections: CanvasConnection[]) {
+    if (!nodes.some((node) => node.metadata?.batchTable?.referenceMode === "cells")) return connections;
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const managed = new Set(nodes.filter((node) => node.metadata?.batchTable?.referenceMode === "cells").map((node) => node.id));
     const existing = new Map(connections.filter((connection) => parseBatchCellHandle(connection.toHandleId)).map((connection) => [`${connection.toNodeId}|${connection.toHandleId}|${connection.fromNodeId}`, connection]));

@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import { CanvasWorkspaceAssetPanel } from "./canvas-workspace-asset-panel";
 import { CanvasWorkspaceHistoryPanel } from "./canvas-workspace-history-panel";
 import type { InsertAssetPayload } from "./asset-picker-modal";
-import { useDeferredValue, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { useDeferredValue, useMemo, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { Button, Grid } from "antd";
 import { Home, PanelLeftClose, PanelLeftOpen, Layers3, Images, ListChecks, History, X } from "lucide-react";
 import { AppDrawer } from "@/components/ui/product/app-drawer";
@@ -57,13 +57,17 @@ export function CanvasWorkspacePanel({
         if (event.key === "Tab" || event.key === "Enter" || event.key === " ") event.currentTarget.dataset.inputModality = "keyboard";
     };
     const tasks = useCanvasWorkspaceTasks(projectId, open && (tab === "tasks" || history));
+    const nodeSearchResults = useMemo(
+        () => open && tab === "nodes" ? searchCanvasNodes(nodes, deferredQuery, nodes.length, config) : [],
+        [open, tab, nodes, deferredQuery, config],
+    );
     const content = (
         <div className="canvas-workspace-panel relative flex h-full min-h-0 flex-col text-foreground" style={{ "--canvas-workspace-base": theme.node.panel } as CSSProperties} data-canvas-no-zoom data-canvas-wheel-scroll onWheel={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
             <button className="canvas-workspace-close" type="button" aria-label="关闭工作区" onClick={onClose}>
                 <X className="size-4" />
             </button>
             {tab === "nodes" && (
-                <CanvasWorkspaceNodeListPanel nodes={nodes} config={config} results={searchCanvasNodes(nodes, deferredQuery, nodes.length, config)} query={query} deferredQuery={deferredQuery} selectedNodeIds={selectedNodeIds} onQueryChange={setQuery} onFocus={onFocus} />
+                <CanvasWorkspaceNodeListPanel nodes={nodes} config={config} results={nodeSearchResults} query={query} deferredQuery={deferredQuery} selectedNodeIds={selectedNodeIds} onQueryChange={setQuery} onFocus={onFocus} />
             )}
             {tab === "assets" && <CanvasWorkspaceAssetPanel onInsert={onInsertAssets} onManage={onAssets} onProjectAssets={onProjectAssets} />}
             {(tab === "tasks" || history) && (

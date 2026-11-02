@@ -11,10 +11,10 @@ import { batchCellConnectionError, batchCellHandle, parseBatchCellHandle, type B
 import { connectedNodeCenterFromEdgeDrop } from "@/lib/canvas/canvas-connected-node-placement";
 import { canvasConnectionError, connectionInputSummary } from "@/lib/canvas/canvas-connection-policy";
 import { audioModelForConnectionInput } from "@/lib/model-selection";
-import { attachNodeToStoryboardRow, createCanvasNode, getConnectionTargetAnchor, isHiddenBatchChild, normalizeConnection, storyboardHandleAtY, storyboardPromptTemplateMetadata, storyboardRowFromHandle } from "@/lib/canvas/canvas-project-domain";
+import { attachNodeToStoryboardRow, createCanvasNode, getConnectionTargetAnchor, normalizeConnection, storyboardHandleAtY, storyboardPromptTemplateMetadata, storyboardRowFromHandle } from "@/lib/canvas/canvas-project-domain";
+import { buildCanvasConnectionHitIndex } from "@/lib/canvas/canvas-connection-hit-index";
 import { createCanvasDrawingFromImage } from "@/lib/canvas/canvas-drawing-storage";
 import { isDrawingEngineAvailable, type CanvasDrawingEngine } from "@/lib/canvas/canvas-drawing-engine";
-import { isFrameNode, isNodeHiddenByCollapsedFrame } from "@/lib/canvas/canvas-frame";
 import { normalizeRunningHubCapability, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type ConnectionHandle, type ContextMenuState, type Position, type ViewportTransform } from "@/types/canvas";
@@ -63,6 +63,7 @@ type BatchConnectionDropTarget = ConnectionDropTarget;
 // while retaining a circular boundary around the corresponding side anchor.
 const CONNECTION_SNAP_RADIUS = 56;
 const NODE_STATUS_IDLE = "idle" as const;
+type BatchPlanOptions = Parameters<typeof planBatchConnections>[0];
 
 function selectRunningHubWorkflow(config: AiConfig) {
     const capability = normalizeRunningHubCapability(config.runningHub.capability);
@@ -114,6 +115,16 @@ export function useCanvasConnectionController({
     const pointerMoveFrameRef = useRef<number | null>(null);
     const latestPointerMoveRef = useRef<PointerEvent | null>(null);
     const hoveredReplaceElRef = useRef<HTMLElement | null>(null);
+    const connectionHitIndexRef = useRef<{ nodes: CanvasNodeData[]; index: ReturnType<typeof buildCanvasConnectionHitIndex> } | null>(null);
+    const previewPlanRef = useRef<{ options: BatchPlanOptions; plan: ReturnType<typeof planBatchConnections>; eligible: number } | null>(null);
+
+    const getConnectionHitIndex = useCallback(() => {
+        const currentNodes = nodesRef.current;
+        if (connectionHitIndexRef.current?.nodes === currentNodes) return connectionHitIndexRef.current.index;
+        const index = buildCanvasConnectionHitIndex(currentNodes);
+        connectionHitIndexRef.current = { nodes: currentNodes, index };
+        return index;
+    }, [nodesRef]);
 
     const updateConnectionReplaceHover = useCallback((element: HTMLElement | null, clientX = 0, clientY = 0) => {
         if (hoveredReplaceElRef.current === element) {
@@ -148,6 +159,7 @@ export function useCanvasConnectionController({
     }, []);
 
     const clearBatchConnection = useCallback(() => {
+        previewPlanRef.current = null;
         batchConnectionPointerIdRef.current = null;
         batchConnectionPointerStartRef.current = null;
         updateBatchConnectionPreview(null);
@@ -179,13 +191,26 @@ export function useCanvasConnectionController({
     }, [clearBatchConnection, closeConnectionCreateMenu, setConnecting]);
 
     const previewBatchConnection = useCallback((sourceNodeIds: string[], targetNodeId: string | null, targetHandleId: string | undefined, targetAnchorRatio: number | undefined, mouseWorld: Position) => {
-        const plan = targetNodeId
-            ? planBatchConnections({ sourceNodeIds, targetNodeId, targetHandleId, targetAnchorRatio, nodes: nodesRef.current, connections: connectionsRef.current, config })
-            : null;
-        const eligibleSourceCount = sourceNodeIds.filter((id) => {
-            const node = nodesRef.current.find((item) => item.id === id);
-            return Boolean(node && !batchSourceRestriction(node));
-        }).length;
+        let plan: ReturnType<typeof planBatchConnections> | null = null;
+        let eligibleSourceCount = 0;
+        if (targetNodeId) {
+            const options: BatchPlanOptions = { sourceNodeIds, targetNodeId, targetHandleId, targetAnchorRatio, nodes: nodesRef.current, connections: connectionsRef.current, config };
+            const old = previewPlanRef.current;
+            const reusable = old && old.options.nodes === options.nodes && old.options.connections === options.connections && old.options.config === options.config &&
+                old.options.targetNodeId === options.targetNodeId && old.options.targetHandleId === options.targetHandleId && old.options.targetAnchorRatio === options.targetAnchorRatio &&
+                old.options.sourceNodeIds.length === sourceNodeIds.length && old.options.sourceNodeIds.every((id, index) => id === sourceNodeIds[index]);
+            if (reusable) {
+                plan = old.plan;
+                eligibleSourceCount = old.eligible;
+            } else {
+                plan = planBatchConnections(options);
+                eligibleSourceCount = sourceNodeIds.filter((id) => {
+                    const node = nodesRef.current.find((item) => item.id === id);
+                    return Boolean(node && !batchSourceRestriction(node));
+                }).length;
+                previewPlanRef.current = { options: { ...options, sourceNodeIds: sourceNodeIds.slice() }, plan, eligible: eligibleSourceCount };
+            }
+        }
         const status = !targetNodeId || !plan ? "idle" : plan.connections.length === eligibleSourceCount ? "valid" : plan.connections.length ? "partial" : "invalid";
         updateBatchConnectionPreview({ sourceNodeIds, targetNodeId, targetHandleId, targetAnchorRatio, mouseWorld, status });
         return plan;
@@ -457,41 +482,23 @@ export function useCanvasConnectionController({
         const scale = Math.max(viewportRef.current.k, 0.05);
         const handleRadius = CONNECTION_SNAP_RADIUS / scale;
         let isNearNode = false;
-        let bestNodeId: string | null = null;
-        let bestHandleId: string | undefined;
-        let bestAnchorRatio: number | undefined;
-        let bestPriority = Number.POSITIVE_INFINITY;
+        const hitIndex = getConnectionHitIndex();
 
-        [...nodesRef.current]
-            .filter((node) => !isHiddenBatchChild(node, nodesRef.current) && !isNodeHiddenByCollapsedFrame(node, nodesRef.current) && !isFrameNode(node))
-            .reverse()
-            .forEach((node) => {
-                const scrollTop = scriptScrollTopById[node.id] || 0;
-                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
-                if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !targetHandleId) return;
-                // Ordinary nodes expose one centered input/output port. Only
-                // storyboard rows have a meaningful vertical target position.
-                const targetAnchorRatio = undefined;
-                const anchor = getConnectionTargetAnchor(node, current, targetHandleId, scrollTop, batchScrollById?.[node.id]);
-                const dx = world.x - anchor.x;
-                const dy = world.y - anchor.y;
-                // Do not treat the node body or a rectangular padding band as a
-                // connection target. LibTV snaps only inside the circular
-                // quick-add area centred on the corresponding side handle.
-                const hitsSnapZone = dx * dx + dy * dy <= handleRadius * handleRadius;
-                if (!hitsSnapZone) return;
-                isNearNode = true;
-                const normalized = node.id === current.nodeId ? null : normalizeConnection(current.nodeId, node.id, nodesRef.current, current.handleType);
-                if (!normalized || canvasConnectionError(config, nodesRef.current, connectionsRef.current, normalized)) return;
-                if (1 < bestPriority) {
-                    bestNodeId = node.id;
-                    bestHandleId = targetHandleId;
-                    bestAnchorRatio = targetAnchorRatio;
-                    bestPriority = 1;
-                }
-            });
-        return { nodeId: bestNodeId, handleId: bestHandleId, anchorRatio: bestAnchorRatio, isNearNode };
-    }, [batchScrollById, config, connectionsRef, nodesRef, screenToCanvas, scriptScrollTopById, viewportRef]);
+        for (const node of hitIndex.candidates(world, handleRadius)) {
+            const scrollTop = scriptScrollTopById[node.id] || 0;
+            const handleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
+            if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !handleId) continue;
+            const anchor = getConnectionTargetAnchor(node, current, handleId, scrollTop, batchScrollById?.[node.id]);
+            const dx = world.x - anchor.x;
+            const dy = world.y - anchor.y;
+            if (dx * dx + dy * dy > handleRadius * handleRadius) continue;
+            isNearNode = true;
+            const normalized = node.id === current.nodeId ? null : normalizeConnection(current.nodeId, node.id, nodesRef.current, current.handleType);
+            if (!normalized || canvasConnectionError(config, nodesRef.current, connectionsRef.current, normalized)) continue;
+            return { nodeId: node.id, handleId, anchorRatio: undefined, isNearNode };
+        }
+        return { nodeId: null, handleId: undefined, anchorRatio: undefined, isNearNode };
+    }, [batchScrollById, config, connectionsRef, getConnectionHitIndex, nodesRef, screenToCanvas, scriptScrollTopById, viewportRef]);
 
     const getBatchConnectionDropTarget = useCallback((clientX: number, clientY: number, sourceNodeIds: string[]): BatchConnectionDropTarget => {
         const cell = batchCellAtPoint(clientX, clientY);
@@ -500,8 +507,9 @@ export function useCanvasConnectionController({
             const error = sourceNodeIds.length !== 1 || batchCellConnectionError(nodesRef.current, sourceNodeIds[0], cell.tableId, handleId);
             return { nodeId: error ? null : cell.tableId, handleId, isNearNode: true };
         }
+        const hitIndex = getConnectionHitIndex();
         const source = sourceNodeIds
-            .map((id) => nodesRef.current.find((node) => node.id === id))
+            .map((id) => hitIndex.nodeById.get(id))
             .find((node): node is CanvasNodeData => Boolean(node && !batchSourceRestriction(node)));
         if (!source) return { nodeId: null, isNearNode: false };
 
@@ -509,36 +517,22 @@ export function useCanvasConnectionController({
         const scale = Math.max(viewportRef.current.k, 0.05);
         const handleRadius = CONNECTION_SNAP_RADIUS / scale;
         let isNearNode = false;
-        let bestNodeId: string | null = null;
-        let bestHandleId: string | undefined;
-        let bestAnchorRatio: number | undefined;
-        let bestPriority = Number.POSITIVE_INFINITY;
         const current: ConnectionHandle = { nodeId: source.id, handleType: "source" };
 
-        [...nodesRef.current]
-            .filter((node) => !isHiddenBatchChild(node, nodesRef.current) && !isNodeHiddenByCollapsedFrame(node, nodesRef.current) && !isFrameNode(node))
-            .reverse()
-            .forEach((node) => {
-                const scrollTop = scriptScrollTopById[node.id] || 0;
-                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
-                if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !targetHandleId) return;
-                const targetAnchorRatio = undefined;
-                const anchor = getConnectionTargetAnchor(node, current, targetHandleId, scrollTop, batchScrollById?.[node.id]);
-                const dx = world.x - anchor.x;
-                const dy = world.y - anchor.y;
-                const hitsSnapZone = dx * dx + dy * dy <= handleRadius * handleRadius;
-                if (!hitsSnapZone) return;
-                isNearNode = true;
-                if (!hasBatchConnectionCandidate(sourceNodeIds, node.id, nodesRef.current)) return;
-                if (1 < bestPriority) {
-                    bestNodeId = node.id;
-                    bestHandleId = targetHandleId;
-                    bestAnchorRatio = targetAnchorRatio;
-                    bestPriority = 1;
-                }
-            });
-        return { nodeId: bestNodeId, handleId: bestHandleId, anchorRatio: bestAnchorRatio, isNearNode };
-    }, [batchScrollById, nodesRef, screenToCanvas, scriptScrollTopById, viewportRef]);
+        for (const node of hitIndex.candidates(world, handleRadius)) {
+            const scrollTop = scriptScrollTopById[node.id] || 0;
+            const handleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
+            if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !handleId) continue;
+            const anchor = getConnectionTargetAnchor(node, current, handleId, scrollTop, batchScrollById?.[node.id]);
+            const dx = world.x - anchor.x;
+            const dy = world.y - anchor.y;
+            if (dx * dx + dy * dy > handleRadius * handleRadius) continue;
+            isNearNode = true;
+            if (!hasBatchConnectionCandidate(sourceNodeIds, node.id, nodesRef.current)) continue;
+            return { nodeId: node.id, handleId, anchorRatio: undefined, isNearNode };
+        }
+        return { nodeId: null, isNearNode };
+    }, [batchScrollById, getConnectionHitIndex, nodesRef, screenToCanvas, scriptScrollTopById, viewportRef]);
 
     const startBatchConnection = useCallback((event: ReactPointerEvent, sourceNodeIds: string[]) => {
         const eligible = sourceNodeIds.filter((id) => {
