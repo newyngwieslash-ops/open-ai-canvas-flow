@@ -22,7 +22,7 @@ func profileAdoptFixture(t *testing.T) (*Service, *gorm.DB, string, ProjectAsset
 	if err := db.AutoMigrate(&model.SystemSetting{}, &model.TaskLog{}, &model.Result{}, &model.TaskTextDelta{}); err != nil {
 		t.Fatal(err)
 	}
-	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, Definition: map[string]any{"description": "old", "prompt": []any{"legacy", 2}, "extra": map[string]any{"n": 7}}, ReferenceImage: &ProjectReferenceImage{"image-1"}})
+	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, Definition: map[string]any{"description": "old", "prompt": []any{"legacy", 2}, "extra": map[string]any{"n": 7}}, ReferenceImages: []ProjectReferenceImage{{"image-1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestProfileAnalysisDedicatedCompletionValidates(t *testing.T) {
 	if err := db.AutoMigrate(&model.SystemSetting{}, &model.TaskLog{}, &model.Result{}, &model.TaskTextDelta{}); err != nil {
 		t.Fatal(err)
 	}
-	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{"image-1"}})
+	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{"image-1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func profileCreationFixture(t *testing.T) (*Service, *gorm.DB, string, ProjectAs
 		t.Fatal(err)
 	}
 	createClosedLocalFixtureResource(t, s, &r)
-	a, err := s.CreateProjectAssetEntity("user", p.ID, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{r.ID}})
+	a, err := s.CreateProjectAssetEntity("user", p.ID, CreateProjectAssetEntityRequest{Name: "profile", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{r.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,12 +15,12 @@ import (
 )
 
 type CreateProjectCharacterRequest struct {
-	Name            string                 `json:"name"`
-	Definition      map[string]any         `json:"definition"`
-	ReferenceImage  *ProjectReferenceImage `json:"referenceImage,omitempty"`
-	ImageResourceID string                 `json:"imageResourceId,omitempty"`
-	ImageRole       string                 `json:"imageRole,omitempty"`
-	FolderID        *string                `json:"folderId,omitempty"`
+	Name            string                  `json:"name"`
+	Definition      map[string]any          `json:"definition"`
+	ReferenceImages []ProjectReferenceImage `json:"referenceImages,omitempty"`
+	ImageResourceID string                  `json:"imageResourceId,omitempty"`
+	ImageRole       string                  `json:"imageRole,omitempty"`
+	FolderID        *string                 `json:"folderId,omitempty"`
 }
 
 type CreateCharacterRequest struct {
@@ -308,7 +308,7 @@ func (s *Service) UnbindCharacterVoice(userID string, assetID string) (Character
 	return s.Character(userID, asset.ID)
 }
 func (s *Service) CreateProjectCharacter(userID string, projectID string, req CreateProjectCharacterRequest) (ProjectCharacterDetail, error) {
-	asset, err := s.createProjectImageEntity(userID, projectID, model.AssetCategoryCharacter, req.Name, req.Definition, req.ReferenceImage, req.ImageResourceID, req.ImageRole, req.FolderID)
+	asset, err := s.createProjectImageEntity(userID, projectID, model.AssetCategoryCharacter, req.Name, req.Definition, req.ReferenceImages, req.ImageResourceID, req.ImageRole, req.FolderID)
 	if err != nil {
 		return ProjectCharacterDetail{}, err
 	}

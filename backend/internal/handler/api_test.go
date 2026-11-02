@@ -18,7 +18,7 @@ func TestRegisterCanvasAPIExposesOpenAPIAndProjects(t *testing.T) {
 
 	wanted := map[string]bool{
 		"POST /api/projects/:id/asset-entities":                                 false,
-		"PUT /api/projects/:id/assets/:assetId/reference-image":                 false,
+		"PUT /api/projects/:id/assets/:assetId/reference-images":                false,
 		"POST /api/projects/:id/assets/:assetId/image-candidates/:taskId/adopt": false,
 		"GET /api/tasks":                    false,
 		"GET /api/openapi.yaml":             false,

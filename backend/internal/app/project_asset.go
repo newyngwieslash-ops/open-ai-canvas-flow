@@ -40,7 +40,7 @@ type CreateAssetVersionRequest struct {
 }
 
 type ProjectAssetSummary struct {
-	ReferenceImage   *ProjectReferenceImage     `json:"referenceImage,omitempty"`
+	ReferenceImages  []ProjectReferenceImage    `json:"referenceImages,omitempty"`
 	ID               string                     `json:"id"`
 	Title            string                     `json:"title"`
 	MediaType        string                     `json:"mediaType"`
@@ -645,7 +645,7 @@ func (s *Service) projectAssetSummary(userID string, projectID string, asset *mo
 	summary := ProjectAssetSummary{ID: asset.ID, Title: asset.Title, MediaType: asset.Kind, Category: asset.Category, Status: asset.Status, PrimaryVersionID: asset.PrimaryVersionID, VersionCount: len(versions), Usages: usages, FolderID: link.FolderID, Position: link.Position, StorageKey: storageKey, PreviewText: previewText, DurationMs: durationMs, UpdatedAt: asset.UpdatedAt, Source: source}
 	for _, version := range versions {
 		if version.ID == asset.PrimaryVersionID {
-			summary.ReferenceImage = referenceImageFromDefinition(version.DefinitionJSON)
+			summary.ReferenceImages = referenceImagesFromDefinition(version.DefinitionJSON)
 			break
 		}
 	}

@@ -182,8 +182,8 @@ func TestProfileAnalysisRealConcurrency(t *testing.T) {
 					}
 					asset, err := services[0].CreateProjectAssetEntity(project.UserID, project.ID, CreateProjectAssetEntityRequest{
 						Name: "profile", Category: model.AssetCategoryProp,
-						Definition:     map[string]any{"description": "old", "prompt": "old prompt", "extra": []any{"keep", 2}},
-						ReferenceImage: &ProjectReferenceImage{ResourceID: resource.ID},
+						Definition:      map[string]any{"description": "old", "prompt": "old prompt", "extra": []any{"keep", 2}},
+						ReferenceImages: []ProjectReferenceImage{{ResourceID: resource.ID}},
 					})
 					if err != nil {
 						t.Fatal(err)
@@ -256,7 +256,7 @@ func TestProfileAnalysisRealConcurrency(t *testing.T) {
 								// The real manual API reaches SaveCharacterVersion through
 								// CommitAssetReferenceVersion, using the same old base CAS.
 								var edited ProjectAssetSummary
-								edited, errs[i] = services[i].SetProjectReferenceImage(project.UserID, project.ID, asset.ID, SetProjectReferenceImageRequest{ExpectedVersionID: base.ID, ResourceID: manualResource.ID})
+								edited, errs[i] = services[i].SetProjectReferenceImages(project.UserID, project.ID, asset.ID, SetProjectReferenceImagesRequest{ExpectedVersionID: base.ID, ReferenceImages: []ProjectReferenceImage{{ResourceID: manualResource.ID}}})
 								responses[i] = AdoptProfileAnalysisResponse{AdoptedVersionID: edited.PrimaryVersionID, Asset: edited}
 								return
 							}
@@ -331,8 +331,8 @@ func TestProfileAnalysisRealConcurrency(t *testing.T) {
 								}
 							}
 						}
-						if manualWon && key == "referenceImage" {
-							raw, _ := json.Marshal(ProjectReferenceImage{ResourceID: manualResource.ID})
+						if manualWon && key == "referenceImages" {
+							raw, _ := json.Marshal([]ProjectReferenceImage{{ResourceID: manualResource.ID}})
 							expected = string(raw)
 						}
 						if string(definition[key]) != expected {

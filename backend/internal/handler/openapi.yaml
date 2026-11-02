@@ -264,15 +264,18 @@ paths:
                 name: {type: string, minLength: 1}
                 category: {type: string, enum: [environment, prop]}
                 definition: {type: object, additionalProperties: true}
-                referenceImage:
-                  type: object
-                  required: [resourceId]
-                  properties:
-                    resourceId: {type: string, minLength: 1}
+                referenceImages:
+                  type: array
+                  maxItems: 16
+                  items:
+                    type: object
+                    required: [resourceId]
+                    properties:
+                      resourceId: {type: string, minLength: 1}
                 imageResourceId: {type: string, description: 可选直接采用成品，首版本原子绑定 primary}
                 folderId: {type: string, description: 当前项目目录；不传或空字符串表示根目录}
       responses:
-        "200": {description: '成功信封 data={asset}，包含可选 referenceImage.resourceId'}
+        "200": {description: '成功信封 data={asset}，包含可选 referenceImages'}
         "400": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
   /projects/{id}/characters:
@@ -291,11 +294,14 @@ paths:
               properties:
                 name: {type: string, minLength: 1}
                 definition: {type: object, additionalProperties: true}
-                referenceImage:
-                  type: object
-                  required: [resourceId]
-                  properties:
-                    resourceId: {type: string, minLength: 1}
+                referenceImages:
+                  type: array
+                  maxItems: 16
+                  items:
+                    type: object
+                    required: [resourceId]
+                    properties:
+                      resourceId: {type: string, minLength: 1}
                 imageResourceId: {type: string}
                 imageRole: {type: string, enum: [portrait, turnaround_sheet], default: portrait, description: portrait 仅 primary；三视图同时写 primary 和 turnaround_sheet}
                 folderId: {type: string}
@@ -356,10 +362,10 @@ paths:
         "200": {description: '成功信封 data={asset,character}'}
         "400": {$ref: "#/components/responses/Error"}
         "409": {description: '版本冲突，reason=project_asset_version_changed'}
-  /projects/{id}/assets/{assetId}/reference-image:
+  /projects/{id}/assets/{assetId}/reference-images:
     put:
       tags: [projects, assets]
-      summary: 设置版本化单张原始参考图，不覆盖成品，本版不支持清除
+      summary: 设置版本化有序原始参考图数组（最多 16 张），支持重排与空数组清空且不覆盖成品
       parameters:
         - {in: path, name: id, required: true, schema: {type: string}}
         - {in: path, name: assetId, required: true, schema: {type: string}}
@@ -369,12 +375,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [resourceId, expectedVersionId]
+              required: [referenceImages, expectedVersionId]
               properties:
-                resourceId: {type: string, minLength: 1}
+                referenceImages:
+                  type: array
+                  maxItems: 16
+                  items:
+                    type: object
+                    required: [resourceId]
+                    properties:
+                      resourceId: {type: string, minLength: 1}
                 expectedVersionId: {type: string, minLength: 1}
       responses:
-        "200": {description: '成功信封 data={asset}，referenceImage.resourceId 为原图'}
+        "200": {description: '成功信封 data={asset}，referenceImages 为当前版本原图数组'}
         "400": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "409": {description: '版本冲突，reason=project_asset_version_changed'}
@@ -2518,6 +2531,7 @@ components:
         assetId: {type: string}
         version: {type: integer}
         representations: {type: array, items: {type: object}}
+        referenceImages: {type: array, maxItems: 16, items: {type: object, required: [resourceId], properties: {resourceId: {type: string}}}}
         referenceImage: {type: object, required: [resourceId], properties: {resourceId: {type: string}}}
     LoginLog:
       type: object

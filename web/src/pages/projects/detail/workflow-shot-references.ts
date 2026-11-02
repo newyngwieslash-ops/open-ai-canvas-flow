@@ -147,7 +147,7 @@ function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetRe
         };
     }
     if (reference?.referencedVersion) {
-        const resourceId = reference.referencedVersion.referenceImage?.resourceId;
+        const resourceId = reference.referencedVersion.referenceImages?.[0]?.resourceId || reference.referencedVersion.referenceImage?.resourceId;
         return resourceId ? { id: asset.id, name: asset.title, type: "image/*", dataUrl: "", url: resourceFileUrl(resourceId), storageKey: resourceStorageKey(resourceId) } : undefined;
     }
     if (asset.mediaType !== "image" || !asset.storageKey) return undefined;

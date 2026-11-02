@@ -137,12 +137,22 @@ func (r *Repository) ReadStoryboardAssetSnapshot(projectID, unitID string, shotI
 	for _, version := range out.Versions {
 		versionIDs = append(versionIDs, version.ID)
 		var definition struct {
+			ReferenceImages []struct {
+				ResourceID string `json:"resourceId"`
+			} `json:"referenceImages"`
 			ReferenceImage *struct {
 				ResourceID string `json:"resourceId"`
 			} `json:"referenceImage"`
 		}
-		if json.Unmarshal([]byte(version.DefinitionJSON), &definition) == nil && definition.ReferenceImage != nil {
-			resourceIDs = append(resourceIDs, definition.ReferenceImage.ResourceID)
+		if json.Unmarshal([]byte(version.DefinitionJSON), &definition) == nil {
+			for _, item := range definition.ReferenceImages {
+				if item.ResourceID != "" {
+					resourceIDs = append(resourceIDs, item.ResourceID)
+				}
+			}
+			if definition.ReferenceImage != nil && definition.ReferenceImage.ResourceID != "" {
+				resourceIDs = append(resourceIDs, definition.ReferenceImage.ResourceID)
+			}
 		}
 	}
 	if err := r.db.Where("asset_version_id IN ?", versionIDs).Order("id").Find(&out.Representations).Error; err != nil {

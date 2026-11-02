@@ -5,6 +5,12 @@ description: 当前项目已实现的核心工作台能力与使用入口
 
 # 功能清单
 
+## 项目资产有序多参考图管理与单候选生成
+
+项目的角色、场景与道具资产统一支持保存最多 16 张有序原始参考图（`referenceImages: [{ resourceId }]`）。创建角色或场景/道具资产时可直接传入有序 `referenceImages`；已有资产通过 `PUT /api/projects/:id/assets/:assetId/reference-images` 按 `expectedVersionId` 执行 CAS 版本化更新。当提交的有序参考图集合发生变化时创建新主版本并完整保留声音与成品 `representations`；当提交的序列与当前主版本完全一致时执行零写幂等返回；提交空数组 `[]` 会生成清空原始参考图的新主版本。普通设定编辑（名称、外观、文字提示词等）与候选采用均自动继承原版本的有序 `referenceImages`，不允许旁路篡改。
+
+`ProjectAssetImageModal` 在「参考图生成 → 原始参考图」模式下支持从素材库选择或上传最多 16 张参考图，按 `#1..#N` 序号展示缩略图，提供单张「上移」「下移」「移除」与「清空参考图」「保存原始参考图」操作，以及右侧「已保存的原始参考图」有序预览。发起手动生成（`adoptionMode: "manual", count: 1`）时，前端与后端均按 `effectiveMax = min(16, capability.references.maxImages)` 校验当前参考张数：当模型不支持参考图或所选参考张数超出模型声明上限时，在入队前直接拦截并提示明确原因，同时完整保留已保存的原始参考图不丢失；通过校验后由服务端按版本保存顺序重建 `referenceImages` 透传至下游图片协议，生成结果仍为单张待确认候选，需用户显式点击「采用为当前成品」才会更新成品。存量单数 `referenceImage` 数据可通过可重入迁移函数 `MigrateLegacyProjectReferenceImages` 一次性升级为规范 `referenceImages` 数组，遇到损坏 JSON、双字段不一致或缺失资源时生成结构化异常报告并回滚阻断。
+
 ## 短剧当前章节批量图片生成
 
 分镜制作支持在「匹配镜头资产」旁分别启动本章分镜图、动作预演批量生成。默认只补缺；失败重试和过期更新需单独选择并确认。动作预演为黑白图片，不自动引用已生成分镜图，也不生成视频。每次确认展示实际镜头数、图片设置、参考图警告与可获得的费用预估；费用未知不代表免费。
@@ -19,7 +25,7 @@ description: 当前项目已实现的核心工作台能力与使用入口
 
 生成结果通过 `projectAssetRefs` 解析到有效资产版本。显式非法 ID 不按名称兜底；名称只去首尾空白并在完整同类目录中精确判重，普通提及与对白说话人不默认成为视觉引用。保存绑定真实已成功任务、完整目录基线和原始行脚本，在同一替换事务复核。每镜最多 6 个不同版本；超过 6 个展示全部合法候选供真实选择（第 7 个也可选），取消零写入。保存失败或刷新保留同一 `taskId` 恢复生成任务；`PUT` 网络或瞬时失败时在 `pendingGeneratedStoryboardSaves` 中缓存已准备的 `{ shots, expectedShotIds, generatedBinding: { taskId, baseline, rowIndices }, issues }` 原保存输入，同任务重试直接重放原 `baseline`/`rowIndices`/`shots` 而不再重新调用 `resolve-generated` 或重复弹窗确认，保存成功、收到 `400`/`404`/`409`/`422` 终态错误或明确放弃任务（`clearPendingGeneratedStoryboardSave`）时清除缓存。
 
-镜头参考图优先使用已绑定版本；可选 `referencedVersion.referenceImage` 只携带服务端校验后的该版本原图，缺图不回退当前资产主版本。
+镜头参考图优先使用已绑定版本；可选 `referencedVersion.referenceImages` 只携带服务端校验后的该版本有序原图，缺图不回退当前资产主版本。
 
 章节存量镜头支持单镜与整章批量“匹配镜头资产”（`ChapterAssetBindingDrawer`，在分镜脚本、画面生成、视频生成阶段的章节工具栏与单镜动作区均可触发）：先通过只读 `POST /preview`（`/api/projects/:id/units/:unitId/shot-asset-bindings/preview`）计算现有引用、`remainingCapacity = max(0, 6 - existingVersionCount)`、增量候选与完整并发 `baseline`；用户审阅并调整选择后，通过 `POST /append`（`/api/projects/:id/units/:unitId/shot-asset-bindings/append`）在 `WithStoryboardAssetOwners` 锁与单事务内校验不可信 `baseline`、仅追加缺失的 `(shot_id, asset_version_id)` 引用（`role = "reference"`, `status = "linked"`），仅将本次发生真实新增引用的镜头（`addedCount > 0`）上全部非 `failed` 产物更新为 `status = "stale"` 且 `selected = false`（取消当前选中，已 `failed` 产物保持 `failed` 且 `selected = false`，保留全部历史产物记录与媒体文件，未新增引用的镜头产物不触碰），调用 `invalidateUnitWorkflowTx` 使章节 `storyboard` 之后的工作流阶段失效，并通过 `project.revision` CAS 递增项目修订号。全部所选版本已存在或网络超时重发原请求命中 `isStrictExpectedPostState` 时均执行零写幂等返回（`unchanged: true, addedCount: 0`）；遇 `409` 引导用户重拉 `preview` 刷新基线，遇 `503` 或网络错误保留原 `{ baseline, selections }` 直接重试。上述为已实现能力，真实浏览器与模型验收仍见[待测试](/docs/progress/pending-test)。
 

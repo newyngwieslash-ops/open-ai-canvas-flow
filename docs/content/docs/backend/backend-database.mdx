@@ -218,9 +218,9 @@ docker compose -f docker-compose.deploy.yml up -d backend web
 
 本节记录已完成初版实现、处于独立审查修复与回归收尾的合同；已有自动验证结果见待测试专题，不代表最终验收通过，PostgreSQL 并发仍未验证。复用既有 `assets`、`asset_versions`、`asset_representations`、`project_asset_links`、`tasks` 和 `resources`，**不新增表、列、DDL 或数据回填**；图片候选不写入用于章节提取确认的 `project_asset_candidates`。
 
-- **原图**：`AssetVersion.DefinitionJSON`（`asset_versions.definition_json`）增加可选 `referenceImage: { resourceId }`。只存经服务端校验的资源 ID，不存浏览器临时 URL；这是原始参考，不是 `primary` 表现。设置或替换原图创建不可变新版本，保留当前表现、声音及其他定义。通用角色设定编辑不得注入或清除此受保护字段。本版不支持清除原图。
-- **历史保护**：当前和历史版本中的嵌套 `referenceImage.resourceId` 都属于资源引用；不因原图未出现在表现表中就允许删除。事务内检查资源归属、就绪状态与删除竞争；历史版本仍引用的原图不能被物理误删，删除应返回引用来源。
-- **任务输入**：`Task.InputJSON` 的 `metadata` 固化 `adoptionMode=manual|auto`（缺省 `auto`）、`referenceSource=original|current|none` 与 `projectAssetVersionId`。原图、当前成品或无参考由服务端按基准版本解析，选当前成品不改原图。
+- **原图**：`AssetVersion.DefinitionJSON`（`asset_versions.definition_json`）保存有序原始参考图数组 `referenceImages: [{ resourceId }]`（单版本上限 `MaxProjectAssetReferenceImages = 16`，同版本内禁止重复 `resourceId`）。只存经服务端校验的资源 ID，不存浏览器临时 URL；这是原始参考，不是 `primary` 表现。设置、重排或通过 `referenceImages: []` 清空原图集合均创建不可变新版本（同序保存且 `expectedVersionId` 匹配时幂等返回当前版本），保留当前表现、声音及其他定义。通用角色设定编辑不得注入或清除此受保护字段。通过显式重入式数据迁移 `MigrateLegacyProjectReferenceImages` 可将存量单张 `referenceImage` 原地规范化为单元素或空 `referenceImages` 数组并移除旧 `referenceImage` 键。
+- **历史保护**：当前和历史版本中的嵌套 `referenceImages[].resourceId`（及迁移前 `referenceImage.resourceId`）都属于资源引用；不因原图未出现在表现表中就允许删除。事务内按排序后的资源 ID 锁定并检查资源归属、就绪状态与删除竞争；历史版本仍引用的原图不能被物理误删，删除应返回引用来源。
+- **任务输入**：`Task.InputJSON` 的 `metadata` 固化 `adoptionMode=manual|auto`（缺省 `auto`）、`referenceSource=original|current|none` 与 `projectAssetVersionId`。`original` 按基准版本的 `referenceImages` 严格保存顺序重建多图参考，`current` 重建当前成品单图参考，`none` 为空，选当前成品不改原图；能力校验按 `min(16, capabilityConfig.image.references.maxImages)` 与字节预算强制把关。
 - **任务结果**：`Task.ResultJSON` 保存手动模式的 `assetImageCandidate={ assetId, baseVersionId, state, adoptedVersionId? }`，其中 `state` 为 `pending_confirmation` 或 `adopted`。成功但未采用只保留任务结果及资源，不提前推进资产版本。候选通过任务中心恢复，不新增独立候选存储。
 - **采用事务**：沿用表现中的任务关联和版本关联判定同任务是否已采用；采用状态与版本/表现提交保持一致，不先单独写 `adopted`。首次采用以旧主版本条件 CAS 推进；角色编辑也需使用版本条件，保留声音与未编辑表现。并发失败或事务异常不留半绑定版本。
 - **幂等重放**：同任务重复采用不再建版，返回当前资产摘要并保留原采用版本关联，不将最新资产回退。冲突返回 `project_asset_version_changed`，不重新生成、不覆盖新版本。

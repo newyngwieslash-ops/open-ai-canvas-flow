@@ -15,6 +15,9 @@ import (
 func (r *Repository) LockAssetImageResources(userID string, definition string, representations []model.AssetRepresentation) error {
 	ids := map[string]struct{}{}
 	var value struct {
+		ReferenceImages []struct {
+			ResourceID string `json:"resourceId"`
+		} `json:"referenceImages"`
 		ReferenceImage *struct {
 			ResourceID string `json:"resourceId"`
 		} `json:"referenceImage"`
@@ -22,7 +25,12 @@ func (r *Repository) LockAssetImageResources(userID string, definition string, r
 	if err := json.Unmarshal([]byte(definition), &value); err != nil {
 		return err
 	}
-	if value.ReferenceImage != nil {
+	for _, item := range value.ReferenceImages {
+		if item.ResourceID != "" {
+			ids[item.ResourceID] = struct{}{}
+		}
+	}
+	if value.ReferenceImage != nil && value.ReferenceImage.ResourceID != "" {
 		ids[value.ReferenceImage.ResourceID] = struct{}{}
 	}
 	for _, rep := range representations {
@@ -131,7 +139,7 @@ func (r *Repository) RequireNoOriginalImageReferences(resourceIDs []string) erro
 		if assetrefs.DocumentReferences(task.InputJSON, wantedTasks) || assetrefs.DocumentReferences(task.ResultJSON, wantedTasks) { return ErrOriginalImageReferenced }
 	}
 	var versions []model.AssetVersion
-	if err := r.db.Where("definition_json LIKE ? OR definition_json LIKE ?", "%\"referenceImage\"%", "%\"_profileAnalysisAdoption\"%").Find(&versions).Error; err != nil {
+	if err := r.db.Where("definition_json LIKE ? OR definition_json LIKE ? OR definition_json LIKE ?", "%\"referenceImages\"%", "%\"referenceImage\"%", "%\"_profileAnalysisAdoption\"%").Find(&versions).Error; err != nil {
 		return err
 	}
 	wanted := map[string]struct{}{}
@@ -140,7 +148,8 @@ func (r *Repository) RequireNoOriginalImageReferences(resourceIDs []string) erro
 	}
 	for _, version := range versions {
 		var value struct {
-			ReferenceImage json.RawMessage `json:"referenceImage"`
+			ReferenceImages json.RawMessage `json:"referenceImages"`
+			ReferenceImage  json.RawMessage `json:"referenceImage"`
 		}
 		if err := json.Unmarshal([]byte(version.DefinitionJSON), &value); err != nil {
 			return err
@@ -159,3 +168,32 @@ type originalImageReferenceError struct{}
 func (*originalImageReferenceError) Error() string {
 	return "资源仍被资产版本的原始参考图引用"
 }
+
+func (r *Repository) ResourceByID(resourceID string) (*model.Resource, error) {
+	var resource model.Resource
+	if err := r.db.First(&resource, "id = ?", resourceID).Error; err != nil {
+		return nil, err
+	}
+	return &resource, nil
+}
+
+func (r *Repository) AllAssetVersionsOrdered() ([]model.AssetVersion, error) {
+	var versions []model.AssetVersion
+	err := r.db.Order("id asc").Find(&versions).Error
+	return versions, err
+}
+
+func (r *Repository) UpdateAssetVersionDefinition(versionID, definitionJSON string) error {
+	return r.db.Model(&model.AssetVersion{}).Where("id = ?", versionID).Update("definition_json", definitionJSON).Error
+}
+
+func (r *Repository) LegacyReferencePayloadAssets() ([]model.Asset, error) {
+	var assets []model.Asset
+	err := r.db.Where("payload_json LIKE ?", "%referenceImage%").Order("id asc").Find(&assets).Error
+	return assets, err
+}
+
+func (r *Repository) UpdateAssetPayloadJSON(assetID, payloadJSON string) error {
+	return r.db.Model(&model.Asset{}).Where("id = ?", assetID).Update("payload_json", payloadJSON).Error
+}
+

@@ -35,7 +35,8 @@ type (
 	BindingAppendResult                    = app.BindingAppendResult
 	ProjectReferenceImage                  = app.ProjectReferenceImage
 	CreateProjectAssetEntityRequest        = app.CreateProjectAssetEntityRequest
-	SetProjectReferenceImageRequest        = app.SetProjectReferenceImageRequest
+	SetProjectReferenceImagesRequest       = app.SetProjectReferenceImagesRequest
+	ProjectReferenceMigrationReport        = app.ProjectReferenceMigrationReport
 	AdoptProjectImageCandidateRequest      = app.AdoptProjectImageCandidateRequest
 	AssetImageCandidate                    = app.AssetImageCandidate
 	BindProjectAssetImageRequest           = app.BindProjectAssetImageRequest

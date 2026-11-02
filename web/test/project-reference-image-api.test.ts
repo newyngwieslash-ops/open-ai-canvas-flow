@@ -1,34 +1,40 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { apiClient, ApiError } from "../src/services/api/request";
-import { createProjectAssetEntity, createProjectCharacter, updateProjectAssetReferenceImage, adoptProjectAssetImageCandidate } from "../src/services/api/projects";
+import { createProjectAssetEntity, createProjectCharacter, updateProjectAssetReferenceImages, adoptProjectAssetImageCandidate } from "../src/services/api/projects";
 import { listAssetImageCandidateTasks, listGenerationTasks } from "../src/services/api/task-center";
 
 const original = apiClient.defaults.adapter;
 afterAll(() => { apiClient.defaults.adapter = original; });
 
 describe("项目参考图API合同", () => {
-    test("创建直接成品与原图采用http信封并保留目录和portrait", async () => {
+    test("创建直接成品与有序多原图采用http信封并保留目录和portrait", async () => {
         const requests: Array<{ url?: string; data: Record<string, unknown> }> = [];
         apiClient.defaults.adapter = async (config) => {
             requests.push({ url: config.url, data: JSON.parse(config.data) });
             return { config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: { asset: { id: "asset" } }, msg: "" } };
         };
-        expect((await createProjectAssetEntity("project", { name: "阁楼", category: "environment", definition: {}, imageResourceId: "image", folderId: "folder" })).asset.id).toBe("asset");
-        await createProjectCharacter("project", { name: "人物", referenceImage: { resourceId: "original" }, imageResourceId: "portrait", imageRole: "portrait", folderId: "folder" });
+        expect((await createProjectAssetEntity("project", { name: "阁楼", category: "environment", definition: {}, referenceImages: [{ resourceId: "scene-ref-1" }, { resourceId: "scene-ref-2" }], imageResourceId: "image", folderId: "folder" })).asset.id).toBe("asset");
+        await createProjectCharacter("project", { name: "人物", referenceImages: [{ resourceId: "original-1" }, { resourceId: "original-2" }], imageResourceId: "portrait", imageRole: "portrait", folderId: "folder" });
         expect(requests[0].url).toBe("/projects/project/asset-entities");
-        expect(requests[0].data).toMatchObject({ imageResourceId: "image", folderId: "folder" });
-        expect(requests[1].data).toMatchObject({ imageRole: "portrait", referenceImage: { resourceId: "original" } });
+        expect(requests[0].data).toMatchObject({ imageResourceId: "image", folderId: "folder", referenceImages: [{ resourceId: "scene-ref-1" }, { resourceId: "scene-ref-2" }] });
+        expect(requests[1].data).toMatchObject({ imageRole: "portrait", referenceImages: [{ resourceId: "original-1" }, { resourceId: "original-2" }] });
     });
-    test("写入传递expectedVersionId，不吞机器可读冲突", async () => {
-        const requests: Array<Record<string, unknown>> = [];
+    test("写入有序referenceImages与清空传递expectedVersionId，不吞机器可读冲突", async () => {
+        const requests: Array<{ url?: string; data: Record<string, unknown> }> = [];
         apiClient.defaults.adapter = async (config) => {
-            requests.push(JSON.parse(config.data));
+            requests.push({ url: config.url, data: JSON.parse(config.data) });
             return { config, status: 200, statusText: "OK", headers: {}, data: { code: 409, reason: "project_asset_version_changed", msg: "版本冲突" } };
         };
-        try { await updateProjectAssetReferenceImage("project", "asset", { resourceId: "original", expectedVersionId: "v1" }); throw new Error("应拒绝"); }
+        try { await updateProjectAssetReferenceImages("project", "asset", { referenceImages: [{ resourceId: "original-2" }, { resourceId: "original-1" }], expectedVersionId: "v1" }); throw new Error("应拒绝"); }
+        catch (error) { expect(error).toBeInstanceOf(ApiError); expect((error as ApiError).reason).toBe("project_asset_version_changed"); }
+        try { await updateProjectAssetReferenceImages("project", "asset", { referenceImages: [], expectedVersionId: "v1" }); throw new Error("应拒绝"); }
         catch (error) { expect(error).toBeInstanceOf(ApiError); expect((error as ApiError).reason).toBe("project_asset_version_changed"); }
         await expect(adoptProjectAssetImageCandidate("project", "asset", "task", { expectedVersionId: "v1" })).rejects.toBeInstanceOf(ApiError);
-        expect(requests).toEqual([{ resourceId: "original", expectedVersionId: "v1" }, { expectedVersionId: "v1" }]);
+        expect(requests).toEqual([
+            { url: "/projects/project/assets/asset/reference-images", data: { referenceImages: [{ resourceId: "original-2" }, { resourceId: "original-1" }], expectedVersionId: "v1" } },
+            { url: "/projects/project/assets/asset/reference-images", data: { referenceImages: [], expectedVersionId: "v1" } },
+            { url: "/projects/project/assets/asset/image-candidates/task/adopt", data: { expectedVersionId: "v1" } },
+        ]);
     });
     test("活动探测在服务端按目标筛选，不依赖项目最近100条，保留signal", async () => {
         let seen: any;

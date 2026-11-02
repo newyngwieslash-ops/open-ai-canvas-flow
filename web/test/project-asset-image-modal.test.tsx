@@ -118,7 +118,7 @@ test("真实弹窗不支持参考图的模型阻止提交且不静默退化文�
         if (request.method !== "get" && (request.url === "/tasks" || request.url?.startsWith("/projects/"))) writes++;
         return { config: request, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: [], msg: "" } };
     };
-    const view = await fixture({ ...asset, referenceImage: { resourceId: "original" } }, undefined, "generate");
+    const view = await fixture({ ...asset, referenceImages: [{ resourceId: "original" }] }, undefined, "generate");
     try {
         await act(async () => { await settle(); });
         expect(radio("original").checked).toBe(true);
@@ -233,8 +233,8 @@ for (const mode of ["text", "reference", "none"] as const) {
             expect(payload).toMatchObject({ name: "主角", definition: { appearance: "黑发红衣" } });
             expect(payload).not.toHaveProperty("imageResourceId");
             expect(payload).not.toHaveProperty("imageRole");
-            if (mode === "reference") expect(payload?.referenceImage).toEqual({ resourceId: "original" });
-            else expect(payload).not.toHaveProperty("referenceImage");
+            if (mode === "reference") expect(payload?.referenceImages).toEqual([{ resourceId: "original" }]);
+            else expect(payload).not.toHaveProperty("referenceImages");
         } finally {
             await view.dispose();
             if (mode === "reference") resetRemoteUserDataSync();
@@ -309,7 +309,7 @@ for (const category of ["character", "environment"] as const) for (const match o
 for (const source of ["original", "current", "none"] as const) {
  test(`真实弹窗${source}来源活动查询失败拒绝提交，刷新后重复生成只提交一次`, async () => {
     const restore = await generationFixtureSetup();
-    const target = { ...asset, referenceImage: { resourceId: "original" }, storageKey: "resource:current" };
+    const target = { ...asset, referenceImages: [{ resourceId: "original" }], storageKey: "resource:current" };
     let releaseRead!: () => void;
     const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
     let releaseWrite!: () => void;
@@ -506,5 +506,102 @@ test("已有角色直用保存后保留弹窗，支持直接切换包含角色�
         setActiveUserScope(previousScope);
         useUserStore.setState({ user: previousUser, hydrated: previousHydrated });
         storageSpies.forEach((spy) => spy.mockRestore());
+    }
+});
+
+test("真实弹窗支持多参考图排序、单张移除、清空保存、按序生成及模型张数超限拦截不丢图", async () => {
+    const restore = await generationFixtureSetup();
+    const config = useConfigStore.getState().config;
+    const setMaxImages = (maxImages: number) => {
+        useConfigStore.setState({
+            config: {
+                ...config,
+                channels: config.channels.map((channel) => ({
+                    ...channel,
+                    modelCosts: channel.modelCosts?.map((cost) => ({
+                        ...cost,
+                        capabilityConfig: {
+                            ...cost.capabilityConfig!,
+                            image: {
+                                ...cost.capabilityConfig!.image!,
+                                references: { ...cost.capabilityConfig!.image!.references, maxImages },
+                            },
+                        },
+                    })),
+                })),
+            },
+        });
+    };
+    setMaxImages(1);
+
+    let currentTarget: ProjectAsset = {
+        ...asset,
+        primaryVersionId: "v1",
+        referenceImages: [{ resourceId: "ref-1" }, { resourceId: "ref-2" }, { resourceId: "ref-3" }],
+    };
+    const putCalls: Array<{ referenceImages: Array<{ resourceId: string }>; expectedVersionId: string }> = [];
+    let taskPayload: any;
+
+    apiClient.defaults.adapter = async (req) => {
+        if (req.method === "put" && req.url === "/projects/project/assets/asset/reference-images") {
+            const body = JSON.parse(req.data);
+            putCalls.push(body);
+            currentTarget = {
+                ...currentTarget,
+                primaryVersionId: `v${putCalls.length + 1}`,
+                referenceImages: body.referenceImages,
+            };
+            return { config: req, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: { asset: currentTarget }, msg: "" } };
+        }
+        if (req.method === "post" && req.url === "/tasks") {
+            taskPayload = JSON.parse(req.data);
+            return { config: req, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: { id: "gen-task", status: "queued" }, msg: "" } };
+        }
+        const data = req.url?.endsWith("/assets") ? { assets: [currentTarget] } : [];
+        return { config: req, status: 200, statusText: "OK", headers: {}, data: { code: 0, data, msg: "" } };
+    };
+
+    const view = await fixture(currentTarget, undefined, "generate");
+    try {
+        await act(async () => { await settle(); });
+        expect(radio("original").checked).toBe(true);
+        // 模型上限 1 张，当前已保存 3 张：禁用生成且提示张数限制，但不丢弃已保存参考图
+        expect(document.body.textContent).toContain("当前模型最多支持 1 张参考图，当前已选择 3 张");
+        expect(button("生成图片候选").disabled).toBe(true);
+        expect(document.body.textContent).toContain("ref-1");
+        expect(document.body.textContent).toContain("ref-2");
+        expect(document.body.textContent).toContain("ref-3");
+
+        // 将第 1 张下移（顺序变为 ref-2, ref-1, ref-3），移除第 3 张（顺序变为 ref-2, ref-1）
+        const moveDownButtons = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label^="下移参考图"]')];
+        expect(moveDownButtons.length).toBe(3);
+        await act(async () => { moveDownButtons[0].click(); await settle(); });
+        const removeButtons = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label^="移除参考图"]')];
+        expect(removeButtons.length).toBe(3);
+        await act(async () => { removeButtons[2].click(); await settle(); });
+
+        // 保存修改后的有序原始参考图
+        await act(async () => { button("保存原始参考图").click(); await settle(); });
+        expect(putCalls).toEqual([
+            { referenceImages: [{ resourceId: "ref-2" }, { resourceId: "ref-1" }], expectedVersionId: "v1" },
+        ]);
+
+        // 切换模型支持最多 4 张参考图，发起生成并验证参考图顺序
+        await act(async () => { setMaxImages(4); await settle(); });
+        expect(button("生成图片候选").disabled).toBe(false);
+        await act(async () => { button("生成图片候选").click(); await settle(); });
+        expect(taskPayload).toBeDefined();
+        expect(taskPayload.input.referenceImages.map((item: { storageKey: string }) => item.storageKey)).toEqual([
+            "resource:ref-2",
+            "resource:ref-1",
+        ]);
+
+        // 清空全部参考图并保存
+        await act(async () => { button("清空参考图").click(); await settle(); });
+        await act(async () => { button("保存原始参考图").click(); await settle(); });
+        expect(putCalls[1]).toEqual({ referenceImages: [], expectedVersionId: "v2" });
+    } finally {
+        await view.dispose();
+        restore();
     }
 });

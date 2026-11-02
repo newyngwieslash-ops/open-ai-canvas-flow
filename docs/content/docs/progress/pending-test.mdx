@@ -5,6 +5,18 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 项目资产有序多参考图管理与单候选生成（2026-11-02）
+
+- 已完成角色、场景与道具资产从单张 `referenceImage` 到唯一、有界（最多 16 张）、有序 `referenceImages: [{ resourceId }]` 的规范集合合同升级：
+  - **后端合同与可重入迁移**：新增 `PUT /api/projects/:id/assets/:assetId/reference-images`，校验有序无空白/无重复 `resourceId`、长度 `<= 16`、`expectedVersionId` CAS、资源归属与 `ready` 状态；同序列幂等返回当前版本，序列变更时演进新版本并保留既有声音与成品 `representations`。提供显式可重入迁移入口 `MigrateLegacyProjectReferenceImages`（`AssetVersion.DefinitionJSON` 与 `Asset.PayloadJSON`），将旧单数 `referenceImage` 改写为单元素 `referenceImages` 并清理旧键，对双字段冲突、损坏 JSON 或缺失资源生成结构化阻断报告。
+  - **生成准入、稳定锁与引用保护**：`prepareProjectImageTask` 在 `original` 模式下按保存顺序完整重建 `referenceImages` 并透传至下游模型请求，按 `min(16, profile.References.MaxImages)` 在入队前校验模型最大参考张数（禁止客户端 `capabilityConfig` 突破服务端协议上限）；`LockAssetImageResources` 按去重字典序锁定全部关联资源；资源删除引用扫描覆盖历史版本 `definition_json`、实体 `payload_json` 与任务 `input_json` 中的完整 `referenceImages` 列表。
+  - **前端真实资产弹窗交互**：`ProjectAssetImageModal` 支持多张原始参考图上传/素材库多选追加、`#1..#N` 序号展示、上移/下移/移除/清空、保存原始参考图集合，以及模型最大参考张数不兼容时的明确禁用原因提示（切换不兼容模型时不清空已保存参考图）。
+- 自动化验证：
+  - 后端：`go -C backend test ./internal/app ./internal/handler -run "TestProject(Reference|Image|Profile|AssetBinding)|TestProfileAnalysis|TestRegisterCanvasAPI" -count=1` 全部通过（`internal/app` `7.797s`、`internal/handler` `1.267s`）。
+  - 前端：`bun test --cwd web test/project-reference-image-api.test.ts test/project-reference-image-assets.test.ts test/project-asset-image-modal.test.tsx test/project-profile-analysis-modal.test.tsx`（`64 pass, 0 fail, 434 expect() calls`）、`bun run --cwd web typecheck`、`bun run --cwd web lint` 全部通过。
+- [ ] 真实浏览器路由 `/projects/:projectId/assets`：对角色、场景、道具资产上传或从素材库多选最多 16 张参考图，验证上移/下移调整顺序、单张移除、全部清空后保存，刷新页面后顺序与数量保持一致。
+- [ ] 真实图片模型与渠道端到端验收：选择支持多图参考的模型（如 OpenAI / Gemini / 火山方舟等）以 `original` 来源触发单候选生成，验证下游收到有序多张参考图且手动采用候选后不丢失原始参考图序列；切换至不支持多图参考或上限不足的模型时，验证禁用提示明确且不丢失已保存参考图。
+
 ## 项目角色图片直用弹窗保留与三视图复选框再次保存（2026-10-29）
 
 - 修复 `web/src/pages/projects/detail/project-asset-image-modal.tsx` 与 `web/src/pages/projects/detail/project-reference-image.ts`：

@@ -49,7 +49,7 @@ func TestProfileSourceDeletionAdmissionRace(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						asset, err := services[0].CreateProjectAssetEntity(owner, project.ID, CreateProjectAssetEntityRequest{Name: "source race asset", Category: model.AssetCategoryProp, Definition: map[string]any{"description": "old", "prompt": ""}, ReferenceImage: &ProjectReferenceImage{resource.ID}})
+						asset, err := services[0].CreateProjectAssetEntity(owner, project.ID, CreateProjectAssetEntityRequest{Name: "source race asset", Category: model.AssetCategoryProp, Definition: map[string]any{"description": "old", "prompt": ""}, ReferenceImages: []ProjectReferenceImage{{resource.ID}}})
 						if err != nil {
 							t.Fatal(err)
 						}

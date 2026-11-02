@@ -115,11 +115,24 @@ func (r *Repository) RequireProfileSource(task *model.Task, current bool) error 
 		return err
 	}
 	var definition struct {
+		ReferenceImages []struct {
+			ResourceID string `json:"resourceId"`
+		} `json:"referenceImages"`
 		ReferenceImage struct {
 			ResourceID string `json:"resourceId"`
 		} `json:"referenceImage"`
 	}
-	if version.AssetID != asset.ID || json.Unmarshal([]byte(version.DefinitionJSON), &definition) != nil || definition.ReferenceImage.ResourceID != b.Source.ResourceID || b.Source.ResourceID == "" {
+	if version.AssetID != asset.ID || json.Unmarshal([]byte(version.DefinitionJSON), &definition) != nil || b.Source.ResourceID == "" {
+		return ErrProfileSourceChanged
+	}
+	matchedSource := definition.ReferenceImage.ResourceID == b.Source.ResourceID
+	for _, item := range definition.ReferenceImages {
+		if item.ResourceID == b.Source.ResourceID {
+			matchedSource = true
+			break
+		}
+	}
+	if !matchedSource {
 		return ErrProfileSourceChanged
 	}
 	var resource model.Resource

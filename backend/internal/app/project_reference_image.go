@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -11,20 +12,26 @@ import (
 	"yingce/backend/internal/repository"
 )
 
+const MaxProjectAssetReferenceImages = 16
+
 type ProjectReferenceImage struct {
 	ResourceID string `json:"resourceId"`
 }
 type CreateProjectAssetEntityRequest struct {
-	Name            string                 `json:"name"`
-	Category        model.AssetCategory    `json:"category"`
-	Definition      map[string]any         `json:"definition"`
-	ReferenceImage  *ProjectReferenceImage `json:"referenceImage,omitempty"`
-	ImageResourceID string                 `json:"imageResourceId,omitempty"`
-	FolderID        *string                `json:"folderId,omitempty"`
+	Name            string                  `json:"name"`
+	Category        model.AssetCategory     `json:"category"`
+	Definition      map[string]any          `json:"definition"`
+	ReferenceImages []ProjectReferenceImage `json:"referenceImages,omitempty"`
+	ImageResourceID string                  `json:"imageResourceId,omitempty"`
+	FolderID        *string                 `json:"folderId,omitempty"`
 }
-type SetProjectReferenceImageRequest struct {
-	ResourceID        string `json:"resourceId"`
-	ExpectedVersionID string `json:"expectedVersionId"`
+type SetProjectReferenceImagesRequest struct {
+	ReferenceImages   []ProjectReferenceImage `json:"referenceImages"`
+	ExpectedVersionID string                  `json:"expectedVersionId"`
+}
+type ProjectReferenceMigrationReport struct {
+	MigratedVersions int `json:"migratedVersions"`
+	MigratedPayloads int `json:"migratedPayloads"`
 }
 
 func projectAssetVersionConflict() error {
@@ -37,14 +44,43 @@ func projectAssetWriteError(err error) error {
 	return err
 }
 
-func referenceImageFromDefinition(raw string) *ProjectReferenceImage {
+func referenceImagesFromDefinition(raw string) []ProjectReferenceImage {
 	var value struct {
-		ReferenceImage *ProjectReferenceImage `json:"referenceImage"`
+		ReferenceImages []ProjectReferenceImage `json:"referenceImages"`
+		ReferenceImage  *ProjectReferenceImage  `json:"referenceImage"`
 	}
 	if json.Unmarshal([]byte(raw), &value) != nil {
 		return nil
 	}
-	return value.ReferenceImage
+	if len(value.ReferenceImages) > 0 {
+		out := make([]ProjectReferenceImage, 0, len(value.ReferenceImages))
+		for _, item := range value.ReferenceImages {
+			if id := strings.TrimSpace(item.ResourceID); id != "" {
+				out = append(out, ProjectReferenceImage{ResourceID: id})
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+		return nil
+	}
+	if value.ReferenceImage != nil && strings.TrimSpace(value.ReferenceImage.ResourceID) != "" {
+		return []ProjectReferenceImage{{ResourceID: strings.TrimSpace(value.ReferenceImage.ResourceID)}}
+	}
+	return nil
+}
+
+func hasReferenceImageInDefinition(raw, resourceID string) bool {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return false
+	}
+	for _, item := range referenceImagesFromDefinition(raw) {
+		if item.ResourceID == resourceID {
+			return true
+		}
+	}
+	return false
 }
 
 func preserveReferenceDefinition(currentJSON, nextJSON string) (string, error) {
@@ -60,16 +96,45 @@ func preserveReferenceDefinition(currentJSON, nextJSON string) (string, error) {
 	} else {
 		delete(next, "_profileAnalysisAdoption")
 	}
-	if proposed, exists := next["referenceImage"]; exists && !reflect.DeepEqual(proposed, current["referenceImage"]) {
+	if proposed, exists := next["referenceImages"]; exists {
+		currentRefs, currentExists := current["referenceImages"]
+		if !currentExists || !reflect.DeepEqual(proposed, currentRefs) {
+			return "", BadAuthRequest("原始参考图只能通过专用接口修改")
+		}
+	}
+	if _, exists := next["referenceImage"]; exists {
 		return "", BadAuthRequest("原始参考图只能通过专用接口修改")
 	}
-	if ref, exists := current["referenceImage"]; exists {
-		next["referenceImage"] = ref
+	delete(next, "referenceImage")
+	if refs, exists := current["referenceImages"]; exists {
+		next["referenceImages"] = refs
+	} else if parsed := referenceImagesFromDefinition(currentJSON); len(parsed) > 0 {
+		next["referenceImages"] = parsed
 	} else {
-		delete(next, "referenceImage")
+		delete(next, "referenceImages")
 	}
 	encoded, err := json.Marshal(next)
 	return string(encoded), err
+}
+
+func (s *Service) validateProjectReferenceImages(userID string, references []ProjectReferenceImage) ([]ProjectReferenceImage, error) {
+	if len(references) > MaxProjectAssetReferenceImages {
+		return nil, BadAuthRequest("原始参考图最多支持 16 张")
+	}
+	seen := make(map[string]struct{}, len(references))
+	normalized := make([]ProjectReferenceImage, 0, len(references))
+	for _, item := range references {
+		resource, err := s.projectImageResource(userID, item.ResourceID)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[resource.ID]; exists {
+			return nil, BadAuthRequest("原始参考图不能重复")
+		}
+		seen[resource.ID] = struct{}{}
+		normalized = append(normalized, ProjectReferenceImage{ResourceID: resource.ID})
+	}
+	return normalized, nil
 }
 
 func (s *Service) projectImageResource(userID, id string) (*model.Resource, error) {
@@ -115,14 +180,14 @@ func (s *Service) CreateProjectAssetEntity(userID, projectID string, req CreateP
 	if !projectVisualCategory(req.Category) {
 		return ProjectAssetSummary{}, BadAuthRequest("仅支持场景和道具实体")
 	}
-	asset, err := s.createProjectImageEntity(userID, projectID, req.Category, req.Name, req.Definition, req.ReferenceImage, req.ImageResourceID, "", req.FolderID)
+	asset, err := s.createProjectImageEntity(userID, projectID, req.Category, req.Name, req.Definition, req.ReferenceImages, req.ImageResourceID, "", req.FolderID)
 	if err != nil {
 		return ProjectAssetSummary{}, err
 	}
 	return s.projectAssetSummary(userID, projectID, asset)
 }
 
-func (s *Service) createProjectImageEntity(userID, projectID string, category model.AssetCategory, name string, definition map[string]any, reference *ProjectReferenceImage, imageID, imageRole string, folder *string) (*model.Asset, error) {
+func (s *Service) createProjectImageEntity(userID, projectID string, category model.AssetCategory, name string, definition map[string]any, references []ProjectReferenceImage, imageID, imageRole string, folder *string) (*model.Asset, error) {
 	if _, err := s.repo.ProjectForUser(userID, projectID); err != nil {
 		return nil, err
 	}
@@ -140,12 +205,12 @@ func (s *Service) createProjectImageEntity(userID, projectID string, category mo
 	}
 	var def map[string]any
 	_ = json.Unmarshal([]byte(rawString), &def)
-	if reference != nil {
-		resource, err := s.projectImageResource(userID, reference.ResourceID)
-		if err != nil {
-			return nil, err
-		}
-		def["referenceImage"] = &ProjectReferenceImage{ResourceID: resource.ID}
+	normalizedRefs, err := s.validateProjectReferenceImages(userID, references)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalizedRefs) > 0 {
+		def["referenceImages"] = normalizedRefs
 	}
 	raw, err = json.Marshal(def)
 	if err != nil {
@@ -207,9 +272,9 @@ func projectImagePayload(resource *model.Resource) map[string]any {
 	return map[string]any{"storageKey": "resource:" + resource.ID, "dataUrl": resourceFileURL(resource.ID), "width": resource.Width, "height": resource.Height, "mimeType": resource.MimeType, "bytes": resource.Size}
 }
 
-func (s *Service) SetProjectReferenceImage(userID, projectID, assetID string, req SetProjectReferenceImageRequest) (ProjectAssetSummary, error) {
-	if strings.TrimSpace(req.ExpectedVersionID) == "" || strings.TrimSpace(req.ResourceID) == "" {
-		return ProjectAssetSummary{}, BadAuthRequest("图片资源与预期版本不能为空")
+func (s *Service) SetProjectReferenceImages(userID, projectID, assetID string, req SetProjectReferenceImagesRequest) (ProjectAssetSummary, error) {
+	if strings.TrimSpace(req.ExpectedVersionID) == "" || req.ReferenceImages == nil {
+		return ProjectAssetSummary{}, BadAuthRequest("参考图列表与预期版本不能为空")
 	}
 	asset, err := s.projectImageAsset(userID, projectID, assetID)
 	if err != nil {
@@ -218,11 +283,19 @@ func (s *Service) SetProjectReferenceImage(userID, projectID, assetID string, re
 	if asset.PrimaryVersionID != req.ExpectedVersionID {
 		return ProjectAssetSummary{}, projectAssetVersionConflict()
 	}
-	resource, err := s.projectImageResource(userID, req.ResourceID)
+	normalizedRefs, err := s.validateProjectReferenceImages(userID, req.ReferenceImages)
 	if err != nil {
 		return ProjectAssetSummary{}, err
 	}
-	// Preparation copies the current voice and representations. Only the reference field is then changed.
+	currentVersion, err := s.repo.AssetVersion(asset.PrimaryVersionID)
+	if err != nil {
+		return ProjectAssetSummary{}, err
+	}
+	currentRefs := referenceImagesFromDefinition(currentVersion.DefinitionJSON)
+	if len(currentRefs) == len(normalizedRefs) && (len(currentRefs) == 0 || reflect.DeepEqual(currentRefs, normalizedRefs)) {
+		return s.projectAssetSummary(userID, projectID, asset)
+	}
+	// Preparation copies the current voice and representations. Only the referenceImages field is then changed.
 	nextAsset, next, reps, voice, err := s.prepareNextCharacterVersion(asset, asset.Title, "", nil, nil, false)
 	if err != nil {
 		return ProjectAssetSummary{}, err
@@ -231,7 +304,12 @@ func (s *Service) SetProjectReferenceImage(userID, projectID, assetID string, re
 	if err := json.Unmarshal([]byte(next.DefinitionJSON), &definition); err != nil {
 		return ProjectAssetSummary{}, err
 	}
-	definition["referenceImage"] = &ProjectReferenceImage{ResourceID: resource.ID}
+	delete(definition, "referenceImage")
+	if len(normalizedRefs) > 0 {
+		definition["referenceImages"] = normalizedRefs
+	} else {
+		definition["referenceImages"] = []ProjectReferenceImage{}
+	}
 	encoded, err := json.Marshal(definition)
 	if err != nil {
 		return ProjectAssetSummary{}, err
@@ -262,4 +340,157 @@ func (s *Service) SetProjectReferenceImage(userID, projectID, assetID string, re
 		return ProjectAssetSummary{}, projectAssetWriteError(err)
 	}
 	return s.projectAssetSummary(userID, projectID, &nextAsset)
+}
+
+func (s *Service) MigrateLegacyProjectReferenceImages() (ProjectReferenceMigrationReport, error) {
+	var report ProjectReferenceMigrationReport
+	err := s.repo.Transaction(func(tx *repository.Repository) error {
+		checkResource := func(resourceID string) error {
+			resourceID = strings.TrimSpace(resourceID)
+			if resourceID == "" {
+				return errors.New("空参考图资源 ID")
+			}
+			resource, err := tx.ResourceByID(resourceID)
+			if err != nil {
+				return fmt.Errorf("参考图资源 %s 不存在：%w", resourceID, err)
+			}
+			if resource.Kind != "image" {
+				return fmt.Errorf("参考图资源 %s 不是图片类型", resourceID)
+			}
+			return nil
+		}
+		canonicalizeMap := func(doc map[string]any, label string) (bool, error) {
+			rawSingle, hasSingle := doc["referenceImage"]
+			rawMulti, hasMulti := doc["referenceImages"]
+			var singleID string
+			if hasSingle && rawSingle != nil {
+				singleMap, ok := rawSingle.(map[string]any)
+				if !ok {
+					return false, fmt.Errorf("%s 的 referenceImage 格式非法", label)
+				}
+				id, _ := singleMap["resourceId"].(string)
+				if err := checkResource(id); err != nil {
+					return false, fmt.Errorf("%s：%w", label, err)
+				}
+				singleID = strings.TrimSpace(id)
+			}
+			var multiRefs []ProjectReferenceImage
+			if hasMulti && rawMulti != nil {
+				items, ok := rawMulti.([]any)
+				if !ok {
+					return false, fmt.Errorf("%s 的 referenceImages 格式非法", label)
+				}
+				seen := map[string]struct{}{}
+				multiRefs = make([]ProjectReferenceImage, 0, len(items))
+				for _, item := range items {
+					entry, ok := item.(map[string]any)
+					if !ok {
+						return false, fmt.Errorf("%s 的 referenceImages 元素格式非法", label)
+					}
+					id, _ := entry["resourceId"].(string)
+					if err := checkResource(id); err != nil {
+						return false, fmt.Errorf("%s：%w", label, err)
+					}
+					id = strings.TrimSpace(id)
+					if _, dup := seen[id]; dup {
+						return false, fmt.Errorf("%s 的 referenceImages 存在重复资源 %s", label, id)
+					}
+					seen[id] = struct{}{}
+					multiRefs = append(multiRefs, ProjectReferenceImage{ResourceID: id})
+				}
+				if len(multiRefs) > MaxProjectAssetReferenceImages {
+					return false, fmt.Errorf("%s 的 referenceImages 超过 16 张上限", label)
+				}
+			}
+			if hasSingle && rawSingle != nil && hasMulti {
+				if len(multiRefs) != 1 || multiRefs[0].ResourceID != singleID {
+					return false, fmt.Errorf("%s 同时存在不一致的 referenceImage 与 referenceImages", label)
+				}
+			}
+			if !hasSingle && hasMulti && rawMulti != nil {
+				return false, nil
+			}
+			delete(doc, "referenceImage")
+			if hasMulti && rawMulti != nil {
+				doc["referenceImages"] = multiRefs
+			} else if singleID != "" {
+				doc["referenceImages"] = []ProjectReferenceImage{{ResourceID: singleID}}
+			} else {
+				doc["referenceImages"] = []ProjectReferenceImage{}
+			}
+			return true, nil
+		}
+
+		versions, err := tx.AllAssetVersionsOrdered()
+		if err != nil {
+			return err
+		}
+		for _, version := range versions {
+			if strings.TrimSpace(version.DefinitionJSON) == "" {
+				continue
+			}
+			var def map[string]any
+			if err := json.Unmarshal([]byte(version.DefinitionJSON), &def); err != nil || def == nil {
+				return fmt.Errorf("资产版本 %s definition_json 损坏", version.ID)
+			}
+			changed, err := canonicalizeMap(def, "资产版本 "+version.ID)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			encoded, err := json.Marshal(def)
+			if err != nil {
+				return err
+			}
+			if err := tx.UpdateAssetVersionDefinition(version.ID, string(encoded)); err != nil {
+				return err
+			}
+			report.MigratedVersions++
+		}
+
+		assets, err := tx.LegacyReferencePayloadAssets()
+		if err != nil {
+			return err
+		}
+		for _, asset := range assets {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(asset.PayloadJSON), &payload); err != nil || payload == nil {
+				return fmt.Errorf("资产 %s payload_json 损坏", asset.ID)
+			}
+			changed := false
+			if _, hasTop := payload["referenceImage"]; hasTop {
+				c, err := canonicalizeMap(payload, "资产 "+asset.ID)
+				if err != nil {
+					return err
+				}
+				changed = changed || c
+			}
+			if data, ok := payload["data"].(map[string]any); ok {
+				if def, ok := data["definition"].(map[string]any); ok {
+					if _, hasNested := def["referenceImage"]; hasNested {
+						c, err := canonicalizeMap(def, "资产 "+asset.ID+" data.definition")
+						if err != nil {
+							return err
+						}
+						changed = changed || c
+					}
+				}
+			}
+			if !changed {
+				continue
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if err := tx.UpdateAssetPayloadJSON(asset.ID, string(encoded)); err != nil {
+				return err
+			}
+			report.MigratedPayloads++
+		}
+		return nil
+	})
+	return report, err
 }

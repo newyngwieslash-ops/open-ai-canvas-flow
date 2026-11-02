@@ -812,11 +812,13 @@ func buildStoryboardAssetPreview(userID string, project model.Project, unitID st
 					images[version.ID] = true
 				}
 			}
-			reference := referenceImageFromDefinition(version.DefinitionJSON)
-			if reference != nil && reference.ResourceID != "" {
-				resourceIDs[reference.ResourceID] = true
-				if imageAvailable(reference.ResourceID) {
-					images[version.ID] = true
+			references := referenceImagesFromDefinition(version.DefinitionJSON)
+			for _, reference := range references {
+				if reference.ResourceID != "" {
+					resourceIDs[reference.ResourceID] = true
+					if imageAvailable(reference.ResourceID) {
+						images[version.ID] = true
+					}
 				}
 			}
 			type mediaResource struct {
@@ -838,9 +840,9 @@ func buildStoryboardAssetPreview(userID string, project model.Project, unitID st
 			}
 			mediaFingerprint := storyboardBindingFingerprint(struct {
 				Representations []model.AssetRepresentation
-				Reference       *ProjectReferenceImage
+				References      []ProjectReferenceImage
 				Resources       []mediaResource
-			}{reps, reference, media})
+			}{reps, references, media})
 			bindable := asset.UserID == userID && len(links[asset.ID]) > 0 && storyboardBindingStatus(asset.Status) && storyboardBindingStatus(version.Status)
 			entry.Versions = append(entry.Versions, BindingVersionBaseline{version.ID, storyboardBindingFingerprint(version), mediaFingerprint, bindable, !images[version.ID]})
 		}

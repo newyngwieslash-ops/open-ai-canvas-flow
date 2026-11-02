@@ -363,7 +363,7 @@ func TestProfileContractMatrixCancelCompletionRace(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			asset, err := services[0].CreateProjectAssetEntity(project.UserID, project.ID, CreateProjectAssetEntityRequest{Name: "race asset", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{resource.ID}})
+			asset, err := services[0].CreateProjectAssetEntity(project.UserID, project.ID, CreateProjectAssetEntityRequest{Name: "race asset", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{resource.ID}}})
 			if err != nil {
 				t.Fatal(err)
 			}

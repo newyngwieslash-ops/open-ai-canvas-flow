@@ -110,8 +110,8 @@ func (s *Service) prepareProjectImageTask(userID, projectID, taskType string, in
 	if err := json.Unmarshal(raw, &typed); err != nil {
 		return BadAuthRequest("图片任务输入格式无效")
 	}
-	if len(typed.ReferenceImages) > 1 || len(typed.ReferenceVideos) > 0 || len(typed.ReferenceAudios) > 0 || typed.Mask != nil {
-		return BadAuthRequest("项目资产仅支持单张参考图")
+	if len(typed.ReferenceImages) > MaxProjectAssetReferenceImages || len(typed.ReferenceVideos) > 0 || len(typed.ReferenceAudios) > 0 || typed.Mask != nil {
+		return BadAuthRequest("项目资产参考图数量超出限制或包含不支持的媒体")
 	}
 	config, _ := input["config"].(map[string]any)
 	if config == nil {
@@ -159,19 +159,25 @@ func (s *Service) prepareProjectImageTask(userID, projectID, taskType string, in
 	if err != nil {
 		return err
 	}
-	resourceID := ""
+	var resourceIDs []string
 	switch meta.ReferenceSource {
 	case "original":
-		ref := referenceImageFromDefinition(version.DefinitionJSON)
-		if ref == nil {
+		refs := referenceImagesFromDefinition(version.DefinitionJSON)
+		if len(refs) == 0 {
 			return BadAuthRequest("当前版本没有原始参考图")
 		}
-		resourceID = ref.ResourceID
+		if len(refs) > MaxProjectAssetReferenceImages {
+			return BadAuthRequest("当前版本原始参考图数量超出限制")
+		}
+		for _, ref := range refs {
+			resourceIDs = append(resourceIDs, ref.ResourceID)
+		}
 	case "current":
 		reps, err := s.repo.AssetRepresentations(version.ID)
 		if err != nil {
 			return err
 		}
+		resourceID := ""
 		for _, rep := range reps {
 			if rep.Role == "primary" && rep.MediaType == "image" {
 				resourceID = rep.ResourceID
@@ -181,6 +187,7 @@ func (s *Service) prepareProjectImageTask(userID, projectID, taskType string, in
 		if resourceID == "" {
 			return BadAuthRequest("当前版本没有成品图片")
 		}
+		resourceIDs = []string{resourceID}
 	case "none":
 		if len(typed.ReferenceImages) > 0 {
 			return BadAuthRequest("无参考模式不能携带参考图片")
@@ -188,18 +195,25 @@ func (s *Service) prepareProjectImageTask(userID, projectID, taskType string, in
 	default:
 		return BadAuthRequest("必须明确选择原图、当前图或无参考")
 	}
-	if resourceID != "" {
-		resource, err := s.projectImageResource(userID, resourceID)
-		if err != nil {
-			return err
+	if len(resourceIDs) > 0 {
+		if len(typed.ReferenceImages) > 0 && len(typed.ReferenceImages) != len(resourceIDs) {
+			return BadAuthRequest("参考图片与所选版本来源不一致")
 		}
-		if len(typed.ReferenceImages) == 1 {
-			ref := typed.ReferenceImages[0]
-			if ref.StorageKey != "resource:"+resourceID || (ref.URL != "" && ref.URL != resourceFileURL(resourceID)) || (ref.DataURL != "" && ref.DataURL != resourceFileURL(resourceID)) {
-				return BadAuthRequest("参考图片与所选版本来源不一致")
+		rebuilt := make([]any, 0, len(resourceIDs))
+		for i, resourceID := range resourceIDs {
+			resource, err := s.projectImageResource(userID, resourceID)
+			if err != nil {
+				return err
 			}
+			if len(typed.ReferenceImages) > 0 {
+				ref := typed.ReferenceImages[i]
+				if ref.StorageKey != "resource:"+resourceID || (ref.URL != "" && ref.URL != resourceFileURL(resourceID)) || (ref.DataURL != "" && ref.DataURL != resourceFileURL(resourceID)) {
+					return BadAuthRequest("参考图片与所选版本来源不一致")
+				}
+			}
+			rebuilt = append(rebuilt, map[string]any{"id": resource.ID, "type": "image", "storageKey": "resource:" + resource.ID, "mimeType": resource.MimeType, "bytes": resource.Size, "width": resource.Width, "height": resource.Height})
 		}
-		input["referenceImages"] = []any{map[string]any{"id": resource.ID, "type": "image", "storageKey": "resource:" + resource.ID, "mimeType": resource.MimeType, "bytes": resource.Size, "width": resource.Width, "height": resource.Height}}
+		input["referenceImages"] = rebuilt
 	} else {
 		input["referenceImages"] = []any{}
 	}
@@ -255,20 +269,54 @@ func (s *Service) validateProjectImageReferenceCapability(input map[string]any) 
 		}
 		if model.ChannelInterfaceType(typed.Config.InterfaceType) == model.ChannelInterfaceOpenAIImage {
 			name := strings.ToLower(strings.TrimSpace(typed.Config.Model))
-			if strings.HasPrefix(name, "dall-e") || (!strings.HasPrefix(name, "gpt-image") && (typed.Config.CapabilityConfig == nil || typed.Config.CapabilityConfig.Image == nil)) {
+			if strings.HasPrefix(name, "dall-e") || (!strings.HasPrefix(name, "gpt-image") && !strings.HasPrefix(name, "grok-imagine-image") && (typed.Config.CapabilityConfig == nil || typed.Config.CapabilityConfig.Image == nil)) {
 				return BadAuthRequest("当前模型不支持参考图或能力尚未确认")
 			}
 		}
-		profile = DefaultImageCapabilityConfig(typed.Config.InterfaceType, typed.Config.Model)
-		if profile == nil || profile.References.MaxImages < 1 {
+		serverDefault := DefaultImageCapabilityConfig(typed.Config.InterfaceType, typed.Config.Model)
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(typed.Config.Model)), "grok-imagine-image-pro") {
+			serverDefault.References.MaxImages = 1
+		}
+		if serverDefault == nil || serverDefault.References.MaxImages < 1 {
 			return BadAuthRequest("当前模型不支持参考图或能力尚未确认")
 		}
+		profile = serverDefault
 		if typed.Config.CapabilityConfig != nil && typed.Config.CapabilityConfig.Image != nil {
-			profile = typed.Config.CapabilityConfig.Image
+			clientProfile := *typed.Config.CapabilityConfig.Image
+			if clientProfile.References.MaxImages <= 0 || clientProfile.References.MaxImages > serverDefault.References.MaxImages {
+				clientProfile.References.MaxImages = serverDefault.References.MaxImages
+			}
+			if serverDefault.References.MaxImageBytes > 0 && (clientProfile.References.MaxImageBytes <= 0 || clientProfile.References.MaxImageBytes > serverDefault.References.MaxImageBytes) {
+				clientProfile.References.MaxImageBytes = serverDefault.References.MaxImageBytes
+			}
+			profile = &clientProfile
 		}
 	}
 	if profile == nil || profile.References.MaxImages < 1 {
 		return BadAuthRequest("当前模型不支持参考图或能力尚未确认")
+	}
+	effectiveMax := profile.References.MaxImages
+	if effectiveMax > MaxProjectAssetReferenceImages {
+		effectiveMax = MaxProjectAssetReferenceImages
+	}
+	if len(typed.ReferenceImages) > effectiveMax {
+		return BadAuthRequest(fmt.Sprintf("当前模型最多支持 %d 张参考图", effectiveMax))
+	}
+	maxBytes := profile.References.MaxImageBytes
+	if maxBytes <= 0 {
+		maxBytes = 30 * 1024 * 1024
+	}
+	var totalBytes int64
+	for _, ref := range typed.ReferenceImages {
+		if ref.Bytes > maxBytes {
+			return BadAuthRequest("参考图文件大小超出当前模型限制")
+		}
+		if ref.Bytes > 0 {
+			totalBytes += ref.Bytes
+		}
+	}
+	if totalBytes > int64(MaxProjectAssetReferenceImages)*maxBytes {
+		return BadAuthRequest("参考图总大小超出当前请求限制")
 	}
 	return nil
 }

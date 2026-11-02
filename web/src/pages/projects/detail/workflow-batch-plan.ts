@@ -530,7 +530,7 @@ export async function fingerprintBatchShot(input: WorkflowImageInput): Promise<s
             assetVersionId: ref.assetVersionId,
             role: ref.role,
             status: ref.status,
-            resourceId: ref.referencedVersion?.referenceImage?.resourceId || "",
+            resourceId: ref.referencedVersion?.referenceImages?.[0]?.resourceId || ref.referencedVersion?.referenceImage?.resourceId || "",
             representationIds: (ref.referencedVersion?.representations || [])
                 .map((rep) => `${rep.id}:${rep.role}:${rep.resourceId}`)
                 .sort(),

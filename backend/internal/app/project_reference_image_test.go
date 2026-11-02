@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +25,12 @@ func referenceTestService(t *testing.T) (*Service, *gorm.DB, string) {
 	s, db, projectID, _ := seedProjectVisualAsset(t, model.AssetCategoryEnvironment)
 	if err := db.AutoMigrate(&model.ProjectAssetFolder{}, &model.VoiceProfile{}, &model.ApiCallLog{}, &model.BillingOrder{}); err != nil {
 		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, id := range []string{"image-2", "image-3"} {
+		if err := db.Create(&model.Resource{ID: id, UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady, Width: 800, Height: 600, Size: 100, MimeType: "image/png", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	return s, db, projectID
 }
@@ -95,9 +104,25 @@ func TestProjectImageDeleteRechecksDirectUseAfterSnapshot(t *testing.T) {
 	for _, purge := range []bool{false, true} {
 		t.Run(fmt.Sprint(purge), func(t *testing.T) {
 			s, db, p := referenceTestService(t)
-			if err := db.AutoMigrate(&model.ResourceDeletionJob{}, &model.CanvasSnapshotResource{}, &model.CanvasSnapshot{}, &model.CanvasProject{}, &model.Announcement{}, &model.AnnouncementImageDraft{}, &model.ArkPrivateAssetBinding{}, &model.ShotAssetReference{}); err != nil {
+			s.dataDir = t.TempDir()
+			if err := database.MigrateSchema(db); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.MkdirAll(filepath.Join(s.dataDir, "resources"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			res, err := s.repo.ResourceForUser("user-1", "image-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Delete(&model.Resource{}, "id = ?", "image-1").Error; err != nil {
+				t.Fatal(err)
+			}
+			res.Provider, res.ObjectKey = "local", "image-1.png"
+			if err := os.WriteFile(filepath.Join(s.dataDir, "resources", res.ObjectKey), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			createClosedLocalFixtureResource(t, s, res)
 			upload := model.Asset{ID: "upload", UserID: "user-1", PayloadJSON: `{"resourceId":"image-1"}`}
 			if err := db.Create(&upload).Error; err != nil {
 				t.Fatal(err)
@@ -120,10 +145,12 @@ func TestProjectImageDeleteRechecksDirectUseAfterSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.repo.DeleteAdminResources([]model.Resource{*resource}, nil, []model.AdminAuditEvent{{ID: "audit"}}); !errors.Is(err, repository.ErrAdminResourceStillReferenced) {
+			var referenced *repository.ResourceDeletionReferencedError
+			if err := s.repo.DeleteAdminResources([]model.Resource{*resource}, nil, []model.AdminAuditEvent{{ID: "audit"}}); !errors.As(err, &referenced) || len(referenced.References) == 0 {
 				t.Fatalf("admin missed committed direct use: %v", err)
 			}
-			if err := s.repo.DeleteDetachedResources([]model.Resource{*resource}, nil); !errors.Is(err, repository.ErrResourceCleanupStillReferenced) {
+			referenced = nil
+			if err := s.repo.DeleteDetachedResources([]model.Resource{*resource}, nil); !errors.As(err, &referenced) || len(referenced.References) == 0 {
 				t.Fatalf("orphan cleanup missed committed direct use: %v", err)
 			}
 			job := model.ResourceDeletionJob{ID: "delete-job", ResourceID: "image-1", UserID: "user-1", Status: model.ResourceDeletionStatusPending}
@@ -307,12 +334,13 @@ func TestProjectReferenceCreateAndDirectPortrait(t *testing.T) {
 	if err := db.Create(&folder).Error; err != nil {
 		t.Fatal(err)
 	}
+	wantRefs := []ProjectReferenceImage{{ResourceID: "image-1"}, {ResourceID: "image-2"}}
 	for _, role := range []string{"", "portrait", "turnaround_sheet"} {
-		detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: " 角色 ", FolderID: &folder.ID, ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}, ImageResourceID: "image-1", ImageRole: role})
+		detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: " 角色 ", FolderID: &folder.ID, ReferenceImages: wantRefs, ImageResourceID: "image-1", ImageRole: role})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if detail.Asset.FolderID != folder.ID || detail.Asset.ReferenceImage == nil || detail.Asset.ReferenceImage.ResourceID != "image-1" {
+		if detail.Asset.FolderID != folder.ID || !reflect.DeepEqual(detail.Asset.ReferenceImages, wantRefs) {
 			t.Fatalf("missing reference/folder: %+v", detail)
 		}
 		want := 1
@@ -327,23 +355,30 @@ func TestProjectReferenceCreateAndDirectPortrait(t *testing.T) {
 		}
 	}
 	for _, category := range []model.AssetCategory{model.AssetCategoryEnvironment, model.AssetCategoryProp} {
-		asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "实体", Category: category, FolderID: &folder.ID, ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}, ImageResourceID: "image-1"})
+		asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "实体", Category: category, FolderID: &folder.ID, ReferenceImages: wantRefs, ImageResourceID: "image-1"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if asset.MediaType != "image" || asset.Visual == nil || asset.Visual.Status != "ready" || asset.VersionCount != 1 || asset.FolderID != folder.ID {
+		if asset.MediaType != "image" || asset.Visual == nil || asset.Visual.Status != "ready" || asset.VersionCount != 1 || asset.FolderID != folder.ID || !reflect.DeepEqual(asset.ReferenceImages, wantRefs) {
 			t.Fatalf("bad direct entity: %+v", asset)
 		}
+	}
+	var tooMany []ProjectReferenceImage
+	for i := 0; i < MaxProjectAssetReferenceImages+1; i++ {
+		tooMany = append(tooMany, ProjectReferenceImage{ResourceID: "image-1"})
 	}
 	var before int64
 	db.Model(&model.Asset{}).Count(&before)
 	for _, req := range []CreateProjectAssetEntityRequest{
 		{Name: " ", Category: model.AssetCategoryProp},
 		{Name: "x", Category: model.AssetCategoryCharacter},
-		{Name: "x", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{ResourceID: "foreign-image"}},
-		{Name: "x", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{ResourceID: "pending-image"}},
-		{Name: "x", Category: model.AssetCategoryProp, ReferenceImage: &ProjectReferenceImage{ResourceID: "video-1"}},
+		{Name: "x", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{ResourceID: "foreign-image"}}},
+		{Name: "x", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{ResourceID: "pending-image"}}},
+		{Name: "x", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{ResourceID: "video-1"}}},
+		{Name: "x", Category: model.AssetCategoryProp, ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}, {ResourceID: "image-1"}}},
+		{Name: "x", Category: model.AssetCategoryProp, ReferenceImages: tooMany},
 		{Name: "x", Category: model.AssetCategoryProp, Definition: map[string]any{"referenceImage": map[string]any{"resourceId": "foreign-image"}}},
+		{Name: "x", Category: model.AssetCategoryProp, Definition: map[string]any{"referenceImages": []any{map[string]any{"resourceId": "foreign-image"}}}},
 	} {
 		if _, err := s.CreateProjectAssetEntity("user-1", p, req); err == nil {
 			t.Fatalf("invalid create accepted: %+v", req)
@@ -382,9 +417,9 @@ func TestProjectReferenceCreateTransactionRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			if category == model.AssetCategoryCharacter {
-				_, err = s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "rollback", ImageResourceID: "image-1", ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}})
+				_, err = s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "rollback", ImageResourceID: "image-1", ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}}})
 			} else {
-				_, err = s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "rollback", Category: category, ImageResourceID: "image-1", ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}})
+				_, err = s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "rollback", Category: category, ImageResourceID: "image-1", ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}}})
 			}
 			if err == nil || !strings.Contains(err.Error(), "injected creation link failure") {
 				t.Fatalf("did not reach injected failure: %v", err)
@@ -422,7 +457,7 @@ func TestProjectReferenceRejectsInvalidMIMEAndDimensions(t *testing.T) {
 			if err := db.Create(&resource).Error; err != nil {
 				t.Fatal(err)
 			}
-			_, err := s.SetProjectReferenceImage("user-1", p, asset.ID, SetProjectReferenceImageRequest{ResourceID: resource.ID, ExpectedVersionID: asset.PrimaryVersionID})
+			_, err := s.SetProjectReferenceImages("user-1", p, asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: []ProjectReferenceImage{{ResourceID: resource.ID}}, ExpectedVersionID: asset.PrimaryVersionID})
 			var appErr *AppError
 			if !errors.As(err, &appErr) || appErr.Status != 400 {
 				t.Fatalf("invalid image not explicitly rejected: %v", err)
@@ -437,7 +472,7 @@ func TestProjectReferenceRejectsInvalidMIMEAndDimensions(t *testing.T) {
 
 func TestProjectReferencePreservesVersionsVoiceAndCAS(t *testing.T) {
 	s, db, p := referenceTestService(t)
-	detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "角色", ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}, ImageResourceID: "image-1"})
+	detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "角色", ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}}, ImageResourceID: "image-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,38 +489,69 @@ func TestProjectReferencePreservesVersionsVoiceAndCAS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Asset.ReferenceImage == nil || updated.Character.Voice == nil || len(updated.Character.Representations) != 1 {
+	if len(updated.Asset.ReferenceImages) != 1 || updated.Asset.ReferenceImages[0].ResourceID != "image-1" || updated.Character.Voice == nil || len(updated.Character.Representations) != 1 {
 		t.Fatalf("protected data lost: %+v", updated)
 	}
 	_, err = s.UpdateProjectCharacter("user-1", p, detail.Asset.ID, UpdateProjectCharacterRequest{Name: "旧修改", ExpectedVersionID: old})
 	requireVersionConflict(t, err)
 	_, err = s.ReplaceProjectCharacterRepresentations("user-1", p, detail.Asset.ID, ReplaceCharacterRepresentationsRequest{ExpectedVersionID: old, Representations: []CharacterRepresentationInput{{Role: "primary", ResourceID: "image-1"}}})
 	requireVersionConflict(t, err)
-	_, err = s.UpdateProjectCharacter("user-1", p, detail.Asset.ID, UpdateProjectCharacterRequest{Name: "非法", Definition: map[string]any{"referenceImage": nil}})
-	if err == nil {
-		t.Fatal("reference cleared through definition")
+	for _, def := range []map[string]any{{"referenceImage": nil}, {"referenceImages": []any{}}} {
+		if _, err = s.UpdateProjectCharacter("user-1", p, detail.Asset.ID, UpdateProjectCharacterRequest{Name: "非法", Definition: def, ExpectedVersionID: updated.Asset.PrimaryVersionID}); err == nil {
+			t.Fatalf("reference cleared through definition: %+v", def)
+		}
 	}
 	second := model.Resource{ID: "original-2", UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady, MimeType: "image/png", Width: 100, Height: 100}
 	db.Create(&second)
-	changed, err := s.SetProjectReferenceImage("user-1", p, detail.Asset.ID, SetProjectReferenceImageRequest{ResourceID: second.ID, ExpectedVersionID: updated.Asset.PrimaryVersionID})
+	ordered := []ProjectReferenceImage{{ResourceID: second.ID}, {ResourceID: "image-2"}, {ResourceID: "image-3"}}
+	changed, err := s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: ordered, ExpectedVersionID: updated.Asset.PrimaryVersionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changed.ReferenceImage.ResourceID != second.ID || changed.Character.Representations[0].ResourceID != "image-1" || changed.Character.Voice == nil {
-		t.Fatalf("reference replaced output: %+v", changed)
+	if !reflect.DeepEqual(changed.ReferenceImages, ordered) || changed.Character.Representations[0].ResourceID != "image-1" || changed.Character.Voice == nil {
+		t.Fatalf("reference replaced output or lost order: %+v", changed)
+	}
+	// Saving the exact same ordered collection with current ExpectedVersionID is idempotent and does not create a new version.
+	idempotent, err := s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: ordered, ExpectedVersionID: changed.PrimaryVersionID})
+	if err != nil || idempotent.PrimaryVersionID != changed.PrimaryVersionID || idempotent.VersionCount != changed.VersionCount {
+		t.Fatalf("same-order save was not idempotent: %+v %v", idempotent, err)
+	}
+	// Reordering creates a new version with the new order.
+	reordered := []ProjectReferenceImage{{ResourceID: "image-3"}, {ResourceID: second.ID}, {ResourceID: "image-2"}}
+	reorderedSummary, err := s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: reordered, ExpectedVersionID: changed.PrimaryVersionID})
+	if err != nil || !reflect.DeepEqual(reorderedSummary.ReferenceImages, reordered) || reorderedSummary.PrimaryVersionID == changed.PrimaryVersionID {
+		t.Fatalf("reorder failed: %+v %v", reorderedSummary, err)
+	}
+	// Clearing with empty slice creates a new version with empty ReferenceImages while preserving historical originals.
+	cleared, err := s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: []ProjectReferenceImage{}, ExpectedVersionID: reorderedSummary.PrimaryVersionID})
+	if err != nil || len(cleared.ReferenceImages) != 0 || cleared.PrimaryVersionID == reorderedSummary.PrimaryVersionID {
+		t.Fatalf("clear failed: %+v %v", cleared, err)
 	}
 	previous, err := s.repo.AssetVersion(old)
-	if err != nil || referenceImageFromDefinition(previous.DefinitionJSON).ResourceID != "image-1" {
+	if err != nil || len(referenceImagesFromDefinition(previous.DefinitionJSON)) != 1 || referenceImagesFromDefinition(previous.DefinitionJSON)[0].ResourceID != "image-1" {
 		t.Fatal("historical original lost")
 	}
 	if err := s.repo.RequireNoOriginalImageReferences([]string{"image-1"}); !errors.Is(err, repository.ErrOriginalImageReferenced) {
 		t.Fatalf("historical reference not protected: %v", err)
 	}
-	_, err = s.SetProjectReferenceImage("user-1", p, detail.Asset.ID, SetProjectReferenceImageRequest{ResourceID: "image-1", ExpectedVersionID: old})
+	if err := s.repo.RequireNoOriginalImageReferences([]string{second.ID}); !errors.Is(err, repository.ErrOriginalImageReferenced) {
+		t.Fatalf("historical multi-reference not protected: %v", err)
+	}
+	_, err = s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, SetProjectReferenceImagesRequest{ReferenceImages: ordered, ExpectedVersionID: old})
 	requireVersionConflict(t, err)
-	for _, req := range []SetProjectReferenceImageRequest{{ResourceID: "", ExpectedVersionID: changed.PrimaryVersionID}, {ResourceID: "foreign-image", ExpectedVersionID: changed.PrimaryVersionID}, {ResourceID: "image-1"}} {
-		if _, err := s.SetProjectReferenceImage("user-1", p, detail.Asset.ID, req); err == nil {
-			t.Fatal("invalid reference update accepted")
+	var tooMany []ProjectReferenceImage
+	for i := 0; i < MaxProjectAssetReferenceImages+1; i++ {
+		tooMany = append(tooMany, ProjectReferenceImage{ResourceID: fmt.Sprintf("img-%d", i)})
+	}
+	for _, req := range []SetProjectReferenceImagesRequest{
+		{ReferenceImages: []ProjectReferenceImage{{ResourceID: ""}}, ExpectedVersionID: cleared.PrimaryVersionID},
+		{ReferenceImages: []ProjectReferenceImage{{ResourceID: "foreign-image"}}, ExpectedVersionID: cleared.PrimaryVersionID},
+		{ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}, {ResourceID: "image-1"}}, ExpectedVersionID: cleared.PrimaryVersionID},
+		{ReferenceImages: tooMany, ExpectedVersionID: cleared.PrimaryVersionID},
+		{ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}}},
+	} {
+		if _, err := s.SetProjectReferenceImages("user-1", p, detail.Asset.ID, req); err == nil {
+			t.Fatalf("invalid reference update accepted: %+v", req)
 		}
 	}
 }
@@ -517,9 +583,10 @@ func TestProjectImageCandidateManualAdoptionAndRecovery(t *testing.T) {
 	for _, category := range []model.AssetCategory{model.AssetCategoryCharacter, model.AssetCategoryEnvironment, model.AssetCategoryProp} {
 		t.Run(string(category), func(t *testing.T) {
 			s, db, p := referenceTestService(t)
+			wantRefs := []ProjectReferenceImage{{ResourceID: "image-2"}, {ResourceID: "image-1"}}
 			var asset ProjectAssetSummary
 			if category == model.AssetCategoryCharacter {
-				detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "人物", ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}})
+				detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "人物", ReferenceImages: wantRefs})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -531,7 +598,7 @@ func TestProjectImageCandidateManualAdoptionAndRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				value, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "实体", Category: category, ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}})
+				value, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "实体", Category: category, ReferenceImages: wantRefs})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -550,11 +617,11 @@ func TestProjectImageCandidateManualAdoptionAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if adopted.VersionCount != 2 || adopted.ReferenceImage.ResourceID != "image-1" {
+			if adopted.VersionCount != 2 || !reflect.DeepEqual(adopted.ReferenceImages, wantRefs) {
 				t.Fatalf("bad adoption: %+v", adopted)
 			}
 			replay, err := s.AdoptProjectImageCandidate("user-1", p, asset.ID, task.ID, AdoptProjectImageCandidateRequest{ExpectedVersionID: asset.PrimaryVersionID})
-			if err != nil || replay.PrimaryVersionID != adopted.PrimaryVersionID || replay.VersionCount != 2 {
+			if err != nil || replay.PrimaryVersionID != adopted.PrimaryVersionID || replay.VersionCount != 2 || !reflect.DeepEqual(replay.ReferenceImages, wantRefs) {
 				t.Fatalf("replay: %+v %v", replay, err)
 			}
 			_, err = s.AdoptProjectImageCandidate("user-1", p, asset.ID, other.ID, AdoptProjectImageCandidateRequest{ExpectedVersionID: adopted.PrimaryVersionID})
@@ -804,10 +871,31 @@ func TestProjectImageCandidateCompletionRespectsLease(t *testing.T) {
 
 func TestProjectReferenceDeleteGuardAndPreparedEditCAS(t *testing.T) {
 	s, db, p := referenceTestService(t)
+	s.dataDir = t.TempDir()
 	if err := database.MigrateSchema(db); err != nil {
 		t.Fatal(err)
 	}
-	detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "角色", ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}})
+	if err := os.MkdirAll(filepath.Join(s.dataDir, "resources"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settleLocalFixture := func(id string) *model.Resource {
+		res, err := s.repo.ResourceForUser("user-1", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Delete(&model.Resource{}, "id = ?", id).Error; err != nil {
+			t.Fatal(err)
+		}
+		res.Provider, res.ObjectKey = "local", id+".png"
+		if err := os.WriteFile(filepath.Join(s.dataDir, "resources", res.ObjectKey), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		createClosedLocalFixtureResource(t, s, res)
+		return res
+	}
+	resource := settleLocalFixture("image-1")
+	settleLocalFixture("image-2")
+	detail, err := s.CreateProjectCharacter("user-1", p, CreateProjectCharacterRequest{Name: "角色", ReferenceImages: []ProjectReferenceImage{{ResourceID: "image-1"}, {ResourceID: "image-2"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -823,12 +911,15 @@ func TestProjectReferenceDeleteGuardAndPreparedEditCAS(t *testing.T) {
 	if err := s.repo.SaveCharacterVersion(p, &nextAsset, &next, reps, voice, asset.PrimaryVersionID); !errors.Is(err, repository.ErrProjectAssetVersionChanged) {
 		t.Fatalf("prepared edit overwrote adoption: %v", err)
 	}
-	resource, _ := s.repo.ResourceForUser("user-1", "image-1")
 	if err := s.repo.DeleteDetachedResources([]model.Resource{*resource}, nil); !errors.Is(err, repository.ErrOriginalImageReferenced) {
 		t.Fatalf("cleanup bypassed original: %v", err)
 	}
-	if err := s.repo.DeleteAssetsAndResources("user-1", []string{asset.ID}, []string{resource.ID}, nil, true); !errors.Is(err, repository.ErrOriginalImageReferenced) {
+	if err := s.repo.DeleteAssetsAndResources("user-1", nil, []string{resource.ID}, nil, true); !errors.Is(err, repository.ErrOriginalImageReferenced) {
 		t.Fatalf("purge bypassed original: %v", err)
+	}
+	var refErr *repository.ResourceDeletionReferencedError
+	if err := s.repo.DeleteAssetsAndResources("user-1", []string{asset.ID}, []string{resource.ID}, nil, true); !errors.As(err, &refErr) {
+		t.Fatalf("asset purge bypassed project/task reference: %v", err)
 	}
 	if _, err := s.repo.ResourceForUser("user-1", resource.ID); err != nil {
 		t.Fatal("guard deleted resource")
@@ -837,8 +928,9 @@ func TestProjectReferenceDeleteGuardAndPreparedEditCAS(t *testing.T) {
 
 func TestProjectImageTaskReferenceSourcesAndValidation(t *testing.T) {
 	s, db, p := referenceTestService(t)
-	db.Create(&model.Resource{ID: "current-image", UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady, MimeType: "image/png", Width: 100, Height: 100})
-	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "场景", Category: model.AssetCategoryEnvironment, ReferenceImage: &ProjectReferenceImage{ResourceID: "image-1"}, ImageResourceID: "current-image"})
+	db.Create(&model.Resource{ID: "current-image", UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady, MimeType: "image/png", Width: 100, Height: 100, Size: 100})
+	orderedRefs := []ProjectReferenceImage{{ResourceID: "image-3"}, {ResourceID: "image-1"}, {ResourceID: "image-2"}}
+	asset, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "场景", Category: model.AssetCategoryEnvironment, ReferenceImages: orderedRefs, ImageResourceID: "current-image"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,30 +943,96 @@ func TestProjectImageTaskReferenceSourcesAndValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		refs := input["referenceImages"].([]any)
-		if source == "none" {
+		switch source {
+		case "none":
 			if len(refs) != 0 {
 				t.Fatal("fabricated reference")
 			}
-		} else {
-			want := "resource:image-1"
-			if source == "current" {
-				want = "resource:current-image"
+		case "current":
+			if len(refs) != 1 || refs[0].(map[string]any)["storageKey"] != "resource:current-image" {
+				t.Fatalf("wrong current reference: %+v", refs)
 			}
-			if refs[0].(map[string]any)["storageKey"] != want {
-				t.Fatal("wrong reference source")
+		case "original":
+			wantKeys := []string{"resource:image-3", "resource:image-1", "resource:image-2"}
+			if len(refs) != len(wantKeys) {
+				t.Fatalf("got %d original refs, want %d", len(refs), len(wantKeys))
+			}
+			for i, want := range wantKeys {
+				if refs[i].(map[string]any)["storageKey"] != want {
+					t.Fatalf("ref[%d] = %v, want %s", i, refs[i], want)
+				}
 			}
 		}
 	}
-	for _, mutate := range []func(map[string]any){func(v map[string]any) { v["metadata"].(map[string]any)["adoptionMode"] = "typo" }, func(v map[string]any) { v["metadata"].(map[string]any)["referenceSource"] = "unknown" }, func(v map[string]any) { v["config"].(map[string]any)["count"] = "2" }, func(v map[string]any) { v["referenceImages"] = []any{map[string]any{}, map[string]any{}} }, func(v map[string]any) {
-		v["referenceImages"] = []any{map[string]any{"storageKey": "resource:foreign-image"}}
-	}} {
+	for _, mutate := range []func(map[string]any){
+		func(v map[string]any) { v["metadata"].(map[string]any)["adoptionMode"] = "typo" },
+		func(v map[string]any) { v["metadata"].(map[string]any)["referenceSource"] = "unknown" },
+		func(v map[string]any) { v["config"].(map[string]any)["count"] = "2" },
+		func(v map[string]any) { v["referenceImages"] = []any{map[string]any{"storageKey": "resource:image-3"}} },
+		func(v map[string]any) {
+			v["referenceImages"] = []any{
+				map[string]any{"storageKey": "resource:image-1"},
+				map[string]any{"storageKey": "resource:image-3"},
+				map[string]any{"storageKey": "resource:image-2"},
+			}
+		},
+		func(v map[string]any) {
+			v["referenceImages"] = []any{
+				map[string]any{"storageKey": "resource:image-3", "url": "https://evil.example/image-3.png"},
+				map[string]any{"storageKey": "resource:image-1"},
+				map[string]any{"storageKey": "resource:image-2"},
+			}
+		},
+		func(v map[string]any) {
+			v["referenceImages"] = []any{map[string]any{"storageKey": "resource:foreign-image"}}
+		},
+	} {
 		input := makeInput("original")
 		mutate(input)
 		if err := s.prepareProjectImageTask("user-1", p, "canvas_image", input); err == nil {
 			t.Fatal("invalid task input accepted")
 		}
 	}
+	// Protocol payload order assertion: verify all 3 reference images enter the shipped Seedream protocol in exact saved order.
+	manifest, err := os.ReadFile("../../../plugin-packages/volcengine-ark-seedream/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := protocol.LoadManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	input := makeInput("original")
+	input["config"].(map[string]any)["interfaceType"] = "volcengine-ark-image"
+	input["config"].(map[string]any)["model"] = "doubao-seedream-5-0-260128"
+	if err := s.prepareProjectImageTask("user-1", p, "canvas_image", input); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(input)
+	var typed canvasGenerationInput
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		t.Fatal(err)
+	}
+	for i := range typed.ReferenceImages {
+		typed.ReferenceImages[i].DataURL = "data:image/png;base64," + typed.ReferenceImages[i].ID
+	}
+	spec, err := adapter.BuildCreate(context.Background(), protocol.RequestContext{Request: protocolRequestFromInput(typed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyBytes, _ := json.Marshal(spec.Body)
+	var bodyMap map[string]any
+	if err := json.Unmarshal(bodyBytes, &bodyMap); err != nil {
+		t.Fatal(err)
+	}
+	gotImages, ok := bodyMap["image"].([]any)
+	wantURLs := []any{"data:image/png;base64,image-3", "data:image/png;base64,image-1", "data:image/png;base64,image-2"}
+	if !ok || !reflect.DeepEqual(gotImages, wantURLs) {
+		t.Fatalf("protocol payload image order = %#v, want %#v", bodyMap["image"], wantURLs)
+	}
+
+	// Capability validation: unknown protocol, text-only model, 1-image model with 3 references, and client capabilityConfig spoofing.
+	input = makeInput("original")
 	if err := s.prepareProjectImageTask("user-1", p, "canvas_image", input); err != nil {
 		t.Fatal(err)
 	}
@@ -886,5 +1044,166 @@ func TestProjectImageTaskReferenceSourcesAndValidation(t *testing.T) {
 	input["config"].(map[string]any)["model"] = "grok-imagine-image"
 	if err := s.validateProjectImageReferenceCapability(input); err == nil {
 		t.Fatal("text only capability accepted")
+	}
+	// grok-imagine-image-pro only supports 1 reference image; 3 references must be rejected, and client capabilityConfig cannot expand it to 16.
+	input["config"].(map[string]any)["model"] = "grok-imagine-image-pro"
+	input["config"].(map[string]any)["capabilityConfig"] = map[string]any{"image": map[string]any{"references": map[string]any{"enabled": true, "maxImages": 16, "maxImageBytes": 10 * 1024 * 1024, "supportedMimeTypes": []string{"image/png"}}}}
+	if err := s.validateProjectImageReferenceCapability(input); err == nil {
+		t.Fatal("client capabilityConfig expanded server single-reference model limit")
+	}
+}
+
+func TestProjectReferenceLegacySingleImageMigration(t *testing.T) {
+	s, db, p := referenceTestService(t)
+	// Create two assets and manually write legacy single-field DefinitionJSON and PayloadJSON.
+	legacyWithRef, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "legacy-one", Category: model.AssetCategoryProp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyEmpty, err := s.CreateProjectAssetEntity("user-1", p, CreateProjectAssetEntityRequest{Name: "legacy-empty", Category: model.AssetCategoryEnvironment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.AssetVersion{}).Where("id = ?", legacyWithRef.PrimaryVersionID).Update("definition_json", `{"description":"旧描述","referenceImage":{"resourceId":"image-1"}}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Asset{}).Where("id = ?", legacyWithRef.ID).Update("payload_json", `{"projectImageEntity":true,"referenceImage":{"resourceId":"image-1"}}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.AssetVersion{}).Where("id = ?", legacyEmpty.PrimaryVersionID).Update("definition_json", `{"description":"无参考"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := seedManualImageCandidate(t, s, db, p, legacyWithRef, "legacy-candidate")
+	report, err := s.MigrateLegacyProjectReferenceImages()
+	if err != nil {
+		t.Fatalf("legacy migration failed: %v", err)
+	}
+	if report.MigratedVersions < 2 || report.MigratedPayloads < 1 {
+		t.Fatalf("unexpected migration report: %+v", report)
+	}
+	// Re-running migration is idempotent and updates 0 rows.
+	secondReport, err := s.MigrateLegacyProjectReferenceImages()
+	if err != nil || secondReport.MigratedVersions != 0 || secondReport.MigratedPayloads != 0 {
+		t.Fatalf("second migration not idempotent: %+v %v", secondReport, err)
+	}
+	v1, err := s.repo.AssetVersion(legacyWithRef.PrimaryVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(v1.DefinitionJSON, `"referenceImage"`) || !reflect.DeepEqual(referenceImagesFromDefinition(v1.DefinitionJSON), []ProjectReferenceImage{{ResourceID: "image-1"}}) {
+		t.Fatalf("legacy version not canonicalized: %s", v1.DefinitionJSON)
+	}
+	v2, err := s.repo.AssetVersion(legacyEmpty.PrimaryVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v2.DefinitionJSON, `"referenceImages":[]`) || len(referenceImagesFromDefinition(v2.DefinitionJSON)) != 0 {
+		t.Fatalf("empty legacy version not canonicalized: %s", v2.DefinitionJSON)
+	}
+	// Existing candidate bound to the migrated base version remains adoptable and preserves migrated ReferenceImages.
+	adopted, err := s.AdoptProjectImageCandidate("user-1", p, legacyWithRef.ID, task.ID, AdoptProjectImageCandidateRequest{ExpectedVersionID: legacyWithRef.PrimaryVersionID})
+	if err != nil || !reflect.DeepEqual(adopted.ReferenceImages, []ProjectReferenceImage{{ResourceID: "image-1"}}) {
+		t.Fatalf("candidate adoption after migration failed: %+v %v", adopted, err)
+	}
+	// Conflict between referenceImage and referenceImages or missing resource must be rejected and rolled back.
+	for name, badJSON := range map[string]string{
+		"conflict": `{"referenceImage":{"resourceId":"image-1"},"referenceImages":[{"resourceId":"image-2"}]}`,
+		"corrupt":  `{"referenceImage":`,
+		"missing":  `{"referenceImage":{"resourceId":"no-such-resource"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			beforeVer, _ := s.repo.AssetVersion(legacyEmpty.PrimaryVersionID)
+			if err := db.Model(&model.AssetVersion{}).Where("id = ?", legacyEmpty.PrimaryVersionID).Update("definition_json", badJSON).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.MigrateLegacyProjectReferenceImages(); err == nil {
+				t.Fatalf("expected migration failure for %s", name)
+			}
+			if err := db.Model(&model.AssetVersion{}).Where("id = ?", legacyEmpty.PrimaryVersionID).Update("definition_json", beforeVer.DefinitionJSON).Error; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProjectReferenceConcurrentReverseOrderAndDeleteGuard(t *testing.T) {
+	dbs := profileConcurrencyDatabases(t, "sqlite")
+	db := dbs[0]
+	if err := database.MigrateSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	services := [2]*Service{{repo: repository.New(db), dataDir: t.TempDir()}, {repo: repository.New(dbs[1]), dataDir: t.TempDir()}}
+	project := model.Project{ID: newID(), UserID: "user-1", Name: "concurrent-refs", Status: model.ProjectStatusActive}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"res-a", "res-b", "res-c"} {
+		res := model.Resource{ID: id, UserID: "user-1", Provider: "local", ObjectKey: id + ".png", Kind: "image", Status: model.ResourceStatusReady, MimeType: "image/png", Width: 64, Height: 64, Size: 64}
+		if err := os.MkdirAll(filepath.Join(services[0].dataDir, "resources"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(services[0].dataDir, "resources", res.ObjectKey), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		createClosedLocalFixtureResource(t, services[0], &res)
+	}
+	asset, err := services[0].CreateProjectAssetEntity("user-1", project.ID, CreateProjectAssetEntityRequest{
+		Name:            "并发资产",
+		Category:        model.AssetCategoryProp,
+		ReferenceImages: []ProjectReferenceImage{{ResourceID: "res-a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := [2][]ProjectReferenceImage{
+		{{ResourceID: "res-a"}, {ResourceID: "res-b"}, {ResourceID: "res-c"}},
+		{{ResourceID: "res-c"}, {ResourceID: "res-b"}, {ResourceID: "res-a"}},
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var errs [2]error
+	var summaries [2]ProjectAssetSummary
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			summaries[i], errs[i] = services[i].SetProjectReferenceImages("user-1", project.ID, asset.ID, SetProjectReferenceImagesRequest{
+				ReferenceImages:   orders[i],
+				ExpectedVersionID: asset.PrimaryVersionID,
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	successes, conflicts := 0, 0
+	var winningOrder []ProjectReferenceImage
+	for i, err := range errs {
+		if err == nil {
+			successes++
+			winningOrder = orders[i]
+			if !reflect.DeepEqual(summaries[i].ReferenceImages, winningOrder) {
+				t.Fatalf("winner summary order mismatch: %+v want %+v", summaries[i].ReferenceImages, winningOrder)
+			}
+		} else {
+			var appErr *AppError
+			if errors.As(err, &appErr) && appErr.Status == 409 {
+				conflicts++
+			} else {
+				t.Fatalf("unexpected error in concurrent reverse-order update: %v", err)
+			}
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("want 1 success and 1 CAS conflict, got successes=%d conflicts=%d", successes, conflicts)
+	}
+	for _, id := range []string{"res-a", "res-b", "res-c"} {
+		res, err := services[0].repo.ResourceForUser("user-1", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := services[0].repo.DeleteDetachedResources([]model.Resource{*res}, nil); !errors.Is(err, repository.ErrOriginalImageReferenced) {
+			t.Fatalf("resource %s was not protected from deletion: %v", id, err)
+		}
 	}
 }

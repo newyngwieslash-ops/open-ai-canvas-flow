@@ -32,19 +32,19 @@ func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"asset": asset})
 	})
-	r.PUT("/projects/:id/assets/:assetId/reference-image", func(c *gin.Context) {
+	r.PUT("/projects/:id/assets/:assetId/reference-images", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
 			failService(c, err)
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
-		var req service.SetProjectReferenceImageRequest
+		var req service.SetProjectReferenceImagesRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			fail(c, http.StatusBadRequest, err)
 			return
 		}
-		asset, err := svc.SetProjectReferenceImage(user.ID, c.Param("id"), c.Param("assetId"), req)
+		asset, err := svc.SetProjectReferenceImages(user.ID, c.Param("id"), c.Param("assetId"), req)
 		if err != nil {
 			failService(c, err)
 			return

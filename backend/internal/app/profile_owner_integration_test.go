@@ -32,7 +32,7 @@ func profileOwnerFixture(t *testing.T, dialect string, category model.AssetCateg
 			t.Fatal(err)
 		}
 	}
-	asset, err := s.createProjectImageEntity(project.UserID, project.ID, category, "owner asset", map[string]any{"description": "old", "appearance": "old"}, &ProjectReferenceImage{ResourceID: resource.ID}, "", "", nil)
+	asset, err := s.createProjectImageEntity(project.UserID, project.ID, category, "owner asset", map[string]any{"description": "old", "appearance": "old"}, []ProjectReferenceImage{{ResourceID: resource.ID}}, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

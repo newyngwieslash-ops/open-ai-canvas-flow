@@ -155,13 +155,14 @@ function ProfileAnalysisSession({ project, asset: initialAsset, userId, onClose,
         }
         await Promise.all([history.refetch({ throwOnError: true }), refreshAsset()]);
     };
+    const primaryReferenceImage = asset.referenceImages?.[0] || asset.referenceImage;
     const create = () => run(async () => {
-        if (!pendingReady || !currentAvailable || !selection || !asset.primaryVersionId || !asset.referenceImage?.resourceId || pending) return;
+        if (!pendingReady || !currentAvailable || !selection || !asset.primaryVersionId || !primaryReferenceImage?.resourceId || pending) return;
         // Creation is not idempotent: every deliberate new request first reads recovery.
         const recovered = await history.refetch({ throwOnError: true });
         if (!alive() || recovered.data?.pages.some((page) => page.analyses.some(active))) return;
         try {
-            const result = await createProjectAssetProfileAnalysis(project.id, asset.id, { expectedVersionId: asset.primaryVersionId, sourceResourceId: asset.referenceImage.resourceId, modelSelection: selection });
+            const result = await createProjectAssetProfileAnalysis(project.id, asset.id, { expectedVersionId: asset.primaryVersionId, sourceResourceId: primaryReferenceImage.resourceId, modelSelection: selection });
             if (!alive()) return;
             client.setQueryData(profileAnalysisKey(userId, project.id, asset.id, result.analysis.taskId), result);
             setTaskId(result.analysis.taskId); setUncertainCreate(false);
@@ -227,15 +228,15 @@ function ProfileAnalysisSession({ project, asset: initialAsset, userId, onClose,
                 <p className="mt-2 text-[length:var(--fs-body)] text-foreground/60">只分析可见内容，模型建议不是资产事实。默认不采用任何字段，关闭不会取消任务或保存草稿。</p>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
                     <figure aria-label="新分析原图" className="border border-border p-3" style={{ borderRadius: "var(--radius-lg)" }}>
-                        <figcaption>新分析原图：已保存的原始参考图{asset.referenceImage ? ` · ${asset.referenceImage.resourceId}` : ""}</figcaption>
+                        <figcaption>新分析原图：已保存的原始参考图{primaryReferenceImage ? ` · ${primaryReferenceImage.resourceId}` : ""}</figcaption>
                         {!currentAvailable ? <p role="status">{currentRead === "unavailable" ? "当前值暂不可用，请刷新恢复" : "当前值正在刷新"}</p> : null}
-                        {asset.referenceImage ? <CachedResourceImage storageKey={resourceStorageKey(asset.referenceImage.resourceId)} src={resourceFileUrl(asset.referenceImage.resourceId)} alt="已保存的原始参考图" className="mt-2 max-h-48 w-full object-contain" /> : <><p className="my-3">尚无原始参考图，当前成品不能代替原图。保存后将以新主版本分析。</p><Button onClick={() => setReferenceEditor(true)} disabled={busy}>选择并保存原始参考图</Button></>}
+                        {primaryReferenceImage ? <CachedResourceImage storageKey={resourceStorageKey(primaryReferenceImage.resourceId)} src={resourceFileUrl(primaryReferenceImage.resourceId)} alt="已保存的原始参考图" className="mt-2 max-h-48 w-full object-contain" /> : <><p className="my-3">尚无原始参考图，当前成品不能代替原图。保存后将以新主版本分析。</p><Button onClick={() => setReferenceEditor(true)} disabled={busy}>选择并保存原始参考图</Button></>}
                     </figure>
                     <div className="grid content-start gap-3">
                         <ModelPicker config={selectedConfig} value={model} onChange={setModel} capability="text" requirements={profileAnalysisRequirements} modelFilter={(value) => Boolean(profileAnalysisModel(selectedConfig, value))} fullWidth />
                         <p className="text-[length:var(--fs-body)] text-foreground/60">仅支持可信系统／逻辑视觉文本模型；自定义渠道与工作流模型暂不可用。不会自动切换付费模型。</p>
                         {!selection ? <p role="status">请选择已声明支持图片输入的系统文本模型</p> : null}
-                        <Button disabled={busy || !pendingReady || !currentAvailable || Boolean(pending) || !selection || !asset.referenceImage || !asset.primaryVersionId || history.isPending || history.isError || tasks.some(active)} onClick={create}>{taskId || uncertainCreate ? "重新分析（新任务）" : "开始分析"}</Button>
+                        <Button disabled={busy || !pendingReady || !currentAvailable || Boolean(pending) || !selection || !primaryReferenceImage || !asset.primaryVersionId || history.isPending || history.isError || tasks.some(active)} onClick={create}>{taskId || uncertainCreate ? "重新分析（新任务）" : "开始分析"}</Button>
                         <p className="text-[length:var(--fs-body)] text-foreground/60">分析可能计费；重新分析会创建新任务，不会自动覆盖档案。</p>
                     </div>
                 </div>

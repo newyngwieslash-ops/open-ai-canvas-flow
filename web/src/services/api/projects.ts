@@ -139,6 +139,7 @@ export type ProjectAsset = {
     character?: CharacterCardSummary;
     visual?: { definition: Record<string, unknown>; status: "missing" | "ready" };
     source?: string;
+    referenceImages?: Array<{ resourceId: string }>;
     referenceImage?: { resourceId: string };
 };
 
@@ -277,6 +278,7 @@ export type ShotAssetReference = {
     createdAt: string;
     asset?: ProjectAsset;
     referencedVersion?: {
+        referenceImages?: Array<{ resourceId: string }>;
         referenceImage?: { resourceId: string };
         id: string;
         assetId: string;
@@ -634,16 +636,16 @@ export function unbindCharacterVoice(assetId: string) {
     return http.delete<ProjectCharacterDetail>(`/characters/${encodeURIComponent(assetId)}/voice`);
 }
 
-export function createProjectCharacter(projectId: string, input: { name: string; definition?: Record<string, unknown>; referenceImage?: { resourceId: string }; imageResourceId?: string; imageRole?: "portrait" | "turnaround_sheet"; folderId?: string }) {
+export function createProjectCharacter(projectId: string, input: { name: string; definition?: Record<string, unknown>; referenceImages?: Array<{ resourceId: string }>; imageResourceId?: string; imageRole?: "portrait" | "turnaround_sheet"; folderId?: string }) {
     return http.post<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters`, input);
 }
 
-export function createProjectAssetEntity(projectId: string, input: { name: string; category: "environment" | "prop"; definition: Record<string, unknown>; referenceImage?: { resourceId: string }; imageResourceId?: string; folderId?: string }) {
+export function createProjectAssetEntity(projectId: string, input: { name: string; category: "environment" | "prop"; definition: Record<string, unknown>; referenceImages?: Array<{ resourceId: string }>; imageResourceId?: string; folderId?: string }) {
     return http.post<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/asset-entities`, input);
 }
 
-export function updateProjectAssetReferenceImage(projectId: string, assetId: string, input: { resourceId: string; expectedVersionId: string }) {
-    return http.put<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/reference-image`, input);
+export function updateProjectAssetReferenceImages(projectId: string, assetId: string, input: { referenceImages: Array<{ resourceId: string }>; expectedVersionId: string }) {
+    return http.put<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/reference-images`, input);
 }
 
 export function adoptProjectAssetImageCandidate(projectId: string, assetId: string, taskId: string, input: { expectedVersionId: string }) {

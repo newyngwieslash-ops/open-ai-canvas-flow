@@ -178,8 +178,7 @@ func (s *Service) profileSource(userID, projectID, assetID, versionID, resourceI
 	if err != nil {
 		return nil, nil, err
 	}
-	ref := referenceImageFromDefinition(version.DefinitionJSON)
-	if ref == nil || ref.ResourceID != resourceID {
+	if !hasReferenceImageInDefinition(version.DefinitionJSON, resourceID) {
 		return nil, nil, profileError(409, "source_changed")
 	}
 	resource, err := s.projectImageResource(userID, resourceID)
@@ -339,7 +338,7 @@ func (s *Service) profileView(asset *model.Asset, task model.Task, detail bool) 
 			v.BlockedReason = "asset_profile_analysis_baseline_unavailable"
 		} else if asset.PrimaryVersionID != b.BaseVersionID {
 			v.BlockedReason = "project_asset_version_changed"
-		} else if ref := referenceImageFromDefinition(base.DefinitionJSON); ref == nil || ref.ResourceID != b.Source.ResourceID {
+		} else if !hasReferenceImageInDefinition(base.DefinitionJSON, b.Source.ResourceID) {
 			v.BlockedReason = "asset_profile_analysis_source_changed"
 		} else if resource, sourceErr := s.projectImageResource(task.UserID, b.Source.ResourceID); sourceErr != nil || resource.Size <= 0 {
 			v.BlockedReason = "asset_profile_analysis_source_unavailable"
