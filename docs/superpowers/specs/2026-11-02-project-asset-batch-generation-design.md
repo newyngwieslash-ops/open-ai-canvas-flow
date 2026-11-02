@@ -2,6 +2,8 @@
 comet_change: add-project-asset-batch-generation
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-02-add-project-asset-batch-generation
+status: final
 ---
 
 # 项目多个资产单候选批量生成技术设计文档

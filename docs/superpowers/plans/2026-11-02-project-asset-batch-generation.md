@@ -2,6 +2,7 @@
 change: add-project-asset-batch-generation
 design-doc: docs/superpowers/specs/2026-11-02-project-asset-batch-generation-design.md
 base-ref: 8de9ffc9df5e0e5c969406eb271868a9cc4e66d0
+archived-with: 2026-11-02-add-project-asset-batch-generation
 ---
 
 # 项目多个资产单候选批量生成实施计划
