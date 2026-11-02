@@ -2,6 +2,8 @@
 comet_change: add-legacy-resource-evidence-maintenance
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-02-add-legacy-resource-evidence-maintenance
+status: final
 ---
 
 # 旧资源可信证据与隔离维护技术设计文档
