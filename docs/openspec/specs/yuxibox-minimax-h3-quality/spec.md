@@ -1,6 +1,9 @@
-# yuxibox Minimax H3 Quality 视频协议
+# yuxibox-minimax-h3-quality Specification
 
-## ADDED Requirements
+## Purpose
+TBD - created by archiving change yuxibox-minimax-h3-quality. Update Purpose after archive.
+
+## Requirements
 
 ### Requirement: minimax-h3-quality 视频请求协议
 
