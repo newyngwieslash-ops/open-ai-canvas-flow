@@ -423,6 +423,12 @@ type (
 	LegacyResourceMaintenanceOperation     = app.LegacyResourceMaintenanceOperation
 	LegacyResourceMaintenanceApproval      = app.LegacyResourceMaintenanceApproval
 	LegacyResourceMaintenanceResult        = app.LegacyResourceMaintenanceResult
+	RemoteStorageEndpointContract          = app.RemoteStorageEndpointContract
+	RemoteWriteAttemptEvidence             = app.RemoteWriteAttemptEvidence
+	RemoteProducerSettlementProof          = app.RemoteProducerSettlementProof
+	RemoteObjectVersionItem                = app.RemoteObjectVersionItem
+	RemotePhysicalExhaustionEvidence       = app.RemotePhysicalExhaustionEvidence
+	RemoteContractDeletionResult           = app.RemoteContractDeletionResult
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

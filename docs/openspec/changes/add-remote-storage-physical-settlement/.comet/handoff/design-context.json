@@ -1,0 +1,16 @@
+{
+  "change": "add-remote-storage-physical-settlement",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "664e3a6b0b9e3b824fb64ad08f58c0d0812103963c0dfa567136930a7053a98a",
+  "files": [
+    { "path": "docs/openspec/changes/add-remote-storage-physical-settlement/proposal.md", "sha256": "116349b73d1b7573b65003f8b4f14b38daa4f17b640549d3a9807826c8e90ffd" },
+    { "path": "docs/openspec/changes/add-remote-storage-physical-settlement/design.md", "sha256": "3cfbf1bec3b64049931b81a54a2efae876bcc2b6a06242e889fcd027153411a3" },
+    { "path": "docs/openspec/changes/add-remote-storage-physical-settlement/tasks.md", "sha256": "bbf424955e49c2b4dd8dc0736eeaf720db4e227f571153e70cce656ec54d1794" },
+    { "path": "docs/openspec/changes/add-remote-storage-physical-settlement/.openspec.yaml", "sha256": "e2ebaebee255ccc1e09b64ba38d9b09c360a7392fc110a48ca2525e1ea49fa46" },
+    { "path": "docs/openspec/changes/add-remote-storage-physical-settlement/specs/remote-storage-physical-settlement/spec.md", "sha256": "174cd6ce780ed5d64e0c735b44595979d50f3b434da163db0f6dbf6d25abeedb" }
+  ]
+}

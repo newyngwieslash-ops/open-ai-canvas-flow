@@ -3788,3 +3788,9 @@ SQLite 与 HTTP recorder 已验证；PostgreSQL 16／17、前端构建及浏览�
 - 已实现：`backend/internal/app/legacy_resource_maintenance.go` 与 `backend/internal/repository/legacy_resource_maintenance.go` 实现带只读授权凭据的快照导出（`ExportLegacyResourceSnapshot`）、SHA-256 来源签名核验、隔离 Dry-Run 逐对象 `eligible | blocked | conflict` 判定（`EvaluateLegacyResourceMaintenance`）及绑定精确对象、差异摘要、备份恢复与写入屏障确认的分项接管（`ApplyLegacyResourceMaintenance`）。
 - 自动验证：`go -C backend test ./internal/app -run TestLegacyResourceEvidenceMaintenance -v -count=1` 通过，覆盖伪造来源签名、自报 `trusted: true`、非客观停写证明、未知旧缩略图变体、快照漂移、跨用户归属冲突、共享物理 alias 冲突、`register_evidence` 幂等补登记不误删、以及 `delete_after_evidence` 经真实 `DeleteAdminResources` + worker 入口的业务引用拦截、部分物理失败保留记录与恢复后重试完成。本轮仅在隔离临时数据库与合成对象上验证，未读取或修改任何真实业务库。
 - [ ] 如未来确需在真实环境执行旧资源维护，须先按流程提交脱敏导出清单、逐项差异摘要、备份恢复演练记录、维护窗口与写入屏障审批，未经单独授权不得对生产库执行。
+
+## 远端存储物理结算与完整清理
+
+- 已实现：`backend/internal/app/remote_storage_settlement.go` 与 `backend/internal/repository/remote_storage_settlement.go` 实现具名远端端点合同校验（`ValidateRemoteEndpointContract`）、全 Attempt 与未知 Multipart 启动停写屏障核证（`SettleRemoteResourceProduction`）、版本桶 `DeleteMarker` 与真實 Payload 穷尽校验（`VerifyRemotePhysicalExhaustion`）及防配置漂移的受控删除入口（`ExecuteRemoteContractDeletion`）。
+- 自动验证：`go -C backend test ./internal/app -run TestRemoteStoragePhysicalSettlement -v -count=1` 通过，覆盖本地反例拒绝、明文密钥引用拦截、未知启动分页未穷尽/未 Abort 阻断、全 Attempt 物理结算、版本桶仅 `DeleteMarker` 阻断、系统配置切换防跨桶误删、403 权限故障保留记录及恢复后重入完成、以及共享物理 alias 安全保留。
+- [ ] 如需在具名公有云真实端点执行故障注入实验，须先绑定专用测试桶/前缀、预算上限、凭据引用与收尾责任人并取得单独授权。

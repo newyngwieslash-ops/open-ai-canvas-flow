@@ -618,3 +618,10 @@ SEO 标题、描述、可选关键词会投影到浏览器 metadata、Open Graph
 
 - **可信证据与快照一致性**：仅接受包含明确只读授权凭据、SHA-256 来源签名、逐变体位置核验证明以及全部历史 writer 客观停写证据的清单；拒绝仅凭手写 `trusted: true` 或运维口头确认绕过校验。快照摘要漂移、跨用户归属不符、存在未覆盖的共享物理 alias 或未知缩略图变体一律判为 `blocked` 或 `conflict`。
 - **分项授权与真实入口验证**：`register_evidence` 与 `delete_after_evidence` 严格分离，且必须同时具备备份确认、恢复演练确认、写入屏障确认、维护窗口及与最新 Dry-Run 完全一致的 `ExpectedDiffDigest`。执行删除时通过真实资源删除入口（`DeleteAdminResources` 与删除队列 worker）逐项校验业务引用、物理锁与部分失败保留，并写入 `AdminAuditEvent` 不可变审计日志。
+
+## 远端存储物理结算与完整清理
+
+针对远端对象存储（S3、阿里云 OSS、腾讯云 COS、七牛云 Kodo）在网络超时、SDK 重试、Multipart 会话残留及版本控制桶场景下的物理结算与清理，后端提供具名端点合同（`RemoteStorageEndpointContract`）、全写入尝试终态核证（`SettleRemoteResourceProduction`）与物理穷尽清理（`ExecuteRemoteContractDeletion`）：
+
+- **全写入尝试与未知启动屏障**：要求绑定具名产品版本、端点、桶、专用前缀、预算与非明文凭据引用（`vault://` / `env://` / `secret-ref://`）；当存在响应丢失或未知 Multipart 启动风险时，必须在本地建立停写屏障后完成全分页 `ListMultipartUploads` 扫描并确认所有孤儿上传会话已 `Abort` 且复检无残留，绝不凭超时或单次响应清除未决义务。
+- **版本桶 DeleteMarker 甄别与配置漂移防护**：在启用版本控制的存储桶上拒绝把 `DeleteMarker` 当作真实 Payload 清除；当系统存储配置发生切换或远端权限受阻（如 403/503）时，严格锁定资源自身的历史 `Provider / Endpoint / Bucket / ObjectKey`，拒绝跨桶误删并保留数据库记录与删除作业以便恢复后重入核账。
