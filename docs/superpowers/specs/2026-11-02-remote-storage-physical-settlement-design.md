@@ -2,6 +2,8 @@
 comet_change: add-remote-storage-physical-settlement
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-02-add-remote-storage-physical-settlement
+status: final
 ---
 
 # 远端存储物理结算与完整清理技术设计文档

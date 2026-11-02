@@ -2,6 +2,8 @@
 comet_change: add-resource-producer-full-recovery
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-02-add-resource-producer-full-recovery
+status: final
 ---
 
 # 资源生产者全控制者丢失恢复与并发隔离技术设计文档

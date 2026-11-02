@@ -1,3 +1,7 @@
+---
+archived-with: 2026-11-02-add-remote-storage-physical-settlement
+status: final
+---
 # Remote Storage Physical Settlement Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task with TDD (`tdd_mode: tdd`).

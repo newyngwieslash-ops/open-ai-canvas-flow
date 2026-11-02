@@ -1,3 +1,7 @@
+---
+archived-with: 2026-11-02-add-resource-producer-full-recovery
+status: final
+---
 # Resource Producer Full Recovery Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task with TDD (`tdd_mode: tdd`).
