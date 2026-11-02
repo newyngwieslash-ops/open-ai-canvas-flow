@@ -611,3 +611,10 @@ SEO 标题、描述、可选关键词会投影到浏览器 metadata、Open Graph
 重名与补充已有角色（UI 辅助查重）：输入姓名（防抖）与模型结果返回后，遍历项目全部角色分页（category=character，不传文件夹/关键词过滤，按 total 停止，扫描 signal 随关窗/身份漂移/停止一并取消），以规范化姓名/别名比较现有角色 title 与 definition.aliases，编辑已有角色时排除自身；候选全部列出，用户可查看（只读摘要）、选择「补充此角色」或明确「是另一个身份，仍要新建」，assetId 始终由用户选择，模型与代码不会自动决定。「仍要新建」的确认表态在姓名或候选集合实际变化前保持显示，同输入重扫不清除该确认。选择补充后读取该角色最新版本并进入原编辑模式：既有设定值原样保留，当前审核建议移交到补充会话经常规采纳流程逐条处理（不自动合并、不自动覆盖；移交会话的身份绑定目标角色的标题），保存走更新角色而不是新建；读取期间用户已关闭弹窗或切换到其他角色时，GET 结果被丢弃，不在弹窗已关闭后自动重开弹窗。保存前复查：重新读取角色分页与所用章节摘要，出现新的重名（用户未明确表态过的命中）、查重不完整（读取失败/分页不全）或章节来源版本变化时拦截保存并要求回到审核，不在弹窗已关闭后自动弹出并写入；补充模式同样受来源版本变化拦截（移交轮的章节快照随移交保留为复查基准）。此查重为前端提示，不保证跨会话原子唯一性，后端未增加姓名唯一约束；多个会话并发创建同名角色仍可能成功。
 
 实现位于 `web/src/pages/projects/detail/character-script-suggestions.ts`（字段清单/解析/引用核验/重名匹配与安全填充决策）、`project-character-suggestions.ts`（正文读取/快照/预算预检/文本任务/角色分页遍历与查重编排）与 `character-suggestion-session.ts` + `character-suggestion-panel.tsx`（会话守卫、采纳决策、保存门禁与保存前复查、停止序列、重名候选与补充移交、审核界面）。
+
+## 旧资源可信证据与隔离维护
+
+针对历史遗留资源缺少 `ResourceProducerOperation` 物理结算证据、或存在未知旧缩略图状态（`ThumbnailStatus == "ready" || ThumbnailSize > 0`）导致保守删除阻断的场景，后端提供可核验历史证据清单（`LegacyResourceEvidenceManifest`）、隔离 Dry-Run 分类评估（`EvaluateLegacyResourceMaintenance`）与逐项授权维护（`ApplyLegacyResourceMaintenance`）：
+
+- **可信证据与快照一致性**：仅接受包含明确只读授权凭据、SHA-256 来源签名、逐变体位置核验证明以及全部历史 writer 客观停写证据的清单；拒绝仅凭手写 `trusted: true` 或运维口头确认绕过校验。快照摘要漂移、跨用户归属不符、存在未覆盖的共享物理 alias 或未知缩略图变体一律判为 `blocked` 或 `conflict`。
+- **分项授权与真实入口验证**：`register_evidence` 与 `delete_after_evidence` 严格分离，且必须同时具备备份确认、恢复演练确认、写入屏障确认、维护窗口及与最新 Dry-Run 完全一致的 `ExpectedDiffDigest`。执行删除时通过真实资源删除入口（`DeleteAdminResources` 与删除队列 worker）逐项校验业务引用、物理锁与部分失败保留，并写入 `AdminAuditEvent` 不可变审计日志。

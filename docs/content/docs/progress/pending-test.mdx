@@ -3782,3 +3782,9 @@ SQLite 与 HTTP recorder 已验证；PostgreSQL 16／17、前端构建及浏览�
 - 已修复：没有 `fields` 的提问复用稳定的空字段列表，避免重置表单的 Effect 循环更新状态；新问题仍会重置默认值。
 - [x] 真实 React 挂载回归覆盖无字段选择题/表单、选项和默认方案提交、保留已选值与新问题重置。
 - [ ] 在持续接收 Agent 事件时显示选择题、提交答案并切换提问，确认画布和输入区仍可正常操作。
+
+## 旧资源可信证据与隔离维护
+
+- 已实现：`backend/internal/app/legacy_resource_maintenance.go` 与 `backend/internal/repository/legacy_resource_maintenance.go` 实现带只读授权凭据的快照导出（`ExportLegacyResourceSnapshot`）、SHA-256 来源签名核验、隔离 Dry-Run 逐对象 `eligible | blocked | conflict` 判定（`EvaluateLegacyResourceMaintenance`）及绑定精确对象、差异摘要、备份恢复与写入屏障确认的分项接管（`ApplyLegacyResourceMaintenance`）。
+- 自动验证：`go -C backend test ./internal/app -run TestLegacyResourceEvidenceMaintenance -v -count=1` 通过，覆盖伪造来源签名、自报 `trusted: true`、非客观停写证明、未知旧缩略图变体、快照漂移、跨用户归属冲突、共享物理 alias 冲突、`register_evidence` 幂等补登记不误删、以及 `delete_after_evidence` 经真实 `DeleteAdminResources` + worker 入口的业务引用拦截、部分物理失败保留记录与恢复后重试完成。本轮仅在隔离临时数据库与合成对象上验证，未读取或修改任何真实业务库。
+- [ ] 如未来确需在真实环境执行旧资源维护，须先按流程提交脱敏导出清单、逐项差异摘要、备份恢复演练记录、维护窗口与写入屏障审批，未经单独授权不得对生产库执行。

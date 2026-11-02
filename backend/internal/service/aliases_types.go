@@ -411,6 +411,18 @@ type (
 	ProjectAssetBatchAttemptRecord         = app.ProjectAssetBatchAttemptRecord
 	ProjectAssetBatchItemView              = app.ProjectAssetBatchItemView
 	ProjectAssetBatchView                  = app.ProjectAssetBatchView
+	LegacyResourceSnapshotExportRequest    = app.LegacyResourceSnapshotExportRequest
+	LegacyResourceSnapshotItem             = app.LegacyResourceSnapshotItem
+	LegacyResourceEvidenceManifest         = app.LegacyResourceEvidenceManifest
+	LegacyResourceEvidenceEntry            = app.LegacyResourceEvidenceEntry
+	LegacyResourceVariantProof             = app.LegacyResourceVariantProof
+	LegacyResourceWriterProof              = app.LegacyResourceWriterProof
+	LegacyResourceEligibilityStatus        = app.LegacyResourceEligibilityStatus
+	LegacyResourceItemEvaluation           = app.LegacyResourceItemEvaluation
+	LegacyResourceMaintenancePlan          = app.LegacyResourceMaintenancePlan
+	LegacyResourceMaintenanceOperation     = app.LegacyResourceMaintenanceOperation
+	LegacyResourceMaintenanceApproval      = app.LegacyResourceMaintenanceApproval
+	LegacyResourceMaintenanceResult        = app.LegacyResourceMaintenanceResult
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

@@ -1,0 +1,16 @@
+{
+  "change": "add-legacy-resource-evidence-maintenance",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "62d811973cec529e00932122e83b36fe0f2af3cc1dcaa2ae588558145d9f68f0",
+  "files": [
+    { "path": "docs/openspec/changes/add-legacy-resource-evidence-maintenance/proposal.md", "sha256": "9c7eaf1e1995847c2447c5810e65c42a6d12ae0d8de2c5b8bed286c5e6617588" },
+    { "path": "docs/openspec/changes/add-legacy-resource-evidence-maintenance/design.md", "sha256": "a59ebdd438fd4f12068943c09447165439c4f441097f694d8119f22a5f10a239" },
+    { "path": "docs/openspec/changes/add-legacy-resource-evidence-maintenance/tasks.md", "sha256": "6fdca63948be24d39b0cbbbfcc9c6b96afba88e6a2577f67538eb60d63bc92be" },
+    { "path": "docs/openspec/changes/add-legacy-resource-evidence-maintenance/.openspec.yaml", "sha256": "e2ebaebee255ccc1e09b64ba38d9b09c360a7392fc110a48ca2525e1ea49fa46" },
+    { "path": "docs/openspec/changes/add-legacy-resource-evidence-maintenance/specs/legacy-resource-evidence-maintenance/spec.md", "sha256": "11af75348a32e64bc19652ba631b0da7f31c8e8e6357f3757ed65ee8cde64603" }
+  ]
+}
