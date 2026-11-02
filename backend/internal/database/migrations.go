@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 61
+const CurrentSchemaVersion int64 = 62
 
 const baselineSchemaChecksum = "sha256:open-ai-canvas-schema-v1-20260830"
 const schemaMigrationAppliedAtIndexChecksum = "sha256:schema-migrations-applied-at-index-v2-20260830"
@@ -215,6 +215,9 @@ var schemaMigrations = []migration{
 	}},
 	{version: 61, name: "resource_producer_control", checksum: "sha256:resource-producer-control-v61", apply: func(tx *gorm.DB) error {
 		return tx.AutoMigrate(&model.ResourceProducerOperation{})
+	}},
+	{version: 62, name: "project_asset_generation_batches", checksum: "sha256:project-asset-generation-batches-v62", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.ProjectAssetGenerationBatch{}, &model.ProjectAssetGenerationBatchItem{})
 	}},
 }
 

@@ -158,6 +158,17 @@ func (r *Repository) RequireNoOriginalImageReferences(resourceIDs []string) erro
 			return ErrOriginalImageReferenced
 		}
 	}
+	if r.db.Migrator().HasTable(&model.ProjectAssetGenerationBatchItem{}) {
+		var batchItems []model.ProjectAssetGenerationBatchItem
+		if err := r.db.Select("input_snapshot_json").Where("status IN ?", []string{"pending", "running", "cancel_requested", "reconcile_required"}).Find(&batchItems).Error; err != nil {
+			return err
+		}
+		for _, item := range batchItems {
+			if assetrefs.DocumentReferences(item.InputSnapshotJSON, wanted) {
+				return ErrOriginalImageReferenced
+			}
+		}
+	}
 	return nil
 }
 

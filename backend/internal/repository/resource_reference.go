@@ -421,6 +421,20 @@ func (r *Repository) ResourceReferenceSnapshotExcludingAssets(userID string, exc
 	for _, draft := range announcementDrafts {
 		snapshot.Direct = append(snapshot.Direct, ResourceDirectReference{Kind: "公告草稿", ID: draft.ResourceID, ResourceID: draft.ResourceID})
 	}
+	if r.db.Migrator().HasTable(&model.ProjectAssetGenerationBatchItem{}) {
+		var batchItems []model.ProjectAssetGenerationBatchItem
+		if err := r.db.Where("user_id = ? AND status IN ?", userID, []string{"pending", "running", "cancel_requested", "reconcile_required"}).Find(&batchItems).Error; err != nil {
+			return snapshot, err
+		}
+		for _, item := range batchItems {
+			snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{
+				Kind:        "项目资产批量生成项",
+				ID:          item.ID,
+				Title:       item.AssetName,
+				PrimaryJSON: item.InputSnapshotJSON,
+			})
+		}
+	}
 	return snapshot, nil
 }
 

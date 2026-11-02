@@ -104,18 +104,20 @@ type Service struct {
 	creditPolicyMu           sync.RWMutex
 	creditPolicyCache        *CreditPolicy
 	creditPolicyAt           time.Time
-	modelAvailabilityMu      sync.RWMutex
-	modelAvailabilityCache   map[publicModelAvailabilityKey]*PublicModelAvailability
-	modelAvailabilityAt      time.Time
+	modelAvailabilityMu       sync.RWMutex
+	modelAvailabilityCache    map[publicModelAvailabilityKey]*PublicModelAvailability
+	modelAvailabilityAt       time.Time
+	batchDispatchLimitForTest int
 }
 
 const taskWorkerConcurrency = 3
 const taskLogPayloadLimit = 4000
 
 type CreateTaskRequest struct {
-	profileAnalysis bool
-	creationPrepare *creationTaskPreparation
-	admission       *taskAdmission
+	profileAnalysis      bool
+	creationPrepare      *creationTaskPreparation
+	creationSubmissionID string
+	admission            *taskAdmission
 	workbenchKind   string
 	// callerHoldsStorageMu 只给已经持有 Service.storageMu 的内部调用设置。
 	// 文件容量检查不能再锁一次，否则审批改参数会自锁。

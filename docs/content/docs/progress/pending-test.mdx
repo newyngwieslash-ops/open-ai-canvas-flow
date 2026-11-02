@@ -5,6 +5,18 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 项目多个资产单候选批量生成（2026-11-02）
+
+- 已完成项目资产跨分类（角色、场景、道具）单候选批量生成的全链路实现与自动化验证：
+  - **Schema V62 与持久化幂等合同**：新增 `project_asset_generation_batches` 与 `project_asset_generation_batch_items` 两张表及唯一索引（`(user_id, project_id, idempotency_key)`、`(batch_id, position)`、`(batch_id, asset_id)`、非空 `submission_key` 唯一）；`config_summary_json` 与 `input_snapshot_json` 脱敏保存，严禁落盘明文 API Key/Secret。
+  - **7 个批次 API 与崩溃安全对账**：实现 `preflight`、`POST / GET /asset-generation-batches`、`GET /:batchId`、`POST /:batchId/stop`、`POST /:batchId/cancel-tasks`、`POST /:batchId/items/:itemId/retry`。每个生成项通过 `submissionKey == tasks.creation_submission_id` 唯一绑定单图手动候选任务；读取与重放时自动对账恢复未回填的 `taskId`；在途与 `reconcile_required` 项纳入资源删除引用保护；`reconcile_required` 状态禁止盲目重发收费请求。
+  - **前端批量弹窗与逐项手动采用**：新增 `web/src/pages/projects/detail/project-asset-batch.ts` 与 `project-asset-batch-modal.tsx`，并在 `assets.tsx` 顶部工具栏接入「批量生成图片」按钮，支持跨分类多选、参考来源切换、能力与费用预检确认、停止未提交项 vs 取消已提交活动任务分离、失败项重试及逐项手动采用（严禁一键全部自动采用）。
+- 自动化验证：
+  - 后端：`go -C backend test ./internal/app ./internal/handler -run "TestProjectAssetBatch|TestRegisterCanvasAPIExposesOpenAPIAndProjects" -count=1` 全部通过（`internal/app` `5.730s`，`internal/handler` `2.922s`）。
+  - 前端：`bun test --cwd web test/project-asset-batch.test.tsx`（`4 pass, 0 fail, 28 expect() calls`）、`bun run --cwd web typecheck`、`bun run --cwd web lint` 全部通过。
+- [ ] 真实浏览器路由 `/projects/:projectId/assets`：点击「批量生成图片」，跨角色/场景/道具勾选多个资产，执行预检并确认费用提示后提交批次，验证刷新页面后批次进度自动恢复。
+- [ ] 真实渠道与模型端到端验收：验证部分失败重试、`reconcile_required` 项禁止直接重试、「停止未提交项」与「请求取消活动任务」边界，以及逐项预览并手动采用候选图片。
+
 ## 项目资产有序多参考图管理与单候选生成（2026-11-02）
 
 - 已完成角色、场景与道具资产从单张 `referenceImage` 到唯一、有界（最多 16 张）、有序 `referenceImages: [{ resourceId }]` 的规范集合合同升级：

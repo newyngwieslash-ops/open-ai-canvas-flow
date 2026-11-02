@@ -51,6 +51,7 @@ import { projectCharacterCover } from "./project-character-cover";
 import { assetSupportsImageBinding } from "./asset-image-binding";
 import { linkSelectedProjectAssets } from "./project-asset-linking";
 import { ProjectAssetImageModal } from "./project-asset-image-modal";
+import { ProjectAssetBatchModal } from "./project-asset-batch-modal";
 import { ProjectProfileAnalysisModal } from "./project-profile-analysis-modal";
 import { projectVisualTaskAssetId } from "./project-visual-asset";
 import { listGenerationTasks } from "@/services/api/task-center";
@@ -82,6 +83,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
     const [folderEditor, setFolderEditor] = useState<{ folder?: ProjectAssetFolder; parentId: string } | null>(null);
     const [folderName, setFolderName] = useState("");
     const [addOpen, setAddOpen] = useState(false);
+    const [batchOpen, setBatchOpen] = useState(false);
     const [imageStudio, setImageStudio] = useState<{ asset?: ProjectAsset; mode: "direct" | "generate" } | null>(null);
     const [analysisAsset, setAnalysisAsset] = useState<ProjectAsset | null>(null);
     const [editorAsset, setEditorAsset] = useState<ProjectAsset | "new" | null>(null);
@@ -499,6 +501,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
                 <div className="flex shrink-0 items-center gap-1.5 sm:pl-4">
                     <Button type="text" className="!h-9 !px-3" icon={<FolderPlus className="size-3.5" />} onClick={() => openFolderEditor()}>新建文件夹</Button>
                     <Button type="text" className="!h-9 !px-3" icon={<Link2 className="size-3.5" />} onClick={() => setAddOpen(true)}>引用素材</Button>
+                    <Button type="text" className="!h-9 !px-3" icon={<Sparkles className="size-3.5" />} onClick={() => setBatchOpen(true)}>批量生成图片</Button>
                     <Button type="primary" className="!h-9 !px-3.5" icon={<Plus className="size-3.5" />} onClick={() => setImageStudio({ mode: "generate" })}>新建资产</Button>
                 </div>
             </header>
@@ -577,6 +580,7 @@ export default function ProjectAssetsView({ detail, refreshProject }: ProjectDet
             <ProjectAssetPreviewModal asset={previewAsset} personalAsset={previewAsset && !previewAsset.visual ? personalAssets.find((item) => item.id === previewAsset.id) : undefined} onClose={() => setPreviewAsset(null)} onDownload={() => previewAsset && downloadPreviewAsset(previewAsset)} onReplaceImage={() => { if (!previewAsset || !assetSupportsImageBinding(previewAsset)) return; setPreviewAsset(null); openImages(previewAsset); }} />
             {analysisAsset ? <ProjectProfileAnalysisModal project={detail.project} asset={analysisAsset} onClose={() => setAnalysisAsset(null)} onSaved={refreshProject} /> : null}
             {imageStudio ? <ProjectAssetImageModal key={`${detail.project.id}:${imageStudio.asset?.id || "new"}`} project={detail.project} asset={imageStudio.asset} folderId={folderId === ALL_FOLDERS ? undefined : folderId || undefined} initialMode={imageStudio.mode} onClose={() => setImageStudio(null)} onSaved={refreshProject} /> : null}
+            {batchOpen ? <ProjectAssetBatchModal project={detail.project} assets={assets} onClose={() => setBatchOpen(false)} onSaved={refreshProject} /> : null}
             <CharacterEditorModal open={Boolean(editorAsset)} editing={editorAsset !== "new"} projectId={detail.project.id} editorAssetId={editorAsset === "new" ? "new" : (editorAsset?.id || "")} form={form} loading={saveCharacter.isPending} messageApi={message} onClose={() => setEditorAsset(null)} onSave={() => form.validateFields().then((values) => saveCharacter.mutate(values))} onSupplementCharacter={(assetId) => void supplementCharacter(assetId)} />
             <Modal className="workspace-modal workspace-modal-compact" title={folderEditor?.folder ? "重命名文件夹" : "新建文件夹"} open={Boolean(folderEditor)} okText={folderEditor?.folder ? "保存" : "创建"} cancelText="取消" okButtonProps={{ loading: createFolderMutation.isPending || renameFolderMutation.isPending }} onCancel={() => { setFolderEditor(null); setFolderName(""); }} onOk={saveFolder}>
                 <div className="grid gap-2"><span className="text-[var(--fs-label)] text-foreground/48">位置：{folderEditor ? projectAssetFolderParentLabel(assetFolders, folderEditor.parentId) : ""}</span><Input autoFocus maxLength={60} value={folderName} placeholder="输入文件夹名称" onChange={(event) => setFolderName(event.target.value)} onPressEnter={saveFolder} /></div>

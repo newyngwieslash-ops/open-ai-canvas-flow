@@ -679,6 +679,25 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 
 新增原因码：400 `asset_profile_analysis_invalid_request`；404 `asset_profile_analysis_not_found`；409 `project_asset_version_changed`、`asset_profile_analysis_source_changed`、`asset_profile_analysis_not_adoptable`、`asset_profile_analysis_idempotency_conflict`、`asset_profile_analysis_already_adopted`、`asset_profile_analysis_baseline_unavailable`、`task_state_changed`；422 `asset_profile_analysis_source_unavailable`、`asset_profile_analysis_model_unsupported`、`asset_profile_analysis_model_unknown`、`asset_profile_analysis_invalid_result`；503 `asset_profile_analysis_write_busy`。认证、配额、计费与 SSRF 错误保持原语义，异步失败通过 `analysis.error.reason` 判断，不解析显示文案。
 
+## 项目资产批量图片生成
+
+支持在项目资产页跨分类（角色、场景、道具等，单批最多 `MaxProjectAssetBatchItems = 50` 项且同一批次内 `assetId` 不重复）发起批量图片生成。每个生成项独立创建 `adoptionMode=manual` 的单图 `canvas_image` 任务，成功产出仅进入待确认候选，不自动覆盖资产主版本，也不提供批量一键采用。
+
+| 方法 | 路径 | data |
+| --- | --- | --- |
+| POST | `/api/projects/:id/asset-generation-batches/preflight` | `ProjectAssetBatchPreflightResult` |
+| POST | `/api/projects/:id/asset-generation-batches` | `{ batch }` |
+| GET | `/api/projects/:id/asset-generation-batches` | `{ batches }` |
+| GET | `/api/projects/:id/asset-generation-batches/:batchId` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/stop` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/cancel-tasks` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/items/:itemId/retry` | `{ batch }` |
+
+- **预检与费用摘要（`preflight`）**：逐项校验项目归属、资产归属、`expectedVersionId == primaryVersionId`、`referenceSource=original|current|none` 的参考图完整性及所选模型的多参考图上限与字节预算，汇总已知积分费用 `totalKnownMicrocredits`、未知价格项数量 `priceUnknownCount` 及 `preflightDigest`，不入队、不扣费。
+- **幂等创建与对账（`POST /asset-generation-batches`）**：按 `(userId, projectId, idempotencyKey)` 保证幂等。同键同参数重放返回同一批次及已创建的 `taskId`（若因中断存在未绑定 `taskId` 的项，先通过 `tasks.creation_submission_id = submission_key` 对账恢复，仅对确认未创建任务的 `pending` 项补派发）；同键异参返回 HTTP 409 `reason=batch_idempotency_conflict`；预检摘要或资产版本变化返回 HTTP 409 `reason=batch_preflight_stale` 或 `project_asset_version_changed`。
+- **停止未提交项 vs 取消已提交任务分离**：`POST .../stop` 仅将 `status=pending` 且 `taskId=""` 的未派发项原子更新为 `stopped`，阻止后续派发与扣费；`POST .../cancel-tasks` 对已关联的 `queued/running` 任务发起取消，已成功产出的手动候选保持不变。
+- **局部失败重试与 `reconcile_required` 保护**：`POST .../items/:itemId/retry` 仅允许对 `status=failed` 且 `canRetry=true` 的项重试，将旧 `taskId` 归档至 `attemptHistory`、递增 `attempt` 并生成新 `submissionKey` 创建新任务。若任务缺失记录或带有待恢复媒体检查点（`MediaRecoveryJSON` / `CanRecoverMedia`），状态标记为 `reconcile_required` 且 `canRetry=false`，禁止盲目重发收费请求。
+
 ## 平台技能策展
 
 新增登录读取 `/api/skills/curation` 与管理员 GET／PUT `/api/admin/skill-curation`；原技能列表仅在策展开启时应用新增分类筛选，响应结构不变。见 [接口与行为](./skill-curation)。

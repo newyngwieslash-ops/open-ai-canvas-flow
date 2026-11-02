@@ -439,6 +439,92 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+  /projects/{id}/asset-generation-batches/preflight:
+    post:
+      tags: [projects, assets]
+      summary: 项目资产批量生成预检与费用摘要
+      description: 校验选中资产归属、版本一致性、参考图可用性与模型多图能力，返回已知积分费用汇总、未知价格项数量与 preflightDigest，不入队不扣费。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+      responses:
+        "200": {description: "成功信封 data=ProjectAssetBatchPreflightResult"}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {description: "版本冲突，reason=project_asset_version_changed"}
+  /projects/{id}/asset-generation-batches:
+    post:
+      tags: [projects, assets]
+      summary: 幂等提交项目资产批量生成批次
+      description: 按 idempotencyKey 与 preflightDigest 持久化批次与生成项，并按项目图片手动候选模式分派单图任务。同键同参幂等返回已有批次与任务，同键异参返回 409 reason=batch_idempotency_conflict，预检过期返回 409 reason=batch_preflight_stale。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idempotencyKey, preflightDigest, items]
+      responses:
+        "200": {description: "成功信封 data={batch}"}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {description: "幂等冲突或预检过期"}
+    get:
+      tags: [projects, assets]
+      summary: 查询当前用户在该项目下的批量生成批次列表
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: query, name: limit, required: false, schema: {type: integer}}
+      responses:
+        "200": {description: "成功信封 data={batches}"}
+  /projects/{id}/asset-generation-batches/{batchId}:
+    get:
+      tags: [projects, assets]
+      summary: 获取单个项目资产批量生成批次详情与各项状态
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+      responses:
+        "200": {description: "成功信封 data={batch}"}
+        "404": {$ref: "#/components/responses/Error"}
+  /projects/{id}/asset-generation-batches/{batchId}/stop:
+    post:
+      tags: [projects, assets]
+      summary: 停止批次中尚未派发的待提交项
+      description: 仅将尚未绑定 taskId 的 pending 项原子更新为 stopped，阻止后续派发与扣费；不影响已入队或运行中的任务。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+      responses:
+        "200": {description: "成功信封 data={batch}"}
+  /projects/{id}/asset-generation-batches/{batchId}/cancel-tasks:
+    post:
+      tags: [projects, assets]
+      summary: 请求取消批次中已提交的活动任务
+      description: 先停止未派发项，再对 queued/running 的关联任务发起取消；已成功产出的手动候选保持不变。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+      responses:
+        "200": {description: "成功信封 data={batch}"}
+  /projects/{id}/asset-generation-batches/{batchId}/items/{itemId}/retry:
+    post:
+      tags: [projects, assets]
+      summary: 重试批次中已确认失败的单个生成项
+      description: 仅允许对 status=failed 且无待恢复媒体或候选的项发起重试；将旧 taskId 归档进 attemptHistoryJSON，递增 attempt 并创建新任务。reconcile_required 禁止盲目重试。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+        - {in: path, name: itemId, required: true, schema: {type: string}}
+      responses:
+        "200": {description: "成功信封 data={batch}"}
+        "400": {$ref: "#/components/responses/Error"}
   /admin/login-logs:
     get:
       tags: [admin]

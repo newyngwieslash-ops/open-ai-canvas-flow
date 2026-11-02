@@ -167,6 +167,10 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		workbenchKind = workbenchKindFromTaskInput(normalizedInput, taskType)
 	}
 	task := model.Task{ID: newID(), UserID: userID, TraceID: req.TraceID, RequestID: req.RequestID, ProjectID: req.ProjectID, Type: taskType, WorkbenchKind: workbenchKind, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
+	if strings.TrimSpace(req.creationSubmissionID) != "" {
+		submissionID := strings.TrimSpace(req.creationSubmissionID)
+		task.CreationSubmissionID = &submissionID
+	}
 	if req.admission != nil {
 		task.ID = req.admission.ID
 		task.AgentRunID = req.admission.AgentRunID

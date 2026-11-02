@@ -403,6 +403,14 @@ type (
 	VoiceProfileSummary                    = app.VoiceProfileSummary
 	WalletSummary                          = app.WalletSummary
 	WorkflowField                          = app.WorkflowField
+	ProjectAssetBatchItemInput             = app.ProjectAssetBatchItemInput
+	PreflightProjectAssetBatchRequest      = app.PreflightProjectAssetBatchRequest
+	ProjectAssetBatchPreflightItem         = app.ProjectAssetBatchPreflightItem
+	ProjectAssetBatchPreflightResult       = app.ProjectAssetBatchPreflightResult
+	CreateProjectAssetBatchRequest         = app.CreateProjectAssetBatchRequest
+	ProjectAssetBatchAttemptRecord         = app.ProjectAssetBatchAttemptRecord
+	ProjectAssetBatchItemView              = app.ProjectAssetBatchItemView
+	ProjectAssetBatchView                  = app.ProjectAssetBatchView
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

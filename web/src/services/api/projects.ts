@@ -792,3 +792,151 @@ export function updateWorkflowStep(projectId: string, stepId: string, input: { s
 export function registerProjectTaskOutput(projectId: string, stepId: string, input: { taskId: string; canvasId?: string; unitId?: string; shotId?: string; artifactType?: string; assetVersionId?: string; resourceId?: string; mediaType?: string; role?: string; metadataJson?: string; outputJson?: string }) {
     return http.post<{ step: WorkflowStep }>(`/projects/${encodeURIComponent(projectId)}/workflow-steps/${encodeURIComponent(stepId)}/task-output`, input);
 }
+
+export type ProjectAssetBatchReferenceSource = "original" | "current" | "none";
+
+export type ProjectAssetBatchItemInput = {
+    assetId: string;
+    expectedVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    prompt: string;
+    operation?: string;
+};
+
+export type PreflightProjectAssetBatchRequest = {
+    provider?: string;
+    model?: string;
+    logicalModelId?: string;
+    config?: Record<string, unknown>;
+    items: ProjectAssetBatchItemInput[];
+};
+
+export type ProjectAssetBatchPreflightItem = {
+    position: number;
+    assetId: string;
+    assetName: string;
+    assetCategory: string;
+    baseVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    referenceCount: number;
+    referenceResourceIds?: string[];
+    operation: string;
+    prompt: string;
+    knownMicrocredits: number;
+    priceUnknown: boolean;
+};
+
+export type ProjectAssetBatchPreflightResult = {
+    projectId: string;
+    model: string;
+    provider: string;
+    totalKnownMicrocredits: number;
+    priceUnknownCount: number;
+    preflightDigest: string;
+    items: ProjectAssetBatchPreflightItem[];
+};
+
+export type CreateProjectAssetBatchRequest = PreflightProjectAssetBatchRequest & {
+    idempotencyKey: string;
+    preflightDigest: string;
+};
+
+export type ProjectAssetBatchAttemptRecord = {
+    attempt: number;
+    taskId: string;
+    status: string;
+    errorReason?: string;
+    errorMessage?: string;
+    updatedAt: string;
+};
+
+export type ProjectAssetBatchItemStatus =
+    | "pending"
+    | "running"
+    | "cancel_requested"
+    | "succeeded"
+    | "failed"
+    | "stopped"
+    | "cancelled"
+    | "reconcile_required";
+
+export type ProjectAssetBatchItemView = {
+    id: string;
+    batchId: string;
+    position: number;
+    assetId: string;
+    assetName: string;
+    assetCategory: string;
+    baseVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    status: ProjectAssetBatchItemStatus;
+    taskId?: string;
+    attempt: number;
+    attemptHistory?: ProjectAssetBatchAttemptRecord[];
+    knownMicrocredits: number;
+    priceUnknown: boolean;
+    errorReason?: string;
+    errorMessage?: string;
+    canRetry: boolean;
+    outputUrl?: string;
+    candidate?: {
+        assetId: string;
+        baseVersionId: string;
+        state: "pending_confirmation" | "adopted";
+        adoptedVersionId?: string;
+    };
+    updatedAt: string;
+};
+
+export type ProjectAssetBatchStatus =
+    | "pending"
+    | "running"
+    | "completed"
+    | "partial_failed"
+    | "stopped";
+
+export type ProjectAssetBatchView = {
+    id: string;
+    projectId: string;
+    status: ProjectAssetBatchStatus;
+    model: string;
+    provider: string;
+    totalCount: number;
+    totalKnownMicrocredits: number;
+    priceUnknownCount: number;
+    stoppedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+    items: ProjectAssetBatchItemView[];
+};
+
+export function preflightProjectAssetBatch(projectId: string, input: PreflightProjectAssetBatchRequest, signal?: AbortSignal) {
+    return http.post<ProjectAssetBatchPreflightResult>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/preflight`, input, { signal });
+}
+
+export function createProjectAssetBatch(projectId: string, input: CreateProjectAssetBatchRequest) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches`, input);
+}
+
+export function listProjectAssetBatches(projectId: string, options: { limit?: number; signal?: AbortSignal } = {}) {
+    return http.get<{ batches: ProjectAssetBatchView[] }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches`, {
+        signal: options.signal,
+        params: compactApiParams({ limit: options.limit }),
+    });
+}
+
+export function getProjectAssetBatch(projectId: string, batchId: string, signal?: AbortSignal) {
+    return http.get<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}`, { signal });
+}
+
+export function stopProjectAssetBatch(projectId: string, batchId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/stop`, {});
+}
+
+export function cancelProjectAssetBatchTasks(projectId: string, batchId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/cancel-tasks`, {});
+}
+
+export function retryProjectAssetBatchItem(projectId: string, batchId: string, itemId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}/retry`, {});
+}
