@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+
+const code = await readFile(new URL('../source-bridge.js', import.meta.url), 'utf8');
+test('source script accepts only same-window, same-origin known commands and correlates acknowledgements', async () => {
+  const listeners = []; const outgoing = []; const replies = [];
+  const origin = 'http://localhost:5178';
+  const window = { addEventListener(type, fn) { listeners.push(fn); }, postMessage(message, target) { replies.push({ message, target }); } };
+  const chrome = { runtime: { async sendMessage(message) { outgoing.push(message); return { ok: true, data: { version: 1 } }; } } };
+  const context = vm.createContext({ window, chrome, location: { origin } });
+  vm.runInContext(code, context); vm.runInContext(code, context);
+  assert.equal(listeners.length, 1);
+  const data = { channel: 'yingce-flow-bridge-v1', requestId: 'request-1', type: 'PING', data: {} };
+  await listeners[0]({ source: {}, origin, data });
+  await listeners[0]({ source: window, origin: 'https://foreign.example', data });
+  await listeners[0]({ source: window, origin, data: { ...data, type: 'START' } });
+  await listeners[0]({ source: window, origin, data: { ...data, replyTo: 'request-1' } });
+  assert.equal(outgoing.length, 0);
+  await listeners[0]({ source: window, origin, data });
+  assert.equal(outgoing.length, 1);
+  assert.equal(outgoing[0].target, 'source');
+  assert.equal(replies[0].target, origin);
+  assert.equal(replies[0].message.replyTo, 'request-1');
+  assert.equal(replies[0].message.ok, true);
+  chrome.runtime.sendMessage = async () => { throw new Error('extension reloaded'); };
+  await listeners[0]({ source: window, origin, data });
+  assert.equal(replies.at(-1).message.ok, false);
+  assert.match(replies.at(-1).message.error, /刷新/);
+});

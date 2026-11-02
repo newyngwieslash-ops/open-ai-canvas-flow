@@ -1,0 +1,55 @@
+:root{color-scheme:light dark;--bg:#141518;--panel:#1e2025;--text:#f0f1f4;--muted:#a7aab5;--line:#383b44;--accent:#c6b9ff;--error:#ffb4a9;--radius:10px}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;width:100%;height:100dvh;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:13px/1.6 system-ui,sans-serif;overflow-wrap:anywhere}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 14px 10px;flex-shrink:0}
+h1{font-size:20px;line-height:1.3;margin:3px 0 0}
+h2{font-size:15px;margin:0 0 12px}
+p{margin:8px 0}
+.eyebrow{font-size:10px;letter-spacing:1.5px;color:var(--accent)}
+.muted,footer{color:var(--muted);font-size:12px}
+nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:0 12px 10px;border-bottom:1px solid var(--line);flex-shrink:0}
+nav button{border-color:transparent;background:transparent}
+nav button[aria-pressed=true]{background:var(--panel);border-color:var(--line);color:var(--accent)}
+main{min-height:0;flex:1;overflow:auto;padding:12px;scrollbar-gutter:stable}
+section{min-width:0;padding:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+.row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:12px 0}
+.row>*{max-width:100%}
+.grow{flex:1;min-width:130px}
+label{display:block;min-width:0}
+input:not([type=checkbox]),select,textarea{display:block;width:100%;min-width:0;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text);font:inherit;margin-top:5px}
+select{text-overflow:ellipsis}
+input[type=checkbox]{width:16px;height:16px;flex-shrink:0;accent-color:var(--accent);vertical-align:middle;margin:0 6px 0 0}
+button,a{font:inherit}
+button{padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text);cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+button:hover:not(:disabled){border-color:var(--accent)}
+.primary{width:100%;background:var(--accent);color:#1b1335;font-weight:600}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.confirmation{margin:16px 0;font-size:12px}
+.help{margin:12px 0;color:var(--muted);font-size:12px}
+.setup-steps{padding-left:20px;font-size:12px;color:var(--muted)}
+.setup-steps li{margin:6px 0}
+summary{cursor:pointer}
+.shot,.run{border-top:1px solid var(--line);padding:12px 0}
+.shot>summary{list-style:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.shot>summary::after{content:'展开';font-size:11px;color:var(--accent);margin-left:auto}
+.shot[open]>summary::after{content:'收起'}
+.shot-title{font-weight:600}
+.badge{color:var(--muted);font-size:11px}
+.warnings{color:#e8c58b;font-size:12px;white-space:pre-wrap}
+.prompt{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);padding:10px;border-radius:7px;max-height:220px;overflow:auto;font:12px/1.7 system-ui,sans-serif}
+.media-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+.media{min-width:0;padding:8px;border:1px solid var(--line);border-radius:7px;font-size:12px;overflow-wrap:anywhere}
+.media img{display:block;width:100%;height:90px;object-fit:contain;background:var(--bg);margin-bottom:6px}
+.media small{display:block;color:var(--muted);font-size:11px}
+#message{margin:10px 12px 0;padding:8px 10px;background:var(--panel);border-radius:7px;color:var(--accent);max-height:22vh;overflow:auto;flex-shrink:0}
+#message:empty{display:none}
+#message.error,.error{color:var(--error)}
+.run-item{display:flex;gap:8px;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--line)}
+.run-item>span{flex-basis:100%}
+.run-item p{width:100%;font-size:12px;color:var(--error)}
+footer{padding:8px 14px;border-top:1px solid var(--line);font-size:11px;flex-shrink:0}
+button[data-field].ready{border-color:#79bfa1}
+@media(prefers-color-scheme:light){:root{--bg:#f5f5f8;--panel:#fff;--text:#21232a;--muted:#646975;--line:#d9dce5;--accent:#6146ba;--error:#ae2828}.primary{color:white}.warnings{color:#8a5c00}}

@@ -5,6 +5,16 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## 短剧 Flow 浏览器扩展
+
+- 项目入口：`web/src/pages/projects/detail/workflow-production-workbench.tsx`；`workflow-flow-export.ts` 读取已保存章节与脚本，编译完整提示词和所选技能上下文，整理资产/产物版本与过期提示。
+- 项目传输：`web/src/services/flow-bridge.ts` 同源消息握手、资源读取、分块、SHA-256 与提交确认；未新增后端业务 API。
+- 独立扩展：`extensions/yingce-flow/manifest.json` 声明原生 `side_panel` 与权限；`source-bridge.js` 处理项目接入；`core.mjs`/`db.mjs`/`worker.js` 校验与持久化任务，`flow-content.js` 校准页面、上传、生成和关联结果；`dashboard.*` 提供镜头/队列/设置侧栏。`worker.js` 绑定工具栏点击打开侧栏，接收完成以 `latestBundleId` 更新已打开面板；只读 `INSPECT` 遇到缺失接收端时补接脚本，`RUN` 不自动重发。
+- 回归：`web/test/flow-bridge.test.ts`、`web/test/workflow-flow-export.test.ts` 和 `extensions/yingce-flow/tests/`。真实 Flow 端到端验收边界见待测试清单。
+- 启动前检查：`core.mjs` 的 `isFlowProjectUrl` 区分首页和具体项目；`worker.js` 在队列持久化前核对必需标记、`flow-content.js` 返回的当前 DOM 检查与上传控件状态。`flow_setup_required` 携带目标字段，`dashboard.js` 自动打开设置并聚焦，不解析报错文字。
+- 上传标记：`flow-content.js` 的 `calibrate` 保留用户对“＋”与 Upload media 的真实鼠标事件，观察新增唯一文件控件或识别被实际调用的输入；Uploads 分类单独提示。`flowCalibrationStatus` 通过本地扩展存储传到 `dashboard.js`，按校准 ID、所选标签页和递增序号接收反馈，补读回执前消息并忽略迟到状态，不以缓存网址过滤、不重置已核对素材。
+- 输入区与恢复：`flow-content.js` 的 `composerFor` 统一供 `inspect`、附件清理/核验与就绪等待使用，位置选择器绑定父容器或完整路径，原生表单关联可识别外部发送按钮。`worker.js#checkedProfile` 供开始、核对后重试及继续队列复用，检查原项目与所需上传控件，校准成功才替换暂停队列的旧标记快照；不更换镜头包、不自动重发不确定提交。
+
 ## 章节分镜资产生成解析、预览与追加保存
 
 - 完整目录：`web/src/pages/projects/detail/chapter-asset-candidates.ts` 调用 `services/api/projects.ts` 的分页 API，独立于 workspace 已引用资产；`project-chapter-ai.ts` 组织章节任务与 `projectAssetRefs`，`chapter-storyboard-production.ts` 接入解析、容量选择与保存。
