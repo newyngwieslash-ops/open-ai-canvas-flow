@@ -3794,3 +3794,9 @@ SQLite 与 HTTP recorder 已验证；PostgreSQL 16／17、前端构建及浏览�
 - 已实现：`backend/internal/app/remote_storage_settlement.go` 与 `backend/internal/repository/remote_storage_settlement.go` 实现具名远端端点合同校验（`ValidateRemoteEndpointContract`）、全 Attempt 与未知 Multipart 启动停写屏障核证（`SettleRemoteResourceProduction`）、版本桶 `DeleteMarker` 与真實 Payload 穷尽校验（`VerifyRemotePhysicalExhaustion`）及防配置漂移的受控删除入口（`ExecuteRemoteContractDeletion`）。
 - 自动验证：`go -C backend test ./internal/app -run TestRemoteStoragePhysicalSettlement -v -count=1` 通过，覆盖本地反例拒绝、明文密钥引用拦截、未知启动分页未穷尽/未 Abort 阻断、全 Attempt 物理结算、版本桶仅 `DeleteMarker` 阻断、系统配置切换防跨桶误删、403 权限故障保留记录及恢复后重入完成、以及共享物理 alias 安全保留。
 - [ ] 如需在具名公有云真实端点执行故障注入实验，须先绑定专用测试桶/前缀、预算上限、凭据引用与收尾责任人并取得单独授权。
+
+## 资源生产者全控制者崩溃恢复与并发隔离
+
+- 已实现：`backend/internal/app/resource_producer_full_recovery.go` 与 `backend/internal/repository/resource_producer_full_recovery.go` 实现具名独占环境门禁（`ValidateProducerRecoveryEnvironment`）、原代际控制域恢复与结算（`RecoverAndSettleProducerOperation`）、并发操作隔离、回执丢失防误发 `ready` 以及 Windows 全原句柄丢失保守阻断。
+- 自动验证：`go -C backend test ./internal/app -run TestResourceProducerFullRecovery -v -count=1` 通过，覆盖候选环境拦截、缺失镜像哈希/持续保管/最小权限拦截、跨平台证明拒绝、Windows 全原句柄丢失与同名空 Job 阻断、Linux C2-A 原代际全控制者崩溃恢复、并发操作隔离、回执丢失且磁盘存在可解码文件时不发布 `ready` 且恢复后可通过真实入口删除。
+- [ ] 如需在具名独占 Linux/Windows 虚拟机执行内核级进程树与句柄崩溃注入验收，须先绑定实际独占主机、离线镜像哈希、持续保管合同与收尾责任人并另行审批。

@@ -429,6 +429,9 @@ type (
 	RemoteObjectVersionItem                = app.RemoteObjectVersionItem
 	RemotePhysicalExhaustionEvidence       = app.RemotePhysicalExhaustionEvidence
 	RemoteContractDeletionResult           = app.RemoteContractDeletionResult
+	ProducerRecoveryEnvironmentContract    = app.ProducerRecoveryEnvironmentContract
+	ProducerDomainRecoveryProof            = app.ProducerDomainRecoveryProof
+	ProducerDomainRecoveryResult           = app.ProducerDomainRecoveryResult
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

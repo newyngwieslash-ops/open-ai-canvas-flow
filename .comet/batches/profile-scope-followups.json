@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "originalGoal": "用户已批准收敛 add-asset-image-profile-analysis 的范围和验收，将三项独立基础设施工作迁为后续 Comet changes，保留已有成果与未知义务安全阻断。仅创建待办提案，不启动实施。",
+  "createdAt": "2026-10-24",
+  "selectedChange": "add-asset-image-profile-analysis",
+  "creationProgress": {
+    "add-resource-producer-full-recovery": "artifacts-complete-strict-valid-open-review-pending",
+    "add-remote-storage-physical-settlement": "artifacts-complete-strict-valid-open-review-pending",
+    "add-legacy-resource-evidence-maintenance": "artifacts-complete-strict-valid-open-review-pending"
+  },
+  "continuation": "用户已指定先完成原change最终Verify；三个后续change保留phase=open及所有任务未完成，不运行open Guard，不继续设计或实施。pending状态表示open确认尚未完成，并非创建丢失。",
+  "changes": [
+    {"name":"add-resource-producer-full-recovery","status":"pending","goal":"验证并接入完整生产者恢复，涵盖Linux C2-A/C2-B及Windows全部控制者/句柄丢失缺口","scope":"继承已完成P1/P2/P3-B/C1/媒体/C2-A账本与环境候选证据，不重做；真实OS环境/权限及产品启用另批","nonGoals":"不操作业务库、远端存储或旧数据，不以unknown冒充恢复完成","acceptance":"具名环境真实崩溃/迟到启动/隔离/媒体恢复，产品并发隔离及独立审查；未满足时保留阻断","dependsOn":"继承主change成果；当前只创建open提案"},
+    {"name":"add-remote-storage-physical-settlement","status":"pending","goal":"对具名真实远端端点实现所有attempt的可信物理结算与穷尽清理","scope":"继承本地隔离反例，按具体provider版本/配置/测试范围证明未知init、parts/complete/abort/重试及版本义务","nonGoals":"不默认限制provider能力、不操作业务桶或付费调用，不含旧数据维护","acceptance":"端点正式语义、授权独占云试验、产品adapter/双库/失败恢复及独立审查，无证据继续unknown阻断","dependsOn":"先具名端点、资源/费用/凭据与清理授权；当前只创建open提案"},
+    {"name":"add-legacy-resource-evidence-maintenance","status":"pending","goal":"为旧资源及未知变体建立可信归属/停写证据和可审计维护流程","scope":"可信manifest来源、历史writer/物理身份/alias，隔离副本dry-run和恢复验证","nonGoals":"不猜旧key、不批量补settled、不读取或维护业务库、不自动批准真实删除或停服务","acceptance":"逐对象eligible/blocked/conflict证据、隔离实际入口与失败恢复；live维护须审阅精确清单后另批","dependsOn":"维护方可信脱敏导出及停写来源；当前只创建open提案"}
+  ]
+}

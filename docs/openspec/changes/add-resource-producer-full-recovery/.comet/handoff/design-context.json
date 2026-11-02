@@ -1,0 +1,16 @@
+{
+  "change": "add-resource-producer-full-recovery",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "69fd48aff5866d34381f905c94e8ded503d0d01fb930a3cf29b5b909dbb6bdbf",
+  "files": [
+    { "path": "docs/openspec/changes/add-resource-producer-full-recovery/proposal.md", "sha256": "65c8c80551870ed913532afdeb7e4d7c09cdde7ca0271db0e20ac9543161da45" },
+    { "path": "docs/openspec/changes/add-resource-producer-full-recovery/design.md", "sha256": "4699243a426054d5fe562faf76a11bf36ea3d084997ee9515b1e401f5491c7c7" },
+    { "path": "docs/openspec/changes/add-resource-producer-full-recovery/tasks.md", "sha256": "90792147954ab875d1d57cc108eb2146edeeb99736c7bbf694d0da8db5d751e9" },
+    { "path": "docs/openspec/changes/add-resource-producer-full-recovery/.openspec.yaml", "sha256": "e2ebaebee255ccc1e09b64ba38d9b09c360a7392fc110a48ca2525e1ea49fa46" },
+    { "path": "docs/openspec/changes/add-resource-producer-full-recovery/specs/resource-producer-recovery/spec.md", "sha256": "df09717c2371ce208dd9fba70f14307ac700452767e608f8d8cd9ebedfb60166" }
+  ]
+}

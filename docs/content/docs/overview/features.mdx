@@ -625,3 +625,10 @@ SEO 标题、描述、可选关键词会投影到浏览器 metadata、Open Graph
 
 - **全写入尝试与未知启动屏障**：要求绑定具名产品版本、端点、桶、专用前缀、预算与非明文凭据引用（`vault://` / `env://` / `secret-ref://`）；当存在响应丢失或未知 Multipart 启动风险时，必须在本地建立停写屏障后完成全分页 `ListMultipartUploads` 扫描并确认所有孤儿上传会话已 `Abort` 且复检无残留，绝不凭超时或单次响应清除未决义务。
 - **版本桶 DeleteMarker 甄别与配置漂移防护**：在启用版本控制的存储桶上拒绝把 `DeleteMarker` 当作真实 Payload 清除；当系统存储配置发生切换或远端权限受阻（如 403/503）时，严格锁定资源自身的历史 `Provider / Endpoint / Bucket / ObjectKey`，拒绝跨桶误删并保留数据库记录与删除作业以便恢复后重入核账。
+
+## 资源生产者全控制者崩溃恢复与并发隔离
+
+针对 `ControlledPlaybackProtocol` 视频转码等物理写入生产者在全部控制者崩溃、操作系统句柄代际变化或回执丢失场景下的安全恢复，后端提供具名环境门禁校验（`ValidateProducerRecoveryEnvironment`）与原代际物理结算恢复（`RecoverAndSettleProducerOperation`）：
+
+- **独占环境门禁与原代际证明**：仅在绑定具名独占主机、镜像 SHA-256、持续保管证明、`no_new_privileges` 与最小隔离命名空间后允许启动恢复；严格校验控制域代际（`ControllerDomainID` 与 `ExecutionNonce`），拒绝重建同名空域、借用旧句柄或跨操作系统平台外推证明；Windows 在 `attempted` / `closed` 阶段发生全原句柄丢失时严格保持 `unknown` 阻断，不盲目放行删除。
+- **并发操作隔离与回执丢失防误发**：每个 `ResourceProducerOperation` 独立持有自身身份与物理锁，恢复单个操作不影响并发在途操作；当物理停止证明完备但编码器成功回执丢失时，即使磁盘存在可解码输出文件也只完成物理 `settled` 与业务 `failed` 登记，绝不把未获回执的产物发布为 `ready`，并在结算后解除删除阻塞。

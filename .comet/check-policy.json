@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "commands": [
+    {
+      "argv": ["go", "build", "./..."],
+      "cwd": "backend"
+    },
+    {
+      "argv": ["go", "test", "./internal/skills/", "-count=1"],
+      "cwd": "backend"
+    },
+    {
+      "argv": ["go", "test", "./internal/protocol/", "-count=1"],
+      "cwd": "backend"
+    }
+  ]
+}
