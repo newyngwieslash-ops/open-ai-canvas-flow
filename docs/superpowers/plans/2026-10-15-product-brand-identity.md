@@ -2,6 +2,7 @@
 change: rename-product-brand-to-yuanming-zhenyue
 design-doc: docs/superpowers/specs/2026-10-15-product-brand-identity-design.md
 base-ref: efc5126d8b5d9fed6fac62fe8d9417028d214ef8
+archived-with: 2026-11-03-rename-product-brand-to-yuanming-zhenyue
 ---
 
 # 源铭振跃产品品牌实施计划

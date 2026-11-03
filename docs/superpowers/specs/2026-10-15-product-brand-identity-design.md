@@ -2,6 +2,8 @@
 comet_change: rename-product-brand-to-yuanming-zhenyue
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-11-03-rename-product-brand-to-yuanming-zhenyue
+status: final
 ---
 
 # 源铭振跃产品品牌技术设计
