@@ -1,3 +1,7 @@
+---
+archived-with: 2026-11-03-add-character-turnaround-splitting
+status: final
+---
 # Character Turnaround Splitting Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task with TDD (`tdd_mode: tdd`).

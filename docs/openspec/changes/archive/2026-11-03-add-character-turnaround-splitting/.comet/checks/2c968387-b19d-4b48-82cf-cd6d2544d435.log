@@ -1,0 +1,14 @@
+bun test v1.3.6 (d530ed99)
+
+test\character-turnaround-split.test.tsx:
+(pass) character turnaround split & view labeling > only allows turnaround_sheet representation as split source and rejects ordinary portrait
+(pass) character turnaround split & view labeling > preserves default character reference priority (turnaround_sheet -> primary -> front) after splitting
+(pass) character turnaround split & view labeling > scales between preview CSS dimensions and integer source pixel coordinates with boundary clamping
+(pass) character turnaround split & view labeling > supports keyboard arrow nudging for move and resize within source pixel bounds
+(pass) character turnaround split & view labeling > blocks saving until all 3 roles (front/side/back) are non-overlapping, in-bounds, and explicitly confirmed
+(pass) character turnaround split & view labeling > vision plan draft never auto-confirms boxes and flags incomplete drafts for manual review
+
+ 6 pass
+ 0 fail
+ 26 expect() calls
+Ran 6 tests across 1 file. [61.00ms]

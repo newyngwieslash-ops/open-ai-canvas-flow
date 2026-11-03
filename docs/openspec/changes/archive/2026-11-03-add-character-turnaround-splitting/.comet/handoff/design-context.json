@@ -1,0 +1,16 @@
+{
+  "change": "add-character-turnaround-splitting",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "888c8e89e046112c9bd026e80c6e0dcbb7517d765dccc6fcebf40bff00f4a982",
+  "files": [
+    { "path": "docs/openspec/changes/add-character-turnaround-splitting/proposal.md", "sha256": "3df4bb977db80bd5bfe01e4ed6e6a0e640ed1024654523e14b850e5879f4eb3b" },
+    { "path": "docs/openspec/changes/add-character-turnaround-splitting/design.md", "sha256": "413aee827f1df7d565c377018c318721c58a374228de0f6e43704dfd0ccb7479" },
+    { "path": "docs/openspec/changes/add-character-turnaround-splitting/tasks.md", "sha256": "4938fbdd6e7c3552911c2d38b36fec90c4dd6031ad12f52bde3c6e847ac7e2ba" },
+    { "path": "docs/openspec/changes/add-character-turnaround-splitting/.openspec.yaml", "sha256": "0ad492a63d87e00a8bc135b0a1a2b19270dbb9ffd997a69b89fd4ab72015a944" },
+    { "path": "docs/openspec/changes/add-character-turnaround-splitting/specs/character-turnaround-splitting/spec.md", "sha256": "bf6fb2af111c1822384a0fe2e98774a9fb6912aa2b32ea164671d1a4d56a8ba3" }
+  ]
+}
