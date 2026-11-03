@@ -236,13 +236,13 @@ EXCEPTIONS = {
 BRAND = re.compile(r"影策|yingce|open[ _-]ai[ _-]canvas", re.IGNORECASE)
 TECHNICAL = re.compile(
     r"https?://[^\s<>\"'`]+|\.yingce-plugin(?:\.tmp)?(?![\w.-])|\.yingce-tests(?![\w.-])"
-    r"|(?<![\w.-])(?:yingce/backend(?:/[\w/.-]+)?|yingce/workbench/|yingce-agent(?:\.(?![\w-]))?|yingceagent(?:\.[A-Za-z0-9_]+)?)(?![\w.-])"
+    r"|(?<![\w.-])(?:yingce/backend(?:/[\w/.-]+)?|yingce/workbench/|yingce-agent(?:\.(?![\w-]))?|yingceagent(?:\.[A-Za-z0-9_]+)?|extensions/yingce-flow(?:/[\w.*-]+)*)(?![\w.-])"
     r"|(?<![\w-])(?:[A-Z0-9_]*YINGCE_[A-Z0-9_]+)(?![\w-])"
     r"|(?<![\w.-])(?:yingce\.(?:plugin/(?:v1|v2|package-v1|\*)|payment/v1|sms/v1|system-channels)|yingce-system|yingce-short-drama-workflow)(?![\w./-])"
-    r"|(?<![\w.-])(?:@yingce/pi-agent-runtime|yingce-(?:backend|official|xunhupay|dev|catalog|storage-test|diagnostics(?:-[\w.-]+|\.zip)?|inspirations-|render-\*|whisper-\*|image-(?:layer-split|annotation|editing)|inspiration-import/1\.0)|yingce-\$\{normalizeSkinID\(skinID\)\}-\$\{dark \? \"dark\" : \"light\"\})(?![\w.-])"
+    r"|(?<![\w.-])(?:@yingce/pi-agent-runtime|yingce-flow-(?:bridge-v1|v1|bundle\.json|test)|yingce-(?:backend|official|xunhupay|dev|catalog|storage-test|diagnostics(?:-[\w.-]+|\.zip)?|inspirations-|render-\*|whisper-\*|image-(?:layer-split|annotation|editing)|inspiration-import/1\.0)|yingce-\$\{normalizeSkinID\(skinID\)\}-\$\{dark \? \"dark\" : \"light\"\})(?![\w.-])"
     r"|(?<![\w.-])(?:application/x-yingce-(?:image-asset|project-chapter)|yingce:(?:[a-z0-9_.-]+(?::[a-zA-Z0-9_.-]+)*:?|\*)|yingce\.(?:banner-announcements\.dismissed|announcements\.dismiss-(?:today|session)|admin\.announcements\.pending-review))(?![\w.-])"
     r"|(?<![\w.-])(?:(?:ai|api)\.yingce\.tv|canvas\.yingce\.cc\.cd|/proxy/yingce/api|D:\\yingce\\open-ai-canvas-main|start-yingce-local\.cmd|Yingce/1\.0)(?![\w.-])"
-    r"|(?:providerID\s*=\s*\"yingce\"|Author:\s*\"yingce\"|\"name\":\s*\"yingce\"|name:\s*\"yingce\"|app:\s*\"yingce\"|\"app\":\s*\"yingce\"|manifest\.app\s*!==\s*\"yingce\"|\.app\)\.toBe\(\"yingce\"\)|\"/opt/yingce\":\s*\"yingce\"|-yingce-agent)"
+    r"|(?:providerID\s*=\s*\"yingce\"|Author:\s*\"yingce\"|\"name\":\s*\"yingce\"|name:\s*\"yingce\"|app:\s*\"yingce\"|\"app\":\s*\"yingce\"|manifest\.app\s*!==\s*\"yingce\"|\.app\)\.toBe\(\"yingce\"\)|\"/opt/yingce\":\s*\"yingce\"|-yingce-agent|Yingce-Flow/|YingceFlowAdapter|yingceFlowCalibration|data-yingce-flow-calibration|__yingceFlowBridge)"
     r"|(?<![\w.])open_ai_canvas(?:_[a-z0-9_]+|-before-storage-v2-|\.db|:(?:[a-z0-9_.-]+|\*))*(?![\w.-])"
     r"|(?<![\w.-])open-ai-canvas(?:-[a-z0-9_.*-]+)*(?::[a-z0-9_.-]+)?(?![\w.-])"
 )

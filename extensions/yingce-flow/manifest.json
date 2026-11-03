@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "源铭振跃 · Flow 镜头队列",
+  "version": "0.1.5",
+  "description": "接收源铭振跃短剧镜头与完整素材，在你登录的 Google Flow 页面逐镜生成和下载视频。",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms", "downloads", "scripting", "sidePanel"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*", "https://flow.google.com/*", "https://labs.google/fx/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_title": "打开源铭振跃 Flow 侧栏" },
+  "side_panel": { "default_path": "dashboard.html" },
+  "content_scripts": [
+    { "matches": ["http://localhost/*", "http://127.0.0.1/*"], "js": ["source-bridge.js"], "run_at": "document_idle" },
+    { "matches": ["https://flow.google.com/*", "https://labs.google/fx/*"], "js": ["flow-content.js"], "run_at": "document_idle" }
+  ],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'" }
+}

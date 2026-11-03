@@ -35,6 +35,7 @@ docs/content/docs/backend/*
 !docs/content/docs/overview/
 docs/content/docs/overview/*
 !docs/content/docs/overview/creative-agent-design.mdx
+!docs/content/docs/overview/flow-browser-extension.mdx
 .env*
 !.env.example
 data/

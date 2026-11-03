@@ -2,7 +2,7 @@ import { ImageSizePicker } from "@/components/image-size-picker";
 import { imageResolutionUsesQuality } from "@/lib/image-size-presets";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Form, Image, Input, InputNumber } from "antd";
+import { App, Button, Dropdown, Form, Image, Input, InputNumber } from "antd";
 import { SegmentedControl } from "@/components/ui/base/segmented-control";
 import { EmptyState } from "@/components/ui/product/empty-state";
 import { StatusBadge } from "@/components/ui/base/badges";
@@ -42,6 +42,7 @@ import {
 } from "@/services/api/projects";
 import { resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey } from "@/services/api/resources";
 import { skillRuntime } from "@/services/skill-runtime";
+import { submitFlowBundle } from "@/services/flow-bridge";
 import { configuredModelMatchesCapability, modelDisplayName, modelOptionName, resolveModelChannel, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { SkillRuntimePicker, useSkillRuntimeCatalog } from "@/components/skills/skill-runtime-picker";
@@ -60,6 +61,7 @@ import { prepareWorkflowImageSubmission } from "./workflow-image-generation";
 import { batchArtifactType, type BatchItemState } from "./workflow-batch-plan";
 import { useWorkflowImageBatch, type WorkflowImageBatchController } from "./use-workflow-image-batch";
 import { WorkflowImageBatchDialog } from "./workflow-image-batch-dialog";
+import { applyWorkflowFlowSkills, loadWorkflowFlowBundle } from "./workflow-flow-export";
 import { ChapterAssetBindingDrawer, mergeBindingAppendResultIntoProjectCache } from "./chapter-asset-binding-drawer";
 import { Select } from "@/components/ui/base/select";
 
@@ -98,6 +100,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const creditsEnabled = useUserStore((state) => state.features.creditsEnabled);
+    const flowOwnerId = useUserStore((state) => state.user?.id);
     const [form] = Form.useForm<ShotEditorValues>();
     const watchedDuration = Form.useWatch("durationSeconds", form);
     const watchedTitle = Form.useWatch("title", form);
@@ -108,6 +111,9 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const [bindingDrawerOpen, setBindingDrawerOpen] = useState(false);
     const [editorDirty, setEditorDirty] = useState(false);
     const [userEditedForm, setUserEditedForm] = useState(false);
+    const [flowProgress, setFlowProgress] = useState("");
+    const flowTransfer = useRef<AbortController | null>(null);
+    useEffect(() => () => flowTransfer.current?.abort(), [projectId, unitId, selectedShot?.id, editorDirty, flowOwnerId]);
     const [submittingShotIds, setSubmittingShotIds] = useState<Set<string>>(() => new Set());
     const [taskClock, setTaskClock] = useState(() => Date.now());
     const activeShotIdRef = useRef(selectedShot?.id || "");
@@ -518,12 +524,56 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const stageCopy = productionStageCopy[activeStage as "storyboard" | "previz" | "video"];
     const selectedShotSubmitting = submittingShotIds.has(selectedShot?.id || "");
 
+    const exportToFlow = async (scope: "current" | "chapter") => {
+        if (flowTransfer.current) return;
+        if (editorDirty) return void message.warning("当前镜头有未保存修改，请先保存脚本再提交到 Flow");
+        if (!flowOwnerId) return void message.warning("请先登录后再提交到 Flow");
+        if (scope === "current" && !selectedShot) return void message.warning("请先选择镜头");
+        const controller = new AbortController();
+        flowTransfer.current = controller;
+        setFlowProgress("正在读取已保存的镜头…");
+        try {
+            const bundle = await loadWorkflowFlowBundle({
+                projectId, unitId, shotId: scope === "current" ? selectedShot?.id : undefined,
+                editorDirty, origin: window.location.origin,
+                resolution, signal: controller.signal,
+            });
+            setFlowProgress("正在整理完整视频提示词…");
+            const prepared = await applyWorkflowFlowSkills(bundle, { skills: availableSkills, selectedSkillIds, signal: controller.signal });
+            const result = await submitFlowBundle(prepared, {
+                signal: controller.signal,
+                onProgress: (text) => {
+                    if (useUserStore.getState().user?.id !== flowOwnerId) controller.abort();
+                    if (!controller.signal.aborted) setFlowProgress(text);
+                },
+            });
+            message.success(`已提交 ${result.shotCount} 个镜头，请打开 Flow 插件预览并确认生成`);
+        } catch (error) {
+            if (!(error instanceof Error && error.name === "AbortError")) message.error(error instanceof Error ? error.message : "提交到 Flow 失败");
+        } finally {
+            if (flowTransfer.current === controller) {
+                flowTransfer.current = null;
+                setFlowProgress("");
+            }
+        }
+    };
+
     const chapterActionsSection = (
         <div className="workflow-chapter-actions" role="group" aria-label="本章操作">
             <span className="workflow-chapter-actions-label">本章操作</span>
             <Button size="small" disabled={chapterMutationLocked} onClick={() => setBindingDrawerOpen(true)}>匹配镜头资产</Button>
             <Button size="small" disabled={batchEntryDisabled} onClick={() => void batch.open("storyboard")}>批量生成分镜图</Button>
             <Button size="small" disabled={batchEntryDisabled} onClick={() => void batch.open("previz")}>批量生成动作预演</Button>
+            <Dropdown trigger={["click"]} disabled={Boolean(flowProgress) || !shots.length || saveShot.isPending || deleteShot.isPending || changeAssetBinding.isPending || selectedShotSubmitting} menu={{
+                items: [
+                    { key: "current", label: "提交当前镜头", disabled: !selectedShot },
+                    { key: "chapter", label: `提交本章全部 ${shots.length} 个镜头` },
+                ],
+                onClick: ({ key }) => void exportToFlow(key === "current" ? "current" : "chapter"),
+            }}>
+                <Button size="small" loading={Boolean(flowProgress)} disabled={!shots.length || saveShot.isPending || deleteShot.isPending || changeAssetBinding.isPending || selectedShotSubmitting}>提交到 Flow<ChevronDown className="size-3" /></Button>
+            </Dropdown>
+            {flowProgress ? <><span role="status" aria-live="polite" className="text-xs text-muted-foreground">{flowProgress}</span><Button size="small" onClick={() => flowTransfer.current?.abort()}>取消提交</Button></> : null}
         </div>
     );
 

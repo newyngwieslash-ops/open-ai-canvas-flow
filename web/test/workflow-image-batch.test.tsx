@@ -824,7 +824,7 @@ describe("workflow image batch workbench", () => {
             const groupButtons = [...(group?.querySelectorAll("button") || [])].map(b =>
                 b.textContent?.trim(),
             );
-            expect(groupButtons).toEqual(["匹配镜头资产", "批量生成分镜图", "批量生成动作预演"]);
+            expect(groupButtons).toEqual(["匹配镜头资产", "批量生成分镜图", "批量生成动作预演", "提交到 Flow"]);
 
             const previzBtn = findButton("批量生成动作预演", group!);
             expect(previzBtn).toBeTruthy();

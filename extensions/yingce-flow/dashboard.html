@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>源铭振跃 · Flow 镜头队列</title><link rel="stylesheet" href="dashboard.css"></head>
+<body>
+  <header><div><span class="eyebrow">源铭振跃 / FLOW · 0.1.5</span><h1>镜头队列</h1></div><button id="refresh" title="刷新镜头包、页面和任务">刷新</button></header>
+  <nav aria-label="侧栏内容"><button data-view="shots" aria-pressed="true" aria-controls="view-shots">镜头</button><button data-view="runs" aria-pressed="false" aria-controls="view-runs">队列</button><button data-view="settings" aria-pressed="false" aria-controls="view-settings">设置</button></nav>
+  <p id="message" role="status" aria-live="polite"></p>
+  <main>
+    <section id="view-settings" hidden aria-labelledby="connection-title"><h2 id="connection-title">连接与校准</h2>
+      <div class="row"><label class="grow">项目站点<input id="origin" type="url" value="http://localhost:5178" placeholder="https://你的源铭振跃站点"></label><button id="connect">连接站点</button></div>
+      <p id="origins" class="muted"></p>
+      <p class="muted">连接后刷新项目页面，在分镜制作中点击「提交到 Flow」。本地素材仅在你开始队列后上传到 Google。</p>
+      <label>Flow 项目标签页<select id="flow-tab"><option value="">先打开已登录的 Flow 项目</option></select></label><div class="row"><button id="inspect">检查页面</button><a href="https://flow.google.com/" target="_blank" rel="noreferrer">打开 Flow</a></div>
+      <ol class="setup-steps"><li>在 Flow 点击已有项目卡片或「New project」，进入具体项目；首页不能启动队列。</li><li>打开视频生成输入框，设置模型、时长、画幅与单次 1 个输出。</li><li>点击下面的“标记”按钮，再在旁边 Flow 页面点对应位置。完成后点击“检查页面”。</li></ol>
+      <div class="row" id="calibration" tabindex="-1" aria-label="Flow 控件标记"><button data-field="prompt">标记提示框</button><button data-field="upload">标记上传入口</button><button data-field="generate">标记生成按钮</button><button data-field="results">标记结果区域</button></div>
+      <ul class="setup-steps"><li><strong>提示框：</strong>视频生成的提示词编辑框。</li><li><strong>上传入口：</strong>先点击“标记上传入口”，再点击 Flow 输入框旁的“＋”，然后点击素材弹窗<strong>左下角的“Upload media”（上传媒体）</strong>。“Uploads”是素材分类。出现文件选择窗口时可取消，侧栏显示“已标记上传入口”才算完成。</li><li><strong>生成按钮：</strong>该输入框旁的生成/发送按钮；聊天布局中是底部输入框右下角的发送箭头。</li><li><strong>结果区域：</strong>输入框之外、生成视频卡片所在列表的空白处，不能选择整个页面或单张图片。</li></ul>
+      <p class="muted">标记时按 Esc 可取消；页面改版或标记失效后需重新标记。纯文字模式不需要上传入口。</p>
+      <p id="profile" class="muted"></p>
+    </section>
+    <section id="view-shots" aria-labelledby="bundle-title"><h2 id="bundle-title">镜头与素材</h2>
+      <label>收到的镜头包<select id="bundle"><option value="">等待项目提交</option></select></label>
+      <div class="row"><label class="grow">输入模式<select id="mode"><option value="ingredients">参考素材（Ingredients）</option><option value="frame">单张首帧（Frames）</option><option value="text">纯文字（Text）</option></select></label></div><label>Flow 已设置的参数<input id="settings" placeholder="模型 / 时长 / 画幅 / 清晰度 / 1个输出"></label>
+      <details class="help"><summary>素材用途与时长说明</summary><p class="muted">完整镜头包保存在本机；每镜只有勾选的素材会上传。多格分镜图和动作预演图应作为叙事参考，选作首帧前请确认它就是所需画面。原始时长会显示在各镜头中；当前版本沿用你在 Flow 配置的生成时长。</p></details>
+      <div class="row"><button id="select-all">全选镜头</button><button id="select-none">取消全选</button><button id="export-json">下载镜头清单</button></div>
+      <div id="shots"><p class="muted">请从短剧分镜制作中「提交到 Flow」，镜头会显示在这里。</p></div>
+      <label class="confirmation"><input type="checkbox" id="confirm">我已核对每镜素材、过期提示及 Flow 参数（含时长差异），确认单次 1 个输出，开始后按 Flow 显示的费用逐镜生成。</label>
+      <button id="start" class="primary">开始队列</button>
+    </section>
+    <section id="view-runs" hidden aria-labelledby="runs-title"><h2 id="runs-title">生成与下载</h2><p class="muted">请保留 Flow 标签页，运行期间勿在同一页手工生成。暂停不会取消已受理的任务。</p><div id="runs"></div></section>
+  </main>
+  <footer>任务和素材保存在当前浏览器的插件存储中。卸载插件会清除它们；已下载视频保留。视频不会自动写回源铭振跃。</footer>
+  <script type="module" src="dashboard.js"></script>
+</body></html>
