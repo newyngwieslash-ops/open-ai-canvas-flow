@@ -1,4 +1,4 @@
-# 源铭振跃画布一键启动器
+﻿# 源铭振跃画布一键启动器
 # 启动后端(8080) + 前端(3000) + cloudflared 隧道(公网 canvas.yingce.cc.cd)，打开浏览器
 
 [CmdletBinding()]

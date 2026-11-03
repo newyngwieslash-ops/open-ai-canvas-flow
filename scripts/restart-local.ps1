@@ -1,4 +1,4 @@
-# 源铭振跃本地二次开发重启。
+﻿# 源铭振跃本地二次开发重启。
 # 前端默认 5178（受限时改用 15178），后端默认 8178（受限时改用 18178）。
 # 数据目录、Go 缓存、Vite 代理约定见 docs/content/docs/backend/local-development.mdx
 

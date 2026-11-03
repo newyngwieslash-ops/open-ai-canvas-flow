@@ -1,5 +1,10 @@
 ﻿$ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path $PSScriptRoot 'restart-local.ps1'
+$batPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'restart.bat'
+$batBytes = [System.IO.File]::ReadAllBytes($batPath)
+if ($batBytes | Where-Object { $_ -gt 0x7F }) {
+    throw 'restart.bat must remain pure ASCII so cmd.exe under CP936 does not mis-seek line offsets.'
+}
 foreach ($ps1File in @(Get-ChildItem -Path $PSScriptRoot -Filter '*.ps1')) {
     $bytes = [System.IO.File]::ReadAllBytes($ps1File.FullName)
     if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
