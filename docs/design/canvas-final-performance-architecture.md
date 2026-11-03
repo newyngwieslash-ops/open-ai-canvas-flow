@@ -286,3 +286,26 @@ Service Worker 只允许缓存公开、无 token、无签名敏感参数的缩�
 - 图形层异常时保留 DOM 节点和静态连接；LOD 调度异常时退回 shell/preview，不在手势帧内批量升级。
 - 资源清理继续执行画布、项目、任务、素材和历史快照引用检查；性能改造不改变删除安全边界。
 - 不以新增 Service Worker、`will-change`、WebGL 或 OffscreenCanvas 掩盖访问合同和渲染调度问题。
+
+
+## 9. 2026-10-28 画布全链路性能优化实施记录（包 A / 包 B / 包 C）
+
+对应实施计划见 [`docs/superpowers/plans/2026-10-28-canvas-performance-implementation.md`](../superpowers/plans/2026-10-28-canvas-performance-implementation.md)，已完成以下 14 项前端确定性热路径优化与专项测试覆盖：
+
+1. **包 A（渲染失效、引用解析与媒体预算）**：
+   - `canvas-content.ts`：按节点与 `nodes` 数组引用做 `WeakMap` 归一化缓存，仅 `viewport` / `revision` / `remoteContentHash` / `updatedAt` 变化时复用同一归一化快照与 SHA-256 哈希 Promise。
+   - `project.tsx` / `shared.tsx` / `canvas-project-world-layers.tsx` / `canvas-node.tsx` / `canvas-script-node.tsx`：移除无消费者的 `toolbarNodeId` 状态与定时器；`hideNodeConnections=false` 时关闭节点 hover 状态回传；`CanvasScriptNodeContent` 用 `scaleRef` 解耦视口缩放引起的回调重建。
+   - `canvas-resource-references.ts` / `use-canvas-render-model.ts`：引入 `createCanvasReferenceIndex(nodes, connections, assets)` 图级缓存，仅对可见节点派生引用，仅对激活编辑节点做 mention token 清洗。
+   - `canvas-workspace-panel.tsx` / `canvas-workspace-node-list-panel.tsx`：将 `searchCanvasNodes` 下沉至 `CanvasWorkspaceNodeListPanel` 的 `useMemo`，关闭侧栏或非 `nodes` 面板时零搜索。
+   - `canvas-mini-map.tsx`：底图 `baseCanvasRef` 与视口框 `viewportCanvasRef` 双层分离，实时视口预览回调仅重绘视口框层。
+   - `canvas-batch-references.ts`：无 `batchTable` 节点且无可连接 `batchTable` 连线时早退并保持原引用。
+   - `canvas-node-media-content.tsx`：`renderLOD === "shell"` 时门控新请求并保留已解码 `<img>` `src`。
+   - `use-resolved-canvas-resource-references.ts` / `canvas-mention-menu.tsx` / `canvas-resource-mention-textarea.tsx` / `canvas-node-prompt-panel.tsx`：严格按 `requestedIds`（正文已引用 + 打开的 `@` 菜单可见项）发起访问解析；非激活候选不挂载 fallback `<video>`。
+2. **包 B（高频手势路径 O(N) 消除）**：
+   - `canvas-project-domain.ts`：新增 `createNodeAlignmentIndex(targets)` 6 轴排序二分查找索引，保持拖拽吸附与距离决胜语义一致。
+   - `canvas-connection-hit-index.ts` / `use-canvas-connection-controller.ts`：基于 `SelectableNodeSpatialIndex` 查询 `[x - 60, y - 60, 120, 120]` 局部候选并保持后渲染节点优先。
+   - `use-canvas-connection-controller.ts` / `canvas-leafer-graphics-layer.tsx`：缓存批量连线预览规划结果，并在 Leafer 中按 `sourceId` 复用 `Path` 实例。
+   - `canvas-live-viewport.ts` / `use-canvas-image-wheel-resize.ts` / `canvas-leafer-graphics-layer.tsx`：Ctrl+滚轮图片缩放在手势期走 rAF DOM 预览与 Leafer 连线跟随，手势结束单次提交 `onResize`。
+3. **包 C（持久化、同步与 SSE 增量差分）**：
+   - `user-data-sync-media.ts` / `user-data-sync.ts` / `use-canvas-history.ts` / `use-canvas-store.ts`：`ensureRemoteResourceReferences` 写时复制保留未变子树引用；`selectedProjectIds` 定向同步跳过未选中项目的 `sameCanvasContent`；`buildCanvasOperations` 与 `hasMeaningfulNodeChanges` 对同引用节点 `O(1)` 早退；本地持久化仅通知实际变更画布。
+   - `agent-canvas-patch.ts` / `user-data-sync.ts`：`applyAgentCanvasPatchBatch` 在纯 `update_node` 批量下单次构建 `nodeIndexById` `Map` 并复制一次 `nodes` 数组。

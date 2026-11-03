@@ -1,0 +1,9 @@
+{
+  "openspec_proposal": "docs/openspec/changes/add-remote-storage-physical-settlement/proposal.md",
+  "openspec_design": "docs/openspec/changes/add-remote-storage-physical-settlement/design.md",
+  "openspec_tasks": "docs/openspec/changes/add-remote-storage-physical-settlement/tasks.md",
+  "openspec_delta_spec": "docs/openspec/changes/add-remote-storage-physical-settlement/specs/remote-storage-physical-settlement/spec.md",
+  "handoff_context": "docs/openspec/changes/archive/2026-11-02-add-remote-storage-physical-settlement/.comet/handoff/design-context.json",
+  "handoff_markdown": "docs/openspec/changes/archive/2026-11-02-add-remote-storage-physical-settlement/.comet/handoff/design-context.md",
+  "archive_directory": "docs/openspec/changes/archive/2026-11-02-add-remote-storage-physical-settlement"
+}

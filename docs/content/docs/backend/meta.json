@@ -12,9 +12,11 @@
     "video-token-billing",
     "task-runtime-stability",
     "newapi-channel-2",
+    "bailian-minimax-video",
     "system-update",
     "protocol-plugins",
     "canvas-data-structure",
-    "canvas-operations-sync"
+    "canvas-operations-sync",
+    "agent-submit-sync-conflict"
   ]
 }

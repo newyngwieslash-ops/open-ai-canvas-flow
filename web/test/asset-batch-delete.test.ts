@@ -97,7 +97,8 @@ describe("素材批量删除", () => {
         try {
             await deleteAssetsWithRemoteSync(ids);
             expect(requests).toEqual([{ method: "post", url: "/assets/batch-delete", body: ids }]);
-            expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+            expect(useAssetStore.getState().assets.filter((item) => item.status === "deleting").map((item) => item.id)).toEqual(ids);
+            expect(useAssetStore.getState().assets).toHaveLength(101);
             expect(updates).toBe(1);
         } finally {
             stop();
@@ -163,7 +164,8 @@ describe("素材批量删除", () => {
         try {
             // GET 尚未返回，删除必须已返回，调用方才能关闭 Modal / Popconfirm。
             await within(deleteAssetsWithRemoteSync(["first"]));
-            expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+            expect(useAssetStore.getState().assets.filter((item) => item.id !== "keep").every((item) => item.status === "deleting")).toBe(true);
+            expect(useAssetStore.getState().assets.length).toBeGreaterThan(1);
             expect(requests).toEqual(["post /assets/batch-delete", "get /assets", "get /assets"]);
             for (const observer of observers) expect(observer.getCurrentResult().fetchStatus).toBe("fetching");
 
@@ -209,7 +211,8 @@ describe("素材批量删除", () => {
         };
         await deleteAssetsWithRemoteSync(ids);
         expect(bodies).toEqual([ids]);
-        expect(useAssetStore.getState().assets.map((item) => item.id)).toEqual(["keep"]);
+        expect(useAssetStore.getState().assets.filter((item) => item.id !== "keep").every((item) => item.status === "deleting")).toBe(true);
+            expect(useAssetStore.getState().assets.length).toBeGreaterThan(1);
     });
 
     test("分页未缓存素材补齐详情后，移入回收站同步全部选中项", async () => {
@@ -217,6 +220,7 @@ describe("素材批量删除", () => {
         const remoteAssets = ids.map(asset);
         const writes: Asset[] = [];
         apiClient.defaults.adapter = async (config) => {
+            if (config.method === "get") return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { asset: remoteAssets.find((item) => config.url === `/assets/${item.id}`) }, msg: "ok" } };
             const body = JSON.parse(config.data);
             if (config.url === "/assets/batch") {
                 expect(body.ids).toEqual(ids);
@@ -232,6 +236,17 @@ describe("素材批量删除", () => {
         await saveRemoteUserDataNow();
         expect(writes.map((item) => item.id)).toEqual(ids);
         expect(writes.every((item) => item.status === "archived")).toBe(true);
+    });
+
+    test("服务端绑定图片后强制刷新已验证素材，保留本地标签编辑", async () => {
+        const initial = { ...asset("scene"), category: "environment" as const, primaryVersionId: "v1" };
+        let remote: Asset = initial;
+        apiClient.defaults.adapter = async (config) => ({ config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { assets: [remote] }, msg: "ok" } });
+        await loadAssetsForUse(["scene"]);
+        useAssetStore.getState().updateAsset("scene", { tags: ["本地标签"] });
+        remote = { ...initial, kind: "image", primaryVersionId: "v2", data: { dataUrl: "/api/resources/image/file", storageKey: "resource:image", width: 800, height: 600, bytes: 100, mimeType: "image/png" } };
+        await loadAssetsForUse(["scene"], { refresh: true });
+        expect(useAssetStore.getState().assets[0]).toMatchObject({ kind: "image", primaryVersionId: "v2", tags: ["本地标签"], data: { storageKey: "resource:image" } });
     });
 
     test("删除响应返回前切换账号，不删除新账号本地素材", async () => {

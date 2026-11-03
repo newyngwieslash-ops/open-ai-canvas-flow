@@ -24,7 +24,7 @@ func TestUserStructuredStorageUsage(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	// History tables are deliberately absent: canvas quota must not read them.
-	if err := db.AutoMigrate(&model.Asset{}, &model.CanvasProject{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Asset{}, &model.CanvasProject{}); err != nil {
 		t.Fatal(err)
 	}
 	repo := New(db)

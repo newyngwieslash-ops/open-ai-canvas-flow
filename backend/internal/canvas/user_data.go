@@ -3,6 +3,7 @@ package canvas
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -302,6 +303,16 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 	if req.BaseRevision != nil && (*req.BaseRevision < 0 || *req.BaseRevision >= 9007199254740991) {
 		return UserDataSummary{}, kernel.BadAuthRequest("画布基线版本无效")
 	}
+	if len(req.EditProofs) > 500 {
+		return UserDataSummary{}, kernel.BadAuthRequest("画布编辑凭据数量超出限制")
+	}
+	seenProofs := make(map[string]bool, len(req.EditProofs))
+	for _, proof := range req.EditProofs {
+		if proof.NodeID == "" || len(proof.NodeID) > 160 || proof.SessionID == "" || len(proof.SessionID) > 160 || proof.Token == "" || len(proof.Token) > 80 || seenProofs[proof.NodeID] {
+			return UserDataSummary{}, kernel.BadAuthRequest("画布编辑凭据无效或重复")
+		}
+		seenProofs[proof.NodeID] = true
+	}
 	quota, err := s.host.CanvasQuotaCheck(userID)
 	if err != nil {
 		return UserDataSummary{}, err
@@ -309,7 +320,8 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 	digest := CanvasOperationsDigest(req)
 	var result UserDataSummary
 	err = s.host.WithStorageLock(func() error {
-		return s.repo.Transaction(func(tx *repository.Repository) error {
+		return s.repo.ResourceLifecycleTransaction(func(tx *repository.Repository) error {
+			tx = tx.WithCanvasEditProofs(req.EditProofs)
 			if err := tx.LockCanvasMutation(userID, canvasID); err != nil {
 				return err
 			}
@@ -339,13 +351,13 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 			if isCreate && (len(req.Operations) == 0 || req.Operations[0].Type != "create_canvas") {
 				return kernel.NotFound("画布不存在或已删除")
 			}
-			if !isCreate {
-				for _, operation := range req.Operations {
-					if operation.Type == "create_canvas" {
-						return canvasOperationConflict("画布 %q 已存在，不能重复创建", canvasID)
+				if !isCreate {
+					for _, operation := range req.Operations {
+						if operation.Type == "create_canvas" {
+							return canvasMutationError("canvas_field_conflict", fmt.Sprintf("画布 %q 已存在，不能重复创建", canvasID))
+						}
 					}
 				}
-			}
 			if req.BaseRevision != nil && *req.BaseRevision > 0 && isCreate {
 				return canvasMutationError("canvas_invalid_base", "新画布不能使用已有版本作为基线")
 			}
@@ -382,11 +394,8 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 				operations = req.Operations
 			}
 			if err := applyCanvasOperations(payload, operations); err != nil {
-				if errors.Is(err, ErrCanvasObjectMissing) {
-					return canvasMutationError("canvas_object_missing", err.Error())
-				}
-				if errors.Is(err, ErrCanvasOperationConflict) {
-					return canvasMutationError("canvas_field_conflict", err.Error())
+				if errors.Is(err, ErrCanvasObjectMissing) || errors.Is(err, ErrCanvasOperationConflict) {
+					return err
 				}
 				return kernel.BadAuthRequest(err.Error())
 			}
@@ -439,10 +448,19 @@ func (s *Service) ApplyUserCanvasOperations(userID, canvasID string, req CanvasO
 			return tx.FinalizeCanvasMutationReceipt(candidate)
 		})
 	})
+	if errors.Is(err, ErrCanvasObjectMissing) {
+		return UserDataSummary{}, canvasMutationError("canvas_object_missing", err.Error())
+	}
+	if errors.Is(err, ErrCanvasOperationConflict) {
+		return UserDataSummary{}, canvasMutationError("canvas_field_conflict", err.Error())
+	}
 	if errors.Is(err, repository.ErrCanvasRevisionConflict) {
 		retry := canvasMutationError("canvas_concurrent_write", "画布正在更新，将自动重放原请求")
 		retry.Retryable = true
 		return UserDataSummary{}, retry
+	}
+	if errors.Is(err, repository.ErrCanvasEditLease) {
+		return UserDataSummary{}, canvasMutationError("canvas_edit_lease_conflict", err.Error())
 	}
 	return result, err
 }
@@ -513,6 +531,9 @@ func (s *Service) upsertUserCanvasProjectWithHistory(userID string, raw json.Raw
 			return err
 		}
 		if err := SaveDocumentWithHistory(s.repo, existing, &project, reason); err != nil {
+			if errors.Is(err, repository.ErrCanvasEditLease) {
+				return canvasMutationError("canvas_edit_lease_conflict", err.Error())
+			}
 			if errors.Is(err, repository.ErrCanvasRevisionConflict) {
 				return canvasRevisionConflict()
 			}
@@ -538,7 +559,11 @@ func (s *Service) upsertUserCanvasProjectWithHistory(userID string, raw json.Raw
 }
 
 func (s *Service) DeleteUserCanvasProject(userID string, id string) error {
-	return s.repo.DeleteCanvasProject(userID, id)
+	err := s.repo.DeleteCanvasProject(userID, id)
+	if errors.Is(err, repository.ErrCanvasEditLease) {
+		return canvasMutationError("canvas_edit_lease_conflict", err.Error())
+	}
+	return err
 }
 
 func AssetFromJSON(userID string, raw json.RawMessage) (model.Asset, error) {

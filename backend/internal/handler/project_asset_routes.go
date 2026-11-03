@@ -12,6 +12,83 @@ import (
 )
 
 func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
+	registerProjectProfileAnalysisRoutes(r, svc)
+	r.POST("/projects/:id/asset-entities", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		var req service.CreateProjectAssetEntityRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.CreateProjectAssetEntity(user.ID, c.Param("id"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
+	r.PUT("/projects/:id/assets/:assetId/reference-images", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+		var req service.SetProjectReferenceImagesRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.SetProjectReferenceImages(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
+	r.POST("/projects/:id/assets/:assetId/image-candidates/:taskId/adopt", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+		var req service.AdoptProjectImageCandidateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.AdoptProjectImageCandidate(user.ID, c.Param("id"), c.Param("assetId"), c.Param("taskId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
+	r.PUT("/projects/:id/assets/:assetId/image", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+		var req service.BindProjectAssetImageRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		asset, err := svc.BindProjectAssetImage(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"asset": asset})
+	})
 	r.GET("/projects/:id/assets", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -198,6 +275,42 @@ func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		ok(c, character)
+	})
+	r.POST("/projects/:id/characters/:assetId/turnaround-split-plans", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var req service.CreateTurnaroundSplitPlanRequest
+		if err := bindProfileRequest(c, 16<<10, &req); err != nil {
+			failService(c, err)
+			return
+		}
+		plan, err := svc.CreateCharacterTurnaroundSplitPlan(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"plan": plan})
+	})
+	r.POST("/projects/:id/characters/:assetId/turnaround-splits", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var req service.ExecuteTurnaroundSplitRequest
+		if err := bindProfileRequest(c, 32<<10, &req); err != nil {
+			failService(c, err)
+			return
+		}
+		result, err := svc.ExecuteCharacterTurnaroundSplit(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
 	})
 	r.PUT("/projects/:id/characters/:assetId/voice", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
@@ -451,5 +564,108 @@ func registerCharacterLibraryRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		ok(c, character)
+	})
+	r.POST("/projects/:id/asset-generation-batches/preflight", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		var req service.PreflightProjectAssetBatchRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		preflight, err := svc.PreflightProjectAssetBatch(user.ID, c.Param("id"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"preflight": preflight})
+	})
+	r.POST("/projects/:id/asset-generation-batches", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		var req service.CreateProjectAssetBatchRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		batch, err := svc.CreateProjectAssetBatch(user.ID, c.Param("id"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batch": batch})
+	})
+	r.GET("/projects/:id/asset-generation-batches", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		batches, err := svc.ListProjectAssetBatches(user.ID, c.Param("id"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batches": batches})
+	})
+	r.GET("/projects/:id/asset-generation-batches/:batchId", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		batch, err := svc.GetProjectAssetBatch(user.ID, c.Param("id"), c.Param("batchId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batch": batch})
+	})
+	r.POST("/projects/:id/asset-generation-batches/:batchId/stop", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		batch, err := svc.StopProjectAssetBatch(user.ID, c.Param("id"), c.Param("batchId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batch": batch})
+	})
+	r.POST("/projects/:id/asset-generation-batches/:batchId/cancel-tasks", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		batch, err := svc.CancelProjectAssetBatchTasks(c.Request.Context(), user.ID, c.Param("id"), c.Param("batchId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batch": batch})
+	})
+	r.POST("/projects/:id/asset-generation-batches/:batchId/items/:itemId/retry", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		batch, err := svc.RetryProjectAssetBatchItem(user.ID, c.Param("id"), c.Param("batchId"), c.Param("itemId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"batch": batch})
 	})
 }

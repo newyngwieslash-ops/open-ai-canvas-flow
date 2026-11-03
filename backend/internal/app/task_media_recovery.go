@@ -12,6 +12,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"yingce/backend/internal/assets"
 	"yingce/backend/internal/model"
 	"yingce/backend/internal/protocol"
 	"yingce/backend/internal/repository"
@@ -65,7 +66,11 @@ func mediaStageLabel(stage string) string {
 }
 
 func (s *Service) decodeMediaCheckpoint(task *model.Task) (*mediaCheckpoint, error) {
-	plain, err := s.decryptSettingSecret(task.MediaRecoveryJSON)
+	ciphertext, _, err := repository.TaskMediaCheckpointCiphertext(task.MediaRecoveryJSON)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := s.decryptSettingSecret(ciphertext)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +84,19 @@ func (s *Service) decodeMediaCheckpoint(task *model.Task) (*mediaCheckpoint, err
 	return &checkpoint, nil
 }
 
+func checkpointResourceIDs(checkpoint *mediaCheckpoint) []string {
+	ids := map[string]struct{}{}
+	for _, item := range checkpoint.Items {
+		if item.ResourceID != "" {
+			ids[item.ResourceID] = struct{}{}
+		}
+	}
+	// Provider references may already be local URLs or nested local metadata.
+	encoded, _ := json.Marshal(checkpoint)
+	_ = assets.CollectOwnedDocumentReferences(string(encoded), ids)
+	return assets.SortedIDs(ids)
+}
+
 func (s *Service) saveMediaCheckpoint(task *model.Task, checkpoint *mediaCheckpoint, stage string) error {
 	data, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -88,7 +106,7 @@ func (s *Service) saveMediaCheckpoint(task *model.Task, checkpoint *mediaCheckpo
 	if err != nil {
 		return err
 	}
-	return s.repo.SaveTaskMediaCheckpoint(task, encoded, stage)
+	return s.repo.SaveTaskMediaCheckpoint(task, encoded, stage, checkpointResourceIDs(checkpoint))
 }
 
 func recoverProtocolMedia(ctx context.Context, config providerConfig, mode string, references []protocol.MediaReference) (map[string]interface{}, bool, error) {
@@ -368,7 +386,7 @@ func (s *Service) RecoverTaskMedia(userID, id string) (*model.Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.RequeueTaskMediaRecovery(task, encrypted); err != nil {
+	if err := s.repo.RequeueTaskMediaRecovery(task, encrypted, checkpointResourceIDs(checkpoint)); err != nil {
 		if errors.Is(err, repository.ErrTaskStateConflict) {
 			if latest, readErr := s.repo.TaskForUser(userID, task.ID); readErr == nil && (latest.Status == model.TaskStatusQueued || latest.Status == model.TaskStatusRunning || latest.Status == model.TaskStatusSucceeded) {
 				return taskForOutput(*latest), nil
@@ -413,12 +431,9 @@ func (s *Service) finishTaskMediaRecovery(task *model.Task, result map[string]in
 		return s.handleMediaRecoveryFailure(task, err)
 	}
 	started := time.Now()
-	if _, err = s.finalizeCharacterTurnaroundTask(*task, result); err == nil {
-		var encoded []byte
-		encoded, err = json.Marshal(result)
-		if err == nil {
-			err = s.saveTaskCompletionWithinStorageQuota(task, encoded, nil, false)
-		}
+	encoded, err := json.Marshal(result)
+	if err == nil {
+		err = s.saveTaskCompletionWithinStorageQuota(task, encoded, nil, false)
 	}
 	s.logMediaStage(*task, "register", started, err)
 	if err != nil {

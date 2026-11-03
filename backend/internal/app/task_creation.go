@@ -28,6 +28,10 @@ type taskAdmission struct {
 // 这是常规模型生成任务的写入口：客户端只提交创作意图，模型、渠道、协议和计价信息必须由服务端目录重新解析，
 // 以保证“可展示的模型”与“实际执行及扣费的模型”来自同一份有效配置。
 func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task, error) {
+	metadata, _ := req.Input["metadata"].(map[string]any)
+	if !req.profileAnalysis && (strings.TrimSpace(req.Operation) == profileAnalysisOperation || metadata["operation"] == profileAnalysisOperation || metadata["profileAnalysis"] != nil) {
+		return nil, profileError(400, "invalid_request")
+	}
 	if req.admission == nil && (strings.HasPrefix(req.Operation, "cloud_agent") || req.Input["cloudAgent"] != nil) {
 		return nil, BadAuthRequest("Agent 任务必须通过 Agent 接口创建")
 	}
@@ -35,9 +39,6 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		return nil, &AppError{Status: 503, Code: 503, Message: "服务正在维护，暂不接受新的生成任务", Retryable: true}
 	}
 	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		return nil, errors.New("prompt is required")
-	}
 	taskType := strings.TrimSpace(req.Type)
 	if err := validateTaskType(taskType); err != nil {
 		return nil, err
@@ -45,6 +46,22 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	normalizedInput, err := normalizeTaskInput(req.Input)
 	if err != nil {
 		return nil, err
+	}
+	if err := s.prepareProjectImageTask(userID, req.ProjectID, taskType, normalizedInput); err != nil {
+		return nil, err
+	}
+	// 视频处理（kind=processing）以源视频为主体，不要求 prompt；提示词由服务端生成，
+	// 源时长、帧率档和处理参数在这里按资源记录与后台配置重算。
+	processing, err := s.prepareVideoProcessingTask(userID, normalizedInput)
+	if err != nil {
+		return nil, err
+	}
+	if processing != nil {
+		prompt = processing.Prompt
+		normalizedInput["prompt"] = prompt
+	}
+	if prompt == "" {
+		return nil, errors.New("prompt is required")
 	}
 	// Fail admission before queueing or charging; the worker validates again in
 	// case a tool is deleted or its visibility changes while queued.
@@ -89,6 +106,15 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		}
 	}
 
+	prompt, err = s.prepareStoryboardAssetTask(userID, req.ProjectID, taskType, req.Operation, prompt, normalizedInput)
+	if err != nil {
+		return nil, err
+	}
+	if req.profileAnalysis {
+		if err := s.validateProfileModel(userID, normalizedInput, routed); err != nil {
+			return nil, err
+		}
+	}
 	if strings.HasPrefix(taskType, "video_") && !hasExecutableProviderVideoConfig(normalizedInput) {
 		if mode, _ := normalizedInput["mode"].(string); mode != "video" {
 			return nil, errors.New("视频任务必须使用 video 模式")
@@ -100,6 +126,12 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		return s.createTextReplayTask(userID, req, normalizedInput)
 	}
 	if err := s.requireCustomChannelsForTaskInput(normalizedInput); err != nil {
+		return nil, err
+	}
+	if err := s.prepareProjectImageTask(userID, req.ProjectID, taskType, normalizedInput); err != nil {
+		return nil, err
+	}
+	if err := s.validateProjectImageReferenceCapability(normalizedInput); err != nil {
 		return nil, err
 	}
 	if err := s.ValidateTaskCapability(normalizedInput); err != nil {
@@ -117,7 +149,7 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		return nil, err
 	}
 	if activeTasks >= int64(policy.Task.ActiveTaskLimit) {
-		return nil, BadAuthRequest(fmt.Sprintf("同时排队或运行的任务最多 %d 个，请等待已有任务完成", policy.Task.ActiveTaskLimit))
+		return nil, taskActiveLimitError(policy.Task.ActiveTaskLimit)
 	}
 	// 媒体任务在扣费和调用上游前确认账号文件容量，避免容量已满仍然计费却无法回存产物。
 	// 调用方已持锁时走不加锁的版本；这里不能再抢同一把 storageMu。
@@ -135,6 +167,10 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		workbenchKind = workbenchKindFromTaskInput(normalizedInput, taskType)
 	}
 	task := model.Task{ID: newID(), UserID: userID, TraceID: req.TraceID, RequestID: req.RequestID, ProjectID: req.ProjectID, Type: taskType, WorkbenchKind: workbenchKind, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
+	if strings.TrimSpace(req.creationSubmissionID) != "" {
+		submissionID := strings.TrimSpace(req.creationSubmissionID)
+		task.CreationSubmissionID = &submissionID
+	}
 	if req.admission != nil {
 		task.ID = req.admission.ID
 		task.AgentRunID = req.admission.AgentRunID
@@ -212,7 +248,7 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	}
 	err = s.createTaskWithinStorageQuota(&task, billingOrder, policy)
 	if errors.Is(err, repository.ErrActiveTaskLimit) {
-		return nil, BadAuthRequest(fmt.Sprintf("同时排队或运行的任务最多 %d 个，请等待已有任务完成", policy.Task.ActiveTaskLimit))
+		return nil, taskActiveLimitError(policy.Task.ActiveTaskLimit)
 	}
 	if errors.Is(err, repository.ErrInsufficientCredits) {
 		return nil, BadAuthRequest("积分不足，请先使用兑换码充值")

@@ -16,7 +16,7 @@ func TestSwitchTaskLogicalRouteUpdatesCostWithoutChangingUnifiedSales(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Task{}, &model.BillingOrder{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Task{}, &model.BillingOrder{}); err != nil {
 		t.Fatal(err)
 	}
 	task := model.Task{ID: "task", UserID: "user", Status: model.TaskStatusRunning, RouteID: "old-route"}
@@ -172,7 +172,7 @@ func TestCreateTaskRejectsArchivedLogicalModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.LogicalModel{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.LogicalModel{}, &model.Task{}); err != nil {
 		t.Fatal(err)
 	}
 	repo := New(db)

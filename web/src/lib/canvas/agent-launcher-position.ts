@@ -36,3 +36,36 @@ export function moveAgentLauncher(gesture: AgentLauncherGesture, x: number, y: n
         position: clampAgentLauncherPosition(dragged ? { right: gesture.start.right - dx, bottom: gesture.start.bottom - dy } : gesture.start, viewport, size),
     };
 }
+
+export type AgentLauncherProtectedRect = { left: number; top: number; right: number; bottom: number };
+
+// A nearest free axis-aligned rectangle touches the preferred point, viewport
+// edge or an obstacle boundary. Search these finite candidates, never pixels.
+export function avoidAgentLauncherTargets(preferred: AgentLauncherPosition, viewport: AgentLauncherViewport, size: AgentLauncherViewport, targets: AgentLauncherProtectedRect[], footprint = { left: -12, top: -12, right: size.width + 12, bottom: size.height + 46 }): AgentLauncherPosition | null {
+    const position = clampAgentLauncherPosition(preferred, viewport, size);
+    const min = clampAgentLauncherPosition({ right: 0, bottom: 0 }, viewport, size);
+    const max = clampAgentLauncherPosition({ right: viewport.width, bottom: viewport.height }, viewport, size);
+    const origin = { x: viewport.width - position.right - size.width, y: viewport.height - position.bottom - size.height };
+    const bounds = { left: viewport.width - max.right - size.width, right: viewport.width - min.right - size.width, top: viewport.height - max.bottom - size.height, bottom: viewport.height - min.bottom - size.height };
+    const blocked = targets.map((rect) => ({ left: rect.left - footprint.right, right: rect.right - footprint.left, top: rect.top - footprint.bottom, bottom: rect.bottom - footprint.top }));
+    const clear = (x: number, y: number) => !blocked.some((rect) => x > rect.left && x < rect.right && y > rect.top && y < rect.bottom);
+    if (clear(origin.x, origin.y)) return position;
+    const xs = new Set([origin.x, bounds.left, bounds.right]);
+    const ys = new Set([origin.y, bounds.top, bounds.bottom]);
+    for (const rect of blocked) {
+        if (rect.left >= bounds.left && rect.left <= bounds.right) xs.add(rect.left);
+        if (rect.right >= bounds.left && rect.right <= bounds.right) xs.add(rect.right);
+        if (rect.top >= bounds.top && rect.top <= bounds.bottom) ys.add(rect.top);
+        if (rect.bottom >= bounds.top && rect.bottom <= bounds.bottom) ys.add(rect.bottom);
+    }
+    let best: AgentLauncherPosition | null = null;
+    let distance = Infinity;
+    for (const x of xs) for (const y of ys) {
+        const nextDistance = (x - origin.x) ** 2 + (y - origin.y) ** 2;
+        if (nextDistance < distance && clear(x, y)) {
+            best = { right: viewport.width - x - size.width, bottom: viewport.height - y - size.height };
+            distance = nextDistance;
+        }
+    }
+    return best;
+}

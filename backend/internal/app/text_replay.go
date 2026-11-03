@@ -60,9 +60,9 @@ func (s *Service) CompleteTextReplayTask(userID string, taskID string, text stri
 	if len([]byte(text)) > textReplayMaxTaskBytes {
 		return nil, BadAuthRequest("文本内容过大")
 	}
-	if _, err := s.repo.TaskForUser(userID, taskID); err != nil {
-		return nil, err
-	}
+	task, err := s.repo.TaskForUser(userID, taskID)
+	if err != nil { return nil, err }
+	if task.Operation == profileAnalysisOperation { return nil, profileError(400, "invalid_request") }
 	resultJSON, _ := json.Marshal(map[string]any{"mode": "text", "text": text})
 	completed, err := s.repo.CompleteTextReplayTask(userID, taskID, string(resultJSON), time.Now())
 	if err != nil {
@@ -82,6 +82,7 @@ func (s *Service) AppendTaskTextDelta(userID string, taskID string, content stri
 	if err != nil {
 		return nil, err
 	}
+	if task.Operation == profileAnalysisOperation { return nil, profileError(400, "invalid_request") }
 	if capabilityFromTaskType(task.Type) != "text" {
 		return nil, BadAuthRequest("只有文本生成任务支持增量回放")
 	}
@@ -108,6 +109,7 @@ func (s *Service) TaskTextReplay(userID string, taskID string, after int64) (*Te
 	if err != nil {
 		return nil, err
 	}
+	if task.Operation == profileAnalysisOperation { return nil, profileError(400, "invalid_request") }
 	deltas, err := s.repo.TaskTextDeltas(userID, taskID, after, 1000)
 	if err != nil {
 		return nil, err

@@ -86,7 +86,7 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
     };
 }
 
-export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAssetReferenceContext, options: { dialogue?: string } = {}) {
+export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAssetReferenceContext, options: { dialogue?: string; mode?: "image" | "video" } = {}) {
     const imageLabelByAssetId = new Map(context.mentionReferences.map((reference, index) => [reference.assetId, `图片${index + 1}`]));
     const unresolved = new Set<string>();
     const resolved = prompt.replace(/@\[asset:([^\]]+)\]/g, (token, assetId: string) => {
@@ -99,7 +99,7 @@ export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAsset
     });
     if (unresolved.size) throw new Error(`提示词中的 ${Array.from(unresolved).join("、")} 未绑定到当前镜头，请重新选择资产或删除引用`);
     const dialogueContext = withShotDialogue(context.assetReferences, options.dialogue);
-    const assetBlock = compileShotAssetReferencePrompt(dialogueContext.references);
+    const assetBlock = compileShotAssetReferencePrompt(dialogueContext.references, { includeVoice: options.mode !== "image" });
     const dialogueBlock = dialogueContext.unassignedDialogue ? `【镜头台词】\n\n${dialogueContext.unassignedDialogue}` : "";
     return [resolved.trim(), assetBlock, dialogueBlock].filter(Boolean).join("\n\n");
 }
@@ -118,14 +118,14 @@ export function ensureShotAssetMentionPrompt(prompt: string, references: Array<P
     return [value, block("【角色参考】", characters), block("【场景与道具参考】", otherAssets)].filter(Boolean).join("\n\n");
 }
 
-export function compileShotAssetReferencePrompt(references: ShotPromptAssetReference[]) {
+export function compileShotAssetReferencePrompt(references: ShotPromptAssetReference[], options: { includeVoice?: boolean } = {}) { const includeVoice = options.includeVoice ?? true;
     if (!references.length) return "";
     const lines = references.flatMap((reference) => {
         const visualLabel = reference.category === "character" ? "人物参考" : `${projectAssetCategoryLabel(reference.category)}参考`;
-        const media = [`${visualLabel}：图片${reference.imageIndex}`, reference.audioIndex ? `声音参考：音频${reference.audioIndex}` : ""].filter(Boolean).join("；");
+        const media = [`${visualLabel}：图片${reference.imageIndex}`, includeVoice && reference.audioIndex ? `声音参考：音频${reference.audioIndex}` : ""].filter(Boolean).join("；");
         return [
             `- ${reference.title}：${media}`,
-            reference.voiceDescription ? `  声音画像：${reference.voiceDescription}` : "",
+            includeVoice && reference.voiceDescription ? `  声音画像：${reference.voiceDescription}` : "",
             reference.dialogue ? `  镜头台词：${reference.dialogue}` : "",
         ].filter(Boolean);
     });
@@ -135,7 +135,7 @@ export function compileShotAssetReferencePrompt(references: ShotPromptAssetRefer
 function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetReference): ReferenceImage | undefined {
     const boundRepresentations = reference?.referencedVersion?.representations || [];
     const representation = preferredVisualRepresentation(boundRepresentations)
-        || (asset.character ? preferredVisualRepresentation(asset.character.representations) : undefined);
+        || (!reference?.referencedVersion && asset.character ? preferredVisualRepresentation(asset.character.representations) : undefined);
     if (representation) {
         return {
             id: asset.id,
@@ -145,6 +145,10 @@ function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetRe
             url: resourceFileUrl(representation.resourceId),
             storageKey: resourceStorageKey(representation.resourceId),
         };
+    }
+    if (reference?.referencedVersion) {
+        const resourceId = reference.referencedVersion.referenceImages?.[0]?.resourceId || reference.referencedVersion.referenceImage?.resourceId;
+        return resourceId ? { id: asset.id, name: asset.title, type: "image/*", dataUrl: "", url: resourceFileUrl(resourceId), storageKey: resourceStorageKey(resourceId) } : undefined;
     }
     if (asset.mediaType !== "image" || !asset.storageKey) return undefined;
     const resourceId = resourceIdFromStorageKey(asset.storageKey);

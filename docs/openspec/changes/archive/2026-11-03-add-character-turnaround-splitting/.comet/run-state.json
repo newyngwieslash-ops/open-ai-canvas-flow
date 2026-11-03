@@ -1,0 +1,17 @@
+{
+  "runId": "11f11293-585a-4328-b008-c2b9638f377e",
+  "skill": "comet-classic",
+  "skillVersion": "1",
+  "skillHash": "226b80286e81437eae2986177a26071a9663b1095cfc14cab773f05fbe01493f",
+  "orchestration": "deterministic",
+  "currentStep": "completed",
+  "iteration": 8,
+  "pending": null,
+  "pendingRef": ".comet/pending-action.json",
+  "trajectoryRef": ".comet/trajectory.jsonl",
+  "contextRef": ".comet/context.md",
+  "artifactsRef": ".comet/artifacts.json",
+  "checkpointRef": ".comet/checkpoint.json",
+  "status": "completed",
+  "retries": {}
+}

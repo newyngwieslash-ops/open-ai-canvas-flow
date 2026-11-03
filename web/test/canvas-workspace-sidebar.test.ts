@@ -119,3 +119,10 @@ test("editor rail and expanded panel share one restrained glass surface without 
     expect(styles).not.toContain("backdrop-filter: none");
     expect(styles).not.toContain("box-shadow: none");
 });
+
+test("closed workspace does not evaluate node search", () => {
+    const panel = component("canvas-workspace-panel.tsx");
+    expect(panel).toContain('open && tab === "nodes"');
+    expect(panel).toContain("results={nodeSearchResults}");
+    expect(panel).not.toContain("results={searchCanvasNodes(");
+});

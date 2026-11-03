@@ -70,7 +70,7 @@ func TestCreateProjectReturnsConflictForDuplicateUserName(t *testing.T) {
 // testCreateProjectNameConflict 验证名称冲突按用户区分，且不误判项目 ID 冲突。
 func testCreateProjectNameConflict(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.AutoMigrate(&model.Project{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Project{}); err != nil {
 		t.Fatal(err)
 	}
 	repo := New(db)

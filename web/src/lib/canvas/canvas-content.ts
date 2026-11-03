@@ -1,10 +1,32 @@
 import { canonicalize } from "json-canonicalize";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 
+type CanvasNode = CanvasProject["nodes"][number];
+type ContentNode = Omit<CanvasNode, "updatedAt">;
+const contentNodeCache = new WeakMap<CanvasNode, ContentNode>();
+const contentNodeArrayCache = new WeakMap<CanvasProject["nodes"], ContentNode[]>();
+
+function stableContentNodes(nodes: CanvasProject["nodes"]) {
+    const cached = contentNodeArrayCache.get(nodes);
+    if (cached) return cached;
+    const projected = nodes.map((source) => {
+        const existing = contentNodeCache.get(source);
+        if (existing) return existing;
+        const { updatedAt: _updatedAt, ...node } = source;
+        contentNodeCache.set(source, node);
+        return node;
+    });
+    contentNodeArrayCache.set(nodes, projected);
+    return projected;
+}
+
 // These fields describe local viewing / synchronization, not an edit to the document.
 export function canvasContentSnapshot(project: CanvasProject) {
     const { viewport: _viewport, updatedAt: _updatedAt, revision: _revision, remoteContentHash: _hash, ...content } = project;
-    return { ...content, projectId: content.projectId || undefined };
+    // 节点顶层 updatedAt 是写入簿记（服务端 canvasNodeBookkeepingFields 同样跳过 CAS 基线），
+    // 任务观察者/保存回写会反复刷新它；算内容会把纯时间戳翻转判脏造成保存死循环。
+    const nodes = stableContentNodes(content.nodes);
+    return { ...content, nodes, projectId: content.projectId || undefined };
 }
 
 export function sameCanvasContent(left: CanvasProject | undefined, right: CanvasProject | undefined) {

@@ -159,3 +159,58 @@ test("background generation submission returns after task creation without waiti
     expect(submitted).toBe(task);
     expect(waitCalls).toBe(0);
 });
+
+test("image mode omits voice metadata and only previz stage appends monochrome sketch suffix", async () => {
+    const workbenchSource = await Bun.file(new URL("../src/pages/projects/detail/workflow-production-workbench.tsx", import.meta.url)).text();
+    const imageGenSource = await Bun.file(new URL("../src/pages/projects/detail/workflow-image-generation.ts", import.meta.url)).text();
+    expect(workbenchSource).toContain("prepareWorkflowImageSubmission");
+    expect(imageGenSource).toContain('stage === "previz" ? "黑白分镜草图，清晰动作节拍，电影构图" : ""');
+    expect(workbenchSource).toContain("resolveShotAssetMentionPrompt(basePrompt, shotAssetReferenceContext, { dialogue: values.dialogue, mode })");
+
+    const domainSource = await Bun.file(new URL("../src/lib/canvas/canvas-project-domain.ts", import.meta.url)).text();
+    expect(domainSource).toContain("projectAssetRefs（本镜引用的项目资产数组");
+
+    const detail = {
+        assets: [
+            {
+                id: "character-1",
+                title: "张天昊",
+                category: "character",
+                mediaType: "entity",
+                primaryVersionId: "character-version-1",
+                character: {
+                    versionId: "character-version-1",
+                    definition: { voiceLanguage: "普通话", voiceAge: "青年男性" },
+                    representations: [{ id: "rep-1", resourceId: "character-image-1", mediaType: "image/png", role: "primary" }],
+                    voice: { profile: { sampleResourceId: "character-audio-1", language: "普通话", timbre: "沉稳" }, instructions: "低沉" },
+                },
+            },
+            {
+                id: "scene-1",
+                title: "烈阳世家剑庐",
+                category: "environment",
+                mediaType: "image",
+                primaryVersionId: "scene-version-1",
+                storageKey: "resource:scene-image-1",
+            },
+        ],
+        shotReferences: [
+            { shotId: "shot-1", assetVersionId: "character-version-1", status: "linked" },
+            { shotId: "shot-1", assetVersionId: "scene-version-1", status: "linked" },
+        ],
+    } as ProjectDetail;
+
+    const context = buildShotAssetReferenceContext(detail, "shot-1");
+    const imagePrompt = resolveShotAssetMentionPrompt("张天昊站在 @[asset:scene-1]", context, { dialogue: "张天昊：今日试剑。", mode: "image" });
+    expect(imagePrompt).toContain("- 张天昊：人物参考：图片1");
+    expect(imagePrompt).toContain("- 烈阳世家剑庐：场景参考：图片2");
+    expect(imagePrompt).toContain("镜头台词：张天昊：今日试剑。");
+    expect(imagePrompt).not.toContain("声音参考");
+    expect(imagePrompt).not.toContain("声音画像");
+
+    expect(workbenchSource).toContain('className="workflow-timeline-rows"');
+    expect(workbenchSource).toContain('{ type: "storyboard", label: "分镜图", artifact: storyboard }');
+    expect(workbenchSource).toContain('{ type: "action_board", label: "动作预演", artifact: previz }');
+    expect(workbenchSource).not.toContain("const preview = video?.resourceId ? video : previz?.resourceId ? previz : storyboard?.resourceId");
+    expect(workbenchSource).toContain('className="workflow-timeline-resizer"');
+});

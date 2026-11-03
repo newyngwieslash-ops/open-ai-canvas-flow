@@ -1,4 +1,5 @@
 import { App, Button, Dropdown, Popconfirm } from "antd";
+import { ASSET_DELETING_MESSAGE, assertAssetAvailableForReference } from "@/lib/asset-availability";
 import type { MenuProps } from "antd";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { Check, ChevronDown, FileText, FolderOpen, HardDrive, Image as ImageIcon, LoaderCircle, Music2, Puzzle, RotateCcw, Search, Trash2, Upload, UserRound, Video } from "lucide-react";
@@ -14,7 +15,7 @@ import { PaginationBar } from "@/components/layout/workspace-page";
 import { cn } from "@/lib/utils";
 import type { ExternalAssetPickerReference } from "@/lib/plugins/plugin-types";
 import { flushAssetStorePersistence, useAssetStore, type Asset } from "@/stores/use-asset-store";
-import { deleteAssetsWithRemoteSync, loadAssetLibraryPage, localSavedRemotePendingMessage, saveRemoteUserDataNow } from "@/services/user-data-sync";
+import { deleteAssetsWithRemoteSync, loadAssetsForUse, loadAssetLibraryPage, localSavedRemotePendingMessage, saveRemoteUserDataNow } from "@/services/user-data-sync";
 
 export type AssetPickerMediaKind = "image" | "video" | "audio" | "text";
 
@@ -168,7 +169,7 @@ export function AssetLibraryPickerModal({
     const remoteItems = useMemo<AssetLibraryPickerItem[]>(
         () =>
             (remoteQuery.data?.assets || [])
-                .filter((asset) => asset.kind !== "model" && (asset.kind !== "entity" || allowCharacters))
+                .filter((asset) => asset.kind !== "model" && (asset.kind !== "entity" || (allowCharacters && asset.category === "character")))
                 .map((asset) =>
                     remoteAssetToPickerItem(
                         asset,
@@ -181,6 +182,11 @@ export function AssetLibraryPickerModal({
     );
     const uploadInputRef = useRef<HTMLInputElement>(null);
     const pickedRemoteRef = useRef(new Map<string, AssetLibraryPickerItem>());
+    useEffect(() => {
+        for (const item of remoteItems) {
+            if (pickedRemoteRef.current.has(item.id)) pickedRemoteRef.current.set(item.id, item);
+        }
+    }, [remoteItems]);
     const initialSelectedIdsRef = useRef(initialSelectedIds);
     const itemsRef = useRef(items);
     initialSelectedIdsRef.current = initialSelectedIds;
@@ -243,14 +249,10 @@ export function AssetLibraryPickerModal({
             return useRemoteItems || !query || [item.title, item.searchText || "", item.description || ""].join(" ").toLowerCase().includes(query);
         });
     }, [category, folderId, keyword, sourceItems, useRemoteItems]);
-    const selectedIds = useMemo(
-        () =>
-            Array.from(selected).filter((id) => {
-                const item = allItems.find((entry) => entry.id === id);
-                return !item?.disabledReason;
-            }),
-        [allItems, selected],
-    );
+    const liveAssets = useAssetStore((state) => state.assets);
+    const selectionItems = new Map([...pickedRemoteRef.current.values(), ...allItems, ...remoteItems].map((item) => [item.id, item]));
+    const unavailable = (item: AssetLibraryPickerItem | undefined) => !item || !!item.disabledReason || item.asset?.status === "deleting" || liveAssets.some((asset) => asset.id === item.id && asset.status === "deleting");
+    const selectedIds = Array.from(selected).filter((id) => !unavailable(selectionItems.get(id)));
     const archivedSelectedIds = useMemo(() => selectedIds.filter((id) => allItems.find((item) => item.id === id)?.archived), [allItems, selectedIds]);
 
     useEffect(() => {
@@ -296,7 +298,7 @@ export function AssetLibraryPickerModal({
     };
 
     const toggle = (item: AssetLibraryPickerItem) => {
-        if (item.disabledReason || working) return;
+        if (unavailable(item) || working) return;
         // 远端分页条目翻页后就不在列表里了；选中时记下来，确认时仍能转成插入内容。
         if (item.asset && !allItems.some((known) => known.id === item.id)) pickedRemoteRef.current.set(item.id, item);
         setError("");
@@ -314,8 +316,15 @@ export function AssetLibraryPickerModal({
         setWorking(true);
         setError("");
         try {
-            const known = new Set(allItems.map((item) => item.id));
-            await onConfirm(selectedIds, [...allItems, ...[...pickedRemoteRef.current.values()].filter((item) => !known.has(item.id))]);
+            const selectedItems = selectedIds.map((id) => selectionItems.get(id)!);
+            const assetIds = selectedItems.filter((item) => item.asset && !item.external).map((item) => item.id);
+            if (userId && assetIds.length) await loadAssetsForUse(assetIds, { refresh: true });
+            const current = new Map(useAssetStore.getState().assets.map((asset) => [asset.id, asset]));
+            const confirmed = selectedItems.map((item) => {
+                if (item.asset) assertAssetAvailableForReference(item.asset, current.get(item.id));
+                return item.asset && current.has(item.id) ? { ...item, asset: current.get(item.id) } : item;
+            });
+            await onConfirm(selectedIds, confirmed);
         } catch (reason) {
             setError(reason instanceof Error ? reason.message : "素材操作失败，请重试");
         } finally {
@@ -327,11 +336,13 @@ export function AssetLibraryPickerModal({
         if (!archivedSelectedIds.length) return;
         setWorking(true);
         try {
+            if (userId) await loadAssetsForUse(archivedSelectedIds, { refresh: true });
+            if (useAssetStore.getState().assets.some((asset) => archivedSelectedIds.includes(asset.id) && asset.status === "deleting")) throw new Error(ASSET_DELETING_MESSAGE);
             for (const id of archivedSelectedIds) {
                 useAssetStore.getState().updateAsset(id, { status: "confirmed" });
             }
             await flushAssetStorePersistence();
-            await saveRemoteUserDataNow();
+            await saveRemoteUserDataNow([]);
             setSelected(new Set());
             message.success(`已还原 ${archivedSelectedIds.length} 个素材至素材库`);
             setCategory("all");
@@ -349,7 +360,7 @@ export function AssetLibraryPickerModal({
         try {
             await deleteAssetsWithRemoteSync(archivedSelectedIds);
             setSelected(new Set());
-            message.success(`已彻底删除 ${archivedSelectedIds.length} 个素材`);
+            message.success(`已受理 ${archivedSelectedIds.length} 个素材的删除请求`);
         } catch (err) {
             message.error(err instanceof Error ? err.message : "删除失败");
         } finally {
@@ -364,7 +375,7 @@ export function AssetLibraryPickerModal({
         try {
             await deleteAssetsWithRemoteSync(toDelete.map((item) => item.id));
             setSelected(new Set());
-            message.success(`已删除${remoteEnabled ? "当前页" : "回收站"} ${toDelete.length} 个素材`);
+            message.success(`已受理${remoteEnabled ? "当前页" : "回收站"} ${toDelete.length} 个素材的删除请求`);
             setCategory("all");
         } catch (err) {
             message.error(err instanceof Error ? err.message : "清空回收站失败");
@@ -561,7 +572,7 @@ export function AssetLibraryPickerModal({
                                     <span>素材会按页加载，不会一次下载整个项目库。</span>
                                 </div>
                             ) : visibleItems.length ? (
-                                visibleItems.map((item) => <PickerCard key={item.id} item={item} selected={selected.has(item.id)} onToggle={() => toggle(item)} />)
+                                visibleItems.map((item) => <PickerCard key={item.id} item={unavailable(item) ? { ...item, disabledReason: item.disabledReason || ASSET_DELETING_MESSAGE } : item} selected={selectedIds.includes(item.id)} onToggle={() => toggle(item)} />)
                             ) : (
                                 <div className="asset-picker-empty">
                                     <FolderOpen />
@@ -655,7 +666,7 @@ export function remoteAssetToPickerItem(asset: Asset, known: AssetLibraryPickerI
         kindLabel: asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : asset.kind === "audio" ? "音频" : asset.kind === "entity" ? "角色" : "文本",
         searchText: (asset.tags ?? []).join(" "),
         ...known,
-        disabledReason: known?.disabledReason || (!known && !acceptRemoteItems ? "此素材不适用于当前操作" : disabledReason),
+        disabledReason: asset.status === "deleting" || known?.asset?.status === "deleting" ? ASSET_DELETING_MESSAGE : known?.disabledReason || (!known && !acceptRemoteItems ? "此素材不适用于当前操作" : disabledReason),
         asset,
     };
 }

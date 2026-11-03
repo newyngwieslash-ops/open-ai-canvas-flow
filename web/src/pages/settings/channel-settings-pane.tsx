@@ -11,6 +11,7 @@ import {
     createModelChannel,
     createFisherH3Channel,
     createMetasoChannel,
+    createYuxiboxChannel,
     defaultBaseUrlForApiFormat,
     filterModelsByCapability,
     modelOptionsFromChannels,
@@ -62,8 +63,8 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
         updateChannel(channel.id, { apiFormat, interfaceType: undefined, baseUrl });
     };
 
-    const addChannel = (preset?: "fisher" | "metaso") => {
-        const channel = preset === "fisher" ? createFisherH3Channel() : preset === "metaso" ? createMetasoChannel() : createModelChannel({ name: `渠道 ${userChannels.length + 1}` });
+    const addChannel = (preset?: "fisher" | "metaso" | "yuxibox") => {
+        const channel = preset === "fisher" ? createFisherH3Channel() : preset === "metaso" ? createMetasoChannel() : preset === "yuxibox" ? createYuxiboxChannel() : createModelChannel({ name: `渠道 ${userChannels.length + 1}` });
         updateChannels([...config.channels, channel]);
         setNewChannelId(channel.id);
         setEditingChannelId(channel.id);
@@ -185,6 +186,7 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
                     <Button className="h-10 flex-1 sm:h-8 sm:flex-none" type="primary" icon={<Plus className="size-4" />} onClick={() => addChannel()}>新增渠道</Button>
                     <Button className="h-10 sm:h-8" onClick={() => addChannel("fisher")}>添加 Fisher-H3</Button>
                     <Button className="h-10 sm:h-8" onClick={() => addChannel("metaso")}>添加密塔 H3</Button>
+                    <Button className="h-10 sm:h-8" onClick={() => addChannel("yuxibox")}>添加 yuxibox Seedance</Button>
                 </div>
             </div>
             {onOpenRunningHub ? <section className="settings-section mb-3">

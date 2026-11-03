@@ -247,7 +247,15 @@ function containsInfrastructureDetails(value: string) {
 function resourceStorageFailureMessage(value: string) {
     if (!value) return "";
     if (/\bUserDisable\b/i.test(value)) return "对象存储账号已停用，请检查或更换对象存储配置。";
-    if (/(?:参考(?:图片|媒体)上传失败|OSS 上传失败|对象存储|腾讯云 COS|七牛云)/i.test(value)) {
+    // 出站拦截和读取失败都不是存储配置问题，先于上传规则判断，
+    // 否则"七牛云 Kodo 读取失败"会被误报成"上传失败"。
+    if (/(?:不允许访问本机、内网或链路本地地址|不允许访问保留地址或特殊用途地址|不允许访问本机或内网地址)/.test(value)) {
+        return "读取参考素材失败：后端出站连接被安全策略拦截（域名被解析到内网地址）。请联系管理员检查代理与 DNS，或按域名放行对象存储主机。";
+    }
+    if (/(?:(?:七牛云 Kodo|腾讯云 COS|阿里云 OSS|S3|OSS|CDN) 读取失败|读取(?:任务参考|参考)(?:资源|素材)失败)/i.test(value)) {
+        return "读取参考素材失败，请检查对象存储读取配置与网络后重试。";
+    }
+    if (/(?:参考(?:图片|媒体)上传失败|(?:OSS|COS|S3) 上传失败|上传\s*(?:OSS|COS|S3)\s*失败|对象存储|腾讯云 COS|七牛云)/i.test(value)) {
         return "参考素材上传到对象存储失败，请检查对象存储配置后重试。";
     }
     return "";

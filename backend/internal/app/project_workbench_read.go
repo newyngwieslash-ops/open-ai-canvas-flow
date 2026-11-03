@@ -66,6 +66,8 @@ type ProjectShotAssetReference struct {
 }
 
 type ProjectShotAssetReferenceVersion struct {
+	ReferenceImages []ProjectReferenceImage          `json:"referenceImages,omitempty"`
+	ReferenceImage  *ProjectReferenceImage           `json:"referenceImage,omitempty"`
 	ID              string                           `json:"id"`
 	AssetID         string                           `json:"assetId"`
 	Version         int                              `json:"version"`
@@ -309,10 +311,23 @@ func (s *Service) ProjectUnitWorkspace(userID string, projectID string, unitID s
 		if representations == nil {
 			representations = []CharacterRepresentationSummary{}
 		}
+		var referenceImages []ProjectReferenceImage
+		for _, original := range referenceImagesFromDefinition(version.DefinitionJSON) {
+			if resource, err := s.projectImageResource(userID, original.ResourceID); err == nil {
+				referenceImages = append(referenceImages, ProjectReferenceImage{ResourceID: resource.ID})
+			}
+		}
+		var referenceImage *ProjectReferenceImage
+		if len(referenceImages) > 0 {
+			first := referenceImages[0]
+			referenceImage = &first
+		}
 		result.ShotReferences = append(result.ShotReferences, ProjectShotAssetReference{
 			ShotAssetReference: reference,
 			Asset:              asset,
 			ReferencedVersion: ProjectShotAssetReferenceVersion{
+				ReferenceImages: referenceImages,
+				ReferenceImage:  referenceImage,
 				ID: version.ID, AssetID: version.AssetID, Version: version.Version, Representations: representations,
 			},
 		})

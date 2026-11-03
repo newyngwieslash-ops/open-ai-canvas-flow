@@ -6,7 +6,8 @@ import { bindingForConnectedNode, storyboardComposerContent, storyboardRowRefere
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { isFrameNode } from "@/lib/canvas/canvas-frame";
-import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
+import { imageNodeSizeFromRatio, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
+import { batchCellAnchor, type BatchScroll } from "@/lib/canvas/canvas-batch-references";
 import { canvasNodeMentionToken, canvasResourceMentionToken, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { batchReferenceHandleY } from "@/lib/canvas/canvas-batch-table";
@@ -115,7 +116,8 @@ export function storyboardRowsOutputContract(requirement: string) {
         "  narrativeIntent、viewerPOV、performanceBlocking、shotSize（景别）、emotion、lightingAndAtmosphere、",
         "  audioEffects、camera、motion、timeBeats、imageGenerationPrompt（首帧画面提示词）、",
         "  videoMotionPrompt（运镜与结尾状态）、continuityOut、negativePrompt、",
-        "  mustHave（数组，最多 3 项）、optionalDetails（数组）。",
+        "  mustHave（数组，最多 3 项）、optionalDetails（数组）、",
+        "  projectAssetRefs（本镜引用的项目资产数组，每项为 {\"assetId\": string, \"category\": \"character\"|\"environment\"|\"prop\"}；包含本镜所在场景及出场角色/道具，无引用时填 []）。",
         "- 镜头数量以完整覆盖剧情因果、人物关系和关键台词为准，不要为压缩数量删减关键情节。",
     ].join("\n");
 }
@@ -258,7 +260,8 @@ export function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<Canvas
     const nextPatch = resetGenerationParamsOnModelSwitch(node, safePatch);
     const next = synchronizeGenerationSpec(node, nextPatch);
     const spec = node.type === CanvasNodeType.Video ? NODE_DEFAULT_SIZE[CanvasNodeType.Video] : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-    const size = typeof safePatch.size === "string" && !node.metadata?.content ? nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;
+    const size = typeof safePatch.size === "string" && !node.metadata?.content && !node.metadata?.manualSize
+        ? node.type === CanvasNodeType.Image ? imageNodeSizeFromRatio(safePatch.size) : nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;
     return size && (node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Video) ? { ...next, ...size, position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 } } : next;
 }
 
@@ -279,7 +282,9 @@ function resetGenerationParamsOnModelSwitch(node: CanvasNodeData, patch: Partial
  * 连线落到目标节点上的吸附点。单端口一侧取边的正中——与 connectionHandleY 保持同一个
  * 口径，否则吸附点和实际画出来的线会对不上（这两处是同一规则的两份实现，改一处必错）。
  */
-export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0) {
+export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0, batchScroll?: BatchScroll) {
+    const cell = current.handleType === "source" ? batchCellAnchor(node, handleId, batchScroll) : undefined;
+    if (cell) return { x: cell.x, y: cell.y };
     return {
         x: current.handleType === "source" ? node.position.x : node.position.x + node.width,
         y: batchReferenceHandleY(node, handleId) ?? storyboardHandleY(node, handleId, scrollTop) ?? node.position.y + node.height / 2,
@@ -393,10 +398,51 @@ function clamp(value: number, min: number, max: number) {
     return Math.min(Math.max(value, min), max);
 }
 
+type AlignmentPoint = { value: number; order: number };
+
 export type NodeAlignmentContext = {
     movingBounds: { left: number; top: number; right: number; bottom: number };
-    targets: Array<{ x: number[]; y: number[] }>;
+    x: AlignmentPoint[][];
+    y: AlignmentPoint[][];
 };
+
+function nearestAlignmentPoint(points: AlignmentPoint[], value: number, threshold: number) {
+    let low = 0;
+    let high = points.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (points[middle].value < value) low = middle + 1;
+        else high = middle;
+    }
+    let best: { delta: number; point: AlignmentPoint } | undefined;
+    for (const index of [low - 1, low]) {
+        const point = points[index];
+        if (!point) continue;
+        const delta = point.value - value;
+        if (Math.abs(delta) > threshold) continue;
+        if (!best || Math.abs(delta) < Math.abs(best.delta) || (Math.abs(delta) === Math.abs(best.delta) && point.order < best.point.order)) best = { delta, point };
+    }
+    return best;
+}
+
+function buildAlignmentTables(targets: Array<{ x: number[]; y: number[] }>, axis: "x" | "y") {
+    return [0, 1, 2].map((anchorIndex) => {
+        const points = targets.map((target, nodeOrder) => ({ value: target[axis][anchorIndex], order: nodeOrder * 3 + anchorIndex }))
+            .filter((point) => Number.isFinite(point.value))
+            .sort((a, b) => a.value - b.value || a.order - b.order);
+        return points.filter((point, index) => index === 0 || point.value !== points[index - 1].value);
+    });
+}
+
+function resolveAlignmentAxis(tables: AlignmentPoint[][], values: number[], threshold: number) {
+    let best: ReturnType<typeof nearestAlignmentPoint>;
+    for (let index = 0; index < 3; index += 1) {
+        const candidate = nearestAlignmentPoint(tables[index], values[index], threshold);
+        if (!candidate) continue;
+        if (!best || Math.abs(candidate.delta) < Math.abs(best.delta) || (Math.abs(candidate.delta) === Math.abs(best.delta) && candidate.point.order < best.point.order)) best = candidate;
+    }
+    return best;
+}
 
 export function createNodeAlignmentContext(nodes: CanvasNodeData[], initialPositions: Array<{ id: string; x: number; y: number }>): NodeAlignmentContext | null {
     const movingIds = new Set(initialPositions.map((item) => item.id));
@@ -419,7 +465,7 @@ export function createNodeAlignmentContext(nodes: CanvasNodeData[], initialPosit
             y: [node.position.y, node.position.y + node.height / 2, node.position.y + node.height],
         }];
     });
-    return { movingBounds: { left, top, right, bottom }, targets };
+    return { movingBounds: { left, top, right, bottom }, x: buildAlignmentTables(targets, "x"), y: buildAlignmentTables(targets, "y") };
 }
 
 export function calculateNodeAlignment(context: NodeAlignmentContext | null, rawOffset: Position, threshold: number) {
@@ -427,31 +473,11 @@ export function calculateNodeAlignment(context: NodeAlignmentContext | null, raw
     const { left, top, right, bottom } = context.movingBounds;
     const movingX = [left + rawOffset.x, (left + right) / 2 + rawOffset.x, right + rawOffset.x];
     const movingY = [top + rawOffset.y, (top + bottom) / 2 + rawOffset.y, bottom + rawOffset.y];
-    let bestXDelta: number | undefined;
-    let bestXGuide: number | undefined;
-    let bestYDelta: number | undefined;
-    let bestYGuide: number | undefined;
-    context.targets.forEach(({ x: targetsX, y: targetsY }) => {
-        movingX.forEach((value, anchorIndex) => {
-            const target = targetsX[anchorIndex];
-            const delta = target - value;
-            if (Math.abs(delta) <= threshold && (bestXDelta === undefined || Math.abs(delta) < Math.abs(bestXDelta))) {
-                bestXDelta = delta;
-                bestXGuide = target;
-            }
-        });
-        movingY.forEach((value, anchorIndex) => {
-            const target = targetsY[anchorIndex];
-            const delta = target - value;
-            if (Math.abs(delta) <= threshold && (bestYDelta === undefined || Math.abs(delta) < Math.abs(bestYDelta))) {
-                bestYDelta = delta;
-                bestYGuide = target;
-            }
-        });
-    });
+    const x = resolveAlignmentAxis(context.x, movingX, threshold);
+    const y = resolveAlignmentAxis(context.y, movingY, threshold);
     return {
-        offset: { x: rawOffset.x + (bestXDelta || 0), y: rawOffset.y + (bestYDelta || 0) },
-        guides: { vertical: bestXGuide, horizontal: bestYGuide },
+        offset: { x: rawOffset.x + (x?.delta || 0), y: rawOffset.y + (y?.delta || 0) },
+        guides: { vertical: x?.point.value, horizontal: y?.point.value },
     };
 }
 
@@ -508,7 +534,18 @@ export function removeCanvasNodes(nodes: CanvasNodeData[], requestedIds: Set<str
     });
     const remainingNodes = nodes.filter((node) => !removedIds.has(node.id));
     const cleanedNodes = remainingNodes.map((node) => {
-        const detached = node.parentId && removedIds.has(node.parentId) ? { ...node, parentId: undefined } : node;
+        let detached = node.parentId && removedIds.has(node.parentId) ? { ...node, parentId: undefined } : node;
+        const batchTable = detached.metadata?.batchTable;
+        if (batchTable) {
+            const rows = batchTable.rows.map(row => {
+                const inputNodeIds = row.inputNodeIds.map(id => removedIds.has(id) ? "" : id);
+                const textNodeIds = row.textNodeIds?.map(id => removedIds.has(id) ? "" : id);
+                const outputNodeId = row.outputNodeId && removedIds.has(row.outputNodeId) ? undefined : row.outputNodeId;
+                const changed = inputNodeIds.some((id, i) => id !== row.inputNodeIds[i]) || textNodeIds?.some((id, i) => id !== row.textNodeIds?.[i]);
+                return changed || outputNodeId !== row.outputNodeId ? { ...row, inputNodeIds, textNodeIds, outputNodeId, inputChanged: Boolean(outputNodeId) || row.inputChanged } : row;
+            });
+            if (rows.some((row, i) => row !== batchTable.rows[i])) detached = { ...detached, metadata: { ...detached.metadata, batchTable: { ...batchTable, rows } } };
+        }
         const storyboard = detached.metadata?.storyboard;
         const cleaned = storyboard
             ? {

@@ -12,6 +12,7 @@ import (
 )
 
 func (s *Service) LogAPICall(log model.ApiCallLog) error {
+	sanitizeProfileAPICall(&log)
 	if log.ID == "" {
 		log.ID = newID()
 	}
@@ -74,6 +75,22 @@ func (s *Service) LogAPICall(log model.ApiCallLog) error {
 		return err
 	}
 	return s.repo.Create(&log)
+}
+
+// Both HTTP analytics and synthetic failed-attempt logs cross this boundary.
+func sanitizeProfileAPICall(call *model.ApiCallLog) {
+	if call.Operation != profileAnalysisOperation {
+		return
+	}
+	call.RequestBody, call.ResponseBody, call.Error = "", "", ""
+	switch call.ErrorCode {
+	case "", "request_cancelled", "upstream_timeout", "request_not_sent", "provider_request_unlogged", "provider_state_unlogged":
+	default:
+		call.ErrorCode = "provider_request_failed"
+	}
+	if call.Status == model.ApiCallStatusFailed {
+		call.Error = "参考图分析上游请求失败"
+	}
 }
 
 func (s *Service) mergeAsyncMediaAPICallLog(log model.ApiCallLog) (bool, error) {

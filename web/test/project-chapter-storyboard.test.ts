@@ -1,4 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { generateChapterStoryboard } from "@/pages/projects/detail/project-chapter-ai";
+import { apiClient } from "@/services/api/request";
+import { defaultConfig } from "@/stores/use-config-store";
+
+const originalAdapter = apiClient.defaults.adapter;
+afterEach(() => { apiClient.defaults.adapter = originalAdapter; });
 
 import {
     chapterStoryboardAssets,
@@ -45,7 +51,67 @@ describe("章节分镜写入分镜制作", () => {
         expect(chapterStoryboardAssets(detail).map((asset) => ({ id: asset.id, type: asset.type, characterVersionId: asset.characterVersionId }))).toEqual([
             { id: "character-1", type: "character", characterVersionId: "character-version-1" },
             { id: "prop-1", type: "image", characterVersionId: undefined },
+            { id: "draft-prop", type: "image", characterVersionId: undefined },
         ]);
+    });
+
+    test("完整目录适配不截断 60 项并保留无版本实体", () => {
+        const assets = Array.from({ length: 81 }, (_, index) => ({
+            ...projectDetail().assets[2], id: `asset-${index}`, mediaType: "entity",
+            category: index === 0 ? "character" as const : index === 1 ? "environment" as const : "prop" as const,
+        }));
+        const result = chapterStoryboardAssets({ ...projectDetail(), assets });
+        expect(result).toHaveLength(81);
+        expect(result[0]).toMatchObject({ id: "asset-0", type: "character", characterAssetId: "asset-0" });
+        expect(result[1]).toMatchObject({ id: "asset-1", type: "image", category: "environment" });
+        expect(result[80].id).toBe("asset-80");
+    });
+
+    test("候选实体 fallback 不改变已有音视频资产的媒体类型", () => {
+        const assets = ["video", "audio"].map((mediaType) => ({ ...projectDetail().assets[1], mediaType }));
+        expect(chapterStoryboardAssets({ assets }).map((item) => item.type)).toEqual(["video", "audio"]);
+    });
+
+    test("生成入口拒绝不完整候选，取消保持 AbortError", async () => {
+        let requests = 0;
+        apiClient.defaults.adapter = async () => { requests++; throw new Error("must not submit"); };
+        const input = { projectId: "project-1", chapterId: "chapter-1", chapterTitle: "章节", sourceText: "正文", projectStyle: { presetId: "style", title: "画风", prompt: "画风" }, characters: [], config: defaultConfig, skills: [], selectedSkillIds: [] };
+        for (const status of ["loading", "error"] as const) {
+            await expect(generateChapterStoryboard({ ...input, assetCandidates: { status } })).rejects.toThrow("项目资产目录尚未完整加载");
+        }
+        await expect(generateChapterStoryboard({ ...input, assetCandidates: { status: "cancelled" } })).rejects.toMatchObject({ name: "AbortError" });
+        expect(requests).toBe(0);
+    });
+
+    test("真实生成请求只消费完整候选，81 项均传到 canvasAssets", async () => {
+        const assets = Array.from({ length: 81 }, (_, index) => ({ ...projectDetail().assets[2], id: `asset-${index}` }));
+        const stop = new Error("stop after observing real task request");
+        let submitted: any;
+        apiClient.defaults.adapter = async (config) => { submitted = JSON.parse(config.data); throw stop; };
+        await expect(generateChapterStoryboard({
+            projectId: "project-1", chapterId: "chapter-1", chapterTitle: "章节", sourceText: "正文",
+            projectStyle: { presetId: "style", title: "画风", prompt: "画风" }, characters: [],
+            assetCandidates: { status: "complete", assets }, config: defaultConfig, skills: [], selectedSkillIds: [],
+        })).rejects.toBe(stop);
+        expect(submitted.input.canvasAssets).toHaveLength(81);
+        expect(submitted.input.canvasAssets[80].id).toBe("asset-80");
+        expect(submitted.input.chapterAssetContext).toEqual({ projectId: "project-1", unitId: "chapter-1", scope: { kind: "all", assetIds: [] } });
+    });
+
+    test("明确 selected 范围只发送所选资产，超额目录不提交任务", async () => {
+        const stop = new Error("captured");
+        let submitted: any;
+        let requests = 0;
+        apiClient.defaults.adapter = async (config) => { requests++; submitted = JSON.parse(config.data); throw stop; };
+        const input = { projectId: "project-1", chapterId: "chapter-1", chapterTitle: "章节", sourceText: "正文", projectStyle: { presetId: "s", title: "画风", prompt: "画风" }, characters: [], config: defaultConfig, skills: [], selectedSkillIds: [], assetCandidates: { status: "complete" as const, assets: projectDetail().assets } };
+        await expect(generateChapterStoryboard({ ...input, assetScope: { kind: "selected", assetIds: ["prop-1"] } })).rejects.toBe(stop);
+        expect(submitted.input.chapterAssetContext.scope).toEqual({ kind: "selected", assetIds: ["prop-1"] });
+        expect(submitted.input.canvasAssets.map((a: any) => a.id)).toEqual(["prop-1"]);
+        requests = 0;
+        const large = { ...projectDetail().assets[1], title: "中".repeat(9000) };
+        await expect(generateChapterStoryboard({ ...input, assetCandidates: { status: "complete", assets: [large] } })).rejects.toThrow("24 KiB");
+        await expect(generateChapterStoryboard({ ...input, assetScope: { kind: "selected", assetIds: [] } })).rejects.toThrow();
+        expect(requests).toBe(0);
     });
 
     test("替换确认统计该章会被删除的关联数据", () => {

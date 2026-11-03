@@ -210,6 +210,48 @@ function add(spec) {
   });
 }
 
+{
+  // yuxibox 合同无 resolution/generateAudio/watermark，参数从源头不暴露；时长强制必填（默认 30 由能力层与 workflow defaults 保证）。
+  const yuxiboxParams = videoParams
+    .filter(([name]) => !["resolution", "generateAudio", "watermark"].includes(name))
+    .map(([name, type, required, mapping, description]) => [name, type, required || ["duration"].includes(name), mapping, description]);
+  const yuxiboxIncludes = (value, values) => ({ $in: [value, values] });
+  const yuxiboxRatios = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+  add({
+    id: "yuxibox-seedance-video", providerId: "yuxibox-seedance-video", name: "yuxibox Seedance", vendor: "yuxibox", capability: "video",
+    baseUrl: "https://yuxibox.cn", auth: bearer, params: yuxiboxParams, requiresPublicMediaUrls: true,
+    workflows: [{ id: "yuxibox-seedance-video", label: "yuxibox Seedance", providerId: "yuxibox-seedance-video", capability: "video", parameters: parameters(yuxiboxParams), defaults: { model: "seedance2.5-yx-count", duration: 30, aspectRatio: "16:9" } }],
+    notes: "yuxibox（yuxibox.cn）Seedance 家族：OpenAI Videos 风格异步合同，创建 POST /v1/videos JSON、查询 GET /v1/videos/{task_id}。该端点按请求体 model 路由到上游不同计费模型（seedance2.5-yx-count、seedance-2.5（YX）、seedance-2.5（YX）-按次、seedance-2.0（YX）等），协议形状一致，因此插件不锁定单一模型名，模型可用性由上游 /v1/models 与渠道分组决定。时长上限 30 秒整数、输出固定 720P、七档比例（adaptive/16:9/9:16/1:1/4:3/3:4/21:9）统一走 ratio 单字段（不发 size）；各模型的实际时长档位（2.0（YX）为 5/10/15 秒、2.5（YX）为 5–30 秒、按次固定 30 秒、yx-count 为 10–30 秒）由渠道模型的 capabilityConfig 与上游校验共同决定。参考素材 JSON 数组上限：reference_images 30、videos 10、audios 10，须为公网 HTTPS 或 data URL；不发 multipart input_reference。seconds 以字符串发送（上游示例 \"seconds\": \"30\"）。计费按上游模型广场公布的按秒或按条价格与令牌分组倍率结算，以 yuxibox 控制台为准。同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。上游未提供取消接口。",
+    validations: [
+      { assert: and(gt(len(trim(ref("request.prompt"))), 0), lte(len(ref("request.prompt")), 16000)), message: "yuxibox 提示词不能为空且最多 16000 字符。" },
+      { assert: and(gte(ref("request.duration"), 4), lte(ref("request.duration"), 30)), message: "yuxibox 时长为 4–30 秒整数，默认 30。" },
+      { assert: yuxiboxIncludes(coalesce(ref("request.aspectRatio"), "16:9"), yuxiboxRatios), message: "yuxibox 比例仅支持 adaptive、16:9、9:16、1:1、4:3、3:4、21:9。" },
+      { assert: lte(len(ref("request.images")), 30), message: "yuxibox 参考图最多 30 张。" },
+      { assert: lte(len(ref("request.videos")), 10), message: "yuxibox 参考视频最多 10 条。" },
+      { assert: lte(len(ref("request.audios")), 10), message: "yuxibox 参考音频最多 10 条。" }
+    ],
+    create: jsonCreate("/v1/videos", {
+      model: ref("request.model"),
+      prompt: ref("request.prompt"),
+      seconds: { $toString: ref("request.duration") },
+      ratio: coalesce(ref("request.aspectRatio"), "16:9"),
+      reference_images: omit(map({ $sortByOrder: ref("request.images") }, "media", ref("media.value"))),
+      videos: omit(map({ $sortByOrder: ref("request.videos") }, "media", ref("media.value"))),
+      audios: omit(map({ $sortByOrder: ref("request.audios") }, "media", ref("media.value")))
+    }),
+    poll: { method: "GET", path: "/v1/videos/{{taskId}}" },
+    result: { method: "GET", path: "/v1/videos/{{taskId}}/content", headers: { Accept: "video/mp4" } },
+    response: asyncResponse("video", {
+      taskId: coalesce(ref("response.id"), ref("response.task_id"), ref("response.taskId"), ref("response.data.id"), ref("taskId")),
+      status: coalesce(ref("response.status"), ref("response.state"), ref("response.data.status"), "pending"),
+      message: coalesce(ref("response.error.message"), ref("response.message"), ref("response.fail_reason")),
+      videos: coalesce(ref("response.video_url"), ref("response.download_url"), ref("response.downloadUrl"), ref("response.videoUrl"), ref("response.result_url"), ref("response.url"), ref("response.data.video_url"), ref("response.output.url")),
+      errorPaths: ["error.code"],
+      resultEphemeral: true
+    })
+  });
+}
+
 add({
   id: "openai-chat-completions", providerId: "chat-completion", name: "OpenAI Chat Completions", vendor: "OpenAI", capability: "text",
   baseUrl: "https://api.openai.com", auth: bearer, params: textParams,
@@ -1067,6 +1109,81 @@ add({
     ]
   },
   response: { status: "succeeded", images: coalesce(ref("response.data"), ref("response.images")), errorPaths: ["error.code"], messagePaths: ["error.message", "message"] }
+});
+
+const minimaxInputs = coalesce({ $concatArrays: [
+  ...[["images", "image"], ["videos", "video"], ["audios", "audio"]].map(([field, kind]) =>
+    map(ref(`request.${field}`), "media", { $merge: [ref("media"), { kind }] })
+  )
+] }, ref("request.inputs"));
+const minimaxMedia = (kind, roles) => filter(minimaxInputs, "media", and(
+  eq(ref("media.kind"), kind), ...(roles ? [{ $in: [ref("media.role"), roles] }] : [])
+));
+const minimaxKeyframes = filter(minimaxInputs, "media", { $in: [ref("media.role"), ["first_frame", "last_frame"]] });
+const minimaxRatio = ref("request.output.aspectRatio");
+
+add({
+  id: "dashscope-minimax-video", providerId: "dashscope-minimax-video", name: "百炼 MiniMax H3 Video", vendor: "Alibaba Cloud", capability: "video",
+  baseUrl: "", auth: bearer, requiresPublicMediaUrls: true,
+  params: [
+    ["model", "string", true, "model", "固定为 MiniMax/MiniMax-H3。"],
+    ["prompt", "string", true, "input.prompt", "中英文提示词，最多 7000 个字符。"],
+    ["images", "media[]", false, "input.media", "显式首帧、尾帧或参考图；支持仅尾帧。"],
+    ["videos", "media[]", false, "input.media[type=feature]", "最多 3 个参考视频。"],
+    ["audios", "media[]", false, "input.media[type=driving_audio]", "最多 3 个参考音频。"],
+    ["duration", "integer", true, "parameters.duration", "4-15 秒整数，不沿用原生 MiniMax 的 30 秒上限。"],
+    ["aspectRatio", "string", false, "parameters.ratio", "文生视频必须指定具体比例；首尾帧恒为 adaptive，多模态默认 adaptive。"],
+    ["resolution", "string", true, "parameters.resolution", "768P 或 2K。"],
+    ["watermark", "boolean", false, "parameters.watermark", "是否添加 AI 生成水印，默认关闭。"]
+  ],
+  validations: [
+    { assert: eq(ref("request.model"), "MiniMax/MiniMax-H3"), message: "百炼 MiniMax 视频仅支持 MiniMax/MiniMax-H3" },
+    { assert: and(gt(len(trim(ref("request.prompt"))), 0), lte(len(ref("request.prompt")), 7000)), message: "百炼 MiniMax 提示词不能为空且不能超过 7000 个字符" },
+    { assert: { $in: [ref("request.output.duration"), Array.from({ length: 12 }, (_, index) => index + 4)] }, message: "百炼 MiniMax duration 必须为 4-15 秒整数" },
+    { assert: { $in: [{ $upper: ref("request.output.resolution") }, ["768P", "2K"]] }, message: "百炼 MiniMax resolution 仅支持 768P 或 2K" },
+    { assert: eq(len(filter(minimaxInputs, "media", { $not: { $or: [
+      and(eq(ref("media.kind"), "image"), { $in: [ref("media.role"), ["", "first_frame", "last_frame", "reference_image", "subject_reference", "style_reference"]] }),
+      and(eq(ref("media.kind"), "video"), { $in: [ref("media.role"), ["", "reference_video"]] }),
+      and(eq(ref("media.kind"), "audio"), { $in: [ref("media.role"), ["", "reference_audio", "reference_voice"]] })
+    ] } })), 0), message: "百炼 MiniMax 媒体类型或角色不受支持" },
+    { assert: eq(len(filter(minimaxInputs, "media", { $not: { $in: [first(split(ref("media.value"), "://")), ["http", "https"]] } })), 0), message: "百炼 MiniMax 媒体必须使用 HTTP 或 HTTPS 公网 URL" },
+    { assert: lte(len(minimaxMedia("image")), 9), message: "百炼 MiniMax 最多支持 9 张参考图片" },
+    { assert: lte(len(minimaxMedia("video")), 3), message: "百炼 MiniMax 最多支持 3 个参考视频" },
+    { assert: lte(len(minimaxMedia("audio")), 3), message: "百炼 MiniMax 最多支持 3 个参考音频" },
+    ...[["first_frame", "首帧"], ["last_frame", "尾帧"]].map(([role, label]) => ({
+      assert: lte(len(minimaxMedia("image", [role])), 1), message: `百炼 MiniMax 最多只能有一个${label}`
+    })),
+    { assert: { $or: [eq(len(minimaxKeyframes), 0), eq(len(minimaxKeyframes), len(minimaxInputs))] }, message: "百炼 MiniMax 首尾帧不能与参考图片、视频或音频混用" },
+    { assert: { $or: [gt(len(minimaxKeyframes), 0), { $in: [coalesce(minimaxRatio, "adaptive"), ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]] }] }, message: "百炼 MiniMax ratio 不受支持" },
+    { assert: { $or: [gt(len(minimaxInputs), 0), { $in: [minimaxRatio, ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]] }] }, message: "百炼 MiniMax 文生视频必须指定具体画幅比例，不能使用 adaptive" }
+  ],
+  create: jsonCreate("/api/v1/services/aigc/video-generation/video-synthesis", {
+    model: ref("request.model"),
+    input: {
+      prompt: ref("request.prompt"),
+      media: omit(map(sorted(minimaxInputs), "media", {
+        type: conditional(eq(ref("media.kind"), "image"),
+          conditional({ $in: [ref("media.role"), ["first_frame", "last_frame"]] }, ref("media.role"), "image_url"),
+          conditional(eq(ref("media.kind"), "video"), "feature", "driving_audio")),
+        url: ref("media.value")
+      }))
+    },
+    parameters: {
+      resolution: { $upper: ref("request.output.resolution") },
+      ratio: conditional(gt(len(minimaxKeyframes), 0), "adaptive", coalesce(minimaxRatio, "adaptive")),
+      duration: ref("request.output.duration"),
+      watermark: coalesce(ref("request.output.watermark"), false)
+    }
+  }, { headers: { "X-DashScope-Async": "enable" }, originPath: true }),
+  poll: { method: "GET", path: "/api/v1/tasks/{{taskId}}", originPath: true },
+  response: {
+    taskId: coalesce(ref("response.output.task_id"), ref("taskId")),
+    status: conditional(eq(ref("response.output.task_status"), "UNKNOWN"), "failed", ref("response.output.task_status")),
+    message: coalesce(ref("response.output.message"), ref("response.message"), conditional(eq(ref("response.output.task_status"), "UNKNOWN"), "百炼 MiniMax 任务不存在或已超过 24 小时查询有效期")),
+    videos: ref("response.output.video_url"), usage: ref("response.usage"),
+    errorPaths: ["code", "output.code"], resultEphemeral: true
+  },
+  notes: `适配阿里云百炼 MiniMax/MiniMax-H3，渠道 Base URL 使用百炼业务空间 Endpoint。\n\n首帧、尾帧各最多 1 张，支持仅尾帧；首尾帧与多模态参考互斥。参考图最多 9 张、每张 30 MB，JPG/JPEG/PNG/WEBP/HEIC/HEIF，宽高 256-5760、宽高比 0.4-2.5。参考视频最多 3 个、每个 50 MB、2-15 秒且总时长不超过 15 秒，MP4/MOV、23.976-60 fps，宽高和比例限制同图片。音频最多 3 个、每个 15 MB、2-15 秒且总时长不超过 15 秒，WAV/MP3。插件校验已提供的角色、数量、URL、提示词和生成规格；媒体编码、尺寸、帧率及参考总时长仍需满足上游限制，不在协议模板内执行媒体探测。\n\n不发送原生 content[]、generate_audio、seed 或 prompt_optimizer，也不开放绕过统一媒体校验的 raw media 扩展。创建任务后仅轮询原 task_id，UNKNOWN 终止为失败；任务查询有效期 24 小时，结果 URL 有效期 30 天，宿主持久化临时结果。usage 保留输入视频、输出视频和图片计数，不把供应商统计直接改写为本地计费规则。\n\n官方接口：[MiniMax 视频生成 API](https://docs.bailian.console.aliyun.com/zh/model-studio/minimax-video-generation-api-reference)。`
 });
 
 const wan3MediaType = coalesce(

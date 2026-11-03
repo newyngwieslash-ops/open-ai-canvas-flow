@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { assertAssetAvailableForReference } from "@/lib/asset-availability";
 
 import { projectCharacterToInsertPayload } from "@/components/canvas/canvas-project-asset-modal";
 import { getCharacter } from "@/services/api/projects";
@@ -91,8 +92,10 @@ export async function assetPickerSelectionToInsertPayloads(ids: string[], items:
     return Promise.all(
         ids.map(async (id) => {
             const item = itemsById.get(id);
+            if (item?.asset) assertAssetAvailableForReference(item.asset, useAssetStore.getState().assets.find((asset) => asset.id === id));
             if (item?.asset?.kind === "entity") {
                 const detail = await getCharacter(item.asset.id);
+                assertAssetAvailableForReference(detail.asset, useAssetStore.getState().assets.find((asset) => asset.id === id));
                 return projectCharacterToInsertPayload({ ...detail.asset, character: detail.character });
             }
             return assetPickerItemsToInsertPayloads([id], items)[0];
@@ -110,6 +113,7 @@ export function assetPickerItemsToInsertPayloads(ids: string[], items: AssetLibr
         if (!asset || (asset.kind !== "text" && asset.kind !== "image" && asset.kind !== "video" && asset.kind !== "audio")) {
             throw new Error(`“${pickerItem.title}”不是可插入画布的素材`);
         }
+        assertAssetAvailableForReference(asset, useAssetStore.getState().assets.find((current) => current.id === id));
         return localAssetToInsertPayload(asset);
     });
 }

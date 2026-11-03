@@ -2,6 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"context"
+	"path/filepath"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +25,26 @@ type failureEnvelope struct {
 	Code   int    `json:"code"`
 	Msg    string `json:"msg"`
 	Reason string `json:"reason"`
+}
+
+func TestStoryboardAssetOwnerLockBudgetHandler(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "budget.db")), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	pool, err := db.DB(); if err != nil { t.Fatal(err) }; defer pool.Close()
+	if err := db.AutoMigrate(&model.Asset{}); err != nil { t.Fatal(err) }
+	if err := db.Callback().Raw().Before("gorm:raw").Register("budget_wait", func(tx *gorm.DB) {
+		<-tx.Statement.Context.Done()
+		tx.AddError(tx.Statement.Context.Err())
+	}); err != nil { t.Fatal(err) }
+	err = repository.New(db).WithStoryboardAssetOwners(context.Background(), []string{"owner"}, func(*repository.Repository) error { t.Error("expired lock entered callback"); return nil })
+	recorder, ctx := responseTestContext()
+	failService(ctx, err)
+	response := decodeFailureEnvelope(t, recorder)
+	if recorder.Code != http.StatusServiceUnavailable || response.Code == 0 || response.Reason != string(service.ReasonForStatus(503)) {
+		t.Fatalf("budget mapped incorrectly: %d %#v", recorder.Code, response)
+	}
+	var appErr *service.AppError
+	if !errors.As(err, &appErr) || !appErr.Retryable { t.Fatalf("budget not retryable: %v", err) }
 }
 
 func TestFailServiceRegistrationCooldown(t *testing.T) {

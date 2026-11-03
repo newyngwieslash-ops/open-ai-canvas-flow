@@ -1,0 +1,16 @@
+{
+  "change": "add-asset-multi-reference-generation",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "3f5058fd58dd860acadc313458d3f46b0d5b80bec8f990335ae9e445f3b605a5",
+  "files": [
+    { "path": "docs/openspec/changes/add-asset-multi-reference-generation/proposal.md", "sha256": "29aec5cc1c662fcb490600a670571c7f651d08368f78b247c0b60f30aa9853d9" },
+    { "path": "docs/openspec/changes/add-asset-multi-reference-generation/design.md", "sha256": "068ddd66ba38711c164cc5aa09266e69e1e7741be6973b3568b25bed4b2d58ed" },
+    { "path": "docs/openspec/changes/add-asset-multi-reference-generation/tasks.md", "sha256": "5621eb7a0a8714642218b5ae72d19a5a27962855b16890a0be63e80b13551111" },
+    { "path": "docs/openspec/changes/add-asset-multi-reference-generation/.openspec.yaml", "sha256": "0ad492a63d87e00a8bc135b0a1a2b19270dbb9ffd997a69b89fd4ab72015a944" },
+    { "path": "docs/openspec/changes/add-asset-multi-reference-generation/specs/asset-multi-reference-generation/spec.md", "sha256": "aadcace1aa462f16f76673d3311b326d647d83d3d1146ffd8740ff519f8a7389" }
+  ]
+}

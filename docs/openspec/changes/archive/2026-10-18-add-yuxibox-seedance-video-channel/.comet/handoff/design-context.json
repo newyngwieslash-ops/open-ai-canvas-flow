@@ -1,0 +1,16 @@
+{
+  "change": "add-yuxibox-seedance-video-channel",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "df51da5199da231c2c061dae3b3eb1be7ead48911f09b3e39047e4a3b47ea8d7",
+  "files": [
+    { "path": "docs/openspec/changes/add-yuxibox-seedance-video-channel/proposal.md", "sha256": "2f5e3e4c1ba92db4714e477531cabbf2bb758ef2bf7ed823afa414354e3c6a92" },
+    { "path": "docs/openspec/changes/add-yuxibox-seedance-video-channel/design.md", "sha256": "70a8d7749286a9efb59b2193870cad1e878cf948afde397351127a18a2603a94" },
+    { "path": "docs/openspec/changes/add-yuxibox-seedance-video-channel/tasks.md", "sha256": "0b546d31411a33caa251ed2c876b2f51f57761b721428a77ecb185965309ca6c" },
+    { "path": "docs/openspec/changes/add-yuxibox-seedance-video-channel/.openspec.yaml", "sha256": "dc08c29816def5c12ac71497ed005c1c0d6d779aa76f03fa6cd1d3ed38d91ec9" },
+    { "path": "docs/openspec/changes/add-yuxibox-seedance-video-channel/specs/yuxibox-seedance-video-provider/spec.md", "sha256": "81801a37181edd741ac9b7d53986434bd4c1f4cd31f007cda6eb20787a81cda8" }
+  ]
+}

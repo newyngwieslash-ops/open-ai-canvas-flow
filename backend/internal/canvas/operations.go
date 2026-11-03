@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
+	"yingce/backend/internal/model"
 )
 
 var canvasOperationFields = []string{"title", "projectId", "chatSessions", "activeChatId", "starterMode", "appearance", "backgroundMode", "showImageInfo", "previsScenes", "timeline"}
@@ -18,10 +20,11 @@ var canvasOptionalOperationFields = map[string]struct{}{"projectId": {}, "starte
 // Agent and media callbacks. MutationID is the retry identity: a lost response
 // must be replayed with the same ID and payload.
 type CanvasOperationsRequest struct {
-	MutationID            string            `json:"mutationId"`
-	BaseRevision          *int64            `json:"baseRevision,omitempty"`
-	Operations            []CanvasOperation `json:"operations"`
-	TrustedServerMutation bool              `json:"-"`
+	MutationID            string                  `json:"mutationId"`
+	BaseRevision          *int64                  `json:"baseRevision,omitempty"`
+	Operations            []CanvasOperation       `json:"operations"`
+	EditProofs            []model.CanvasEditProof `json:"editProofs,omitempty"`
+	TrustedServerMutation bool                    `json:"-"`
 }
 
 var (
@@ -43,6 +46,8 @@ type CanvasOperation struct {
 }
 
 func CanvasOperationsDigest(req CanvasOperationsRequest) string {
+	// A committed mutation remains replayable after its transient lease expires.
+	req.EditProofs = nil
 	raw, _ := json.Marshal(req)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -234,6 +239,93 @@ func canvasPathValue(target map[string]any, path string) (any, bool) {
 	return current, true
 }
 
+func hasTaskIdentityFence(node map[string]any, before map[string]json.RawMessage) bool {
+	raw, ok := before["metadata.taskId"]
+	if !ok {
+		return false
+	}
+	var taskID string
+	if json.Unmarshal(raw, &taskID) != nil || strings.TrimSpace(taskID) == "" {
+		return false
+	}
+	actual, exists := canvasPathValue(node, "metadata.taskId")
+	currentTaskID, ok := actual.(string)
+	return exists && ok && currentTaskID == taskID
+}
+
+func taskTimestampPatchIsMergeable(patch map[string]json.RawMessage, before map[string]json.RawMessage) bool {
+	raw, ok := patch["metadata.taskUpdatedAt"]
+	if !ok || string(raw) == "null" {
+		return false
+	}
+	var timestamp string
+	if json.Unmarshal(raw, &timestamp) != nil || strings.TrimSpace(timestamp) == "" {
+		return false
+	}
+	if _, hasTaskIDPatch := patch["metadata.taskId"]; hasTaskIDPatch {
+		return false
+	}
+	if _, hasWholeMetadataPatch := patch["metadata"]; hasWholeMetadataPatch {
+		return false
+	}
+	_, hasTaskIDBefore := before["metadata.taskId"]
+	return hasTaskIDBefore
+}
+
+func taskPatchAlreadyApplied(node map[string]any, patch map[string]json.RawMessage, path string) bool {
+	desired, ok := patch[path]
+	if !ok {
+		return false
+	}
+	actual, exists := canvasPathValue(node, path)
+	return canvasExpectedValueMatches(actual, exists, desired)
+}
+
+	// taskFieldConverged 判断同任务身份下某字段是否已被另一个观察者写入相同值。
+	// null 是删除语义，与"值收敛"不同：服务端字段缺失可能来自任意一次删除，
+	// 不能作为本操作想要 null 的证明，null 删除仍走严格 CAS。
+	func taskFieldConverged(node map[string]any, patch map[string]json.RawMessage, path string) bool {
+		desired, ok := patch[path]
+		if !ok || string(desired) == "null" {
+			return false
+		}
+		// 任务状态由浏览器订阅和 Agent 回写独立推进。旧日志可能仍携带
+		// running→failed 这类中间基线；只要目标值已经等于云端当前值，就接受收敛，
+		// 不能让过期状态基线阻塞同一请求里的用户编辑。
+		if path == "metadata.taskStatus" {
+			actual, exists := canvasPathValue(node, path)
+			return canvasExpectedValueMatches(actual, exists, desired)
+		}
+	actual, exists := canvasPathValue(node, path)
+	return canvasExpectedValueMatches(actual, exists, desired)
+}
+
+func mergeTaskUpdatedAtMonotonically(node map[string]any, raw json.RawMessage) error {
+	var incoming string
+	if err := json.Unmarshal(raw, &incoming); err != nil || strings.TrimSpace(incoming) == "" {
+		return errors.New("任务更新时间无效")
+	}
+	incomingTime, err := time.Parse(time.RFC3339Nano, incoming)
+	if err != nil {
+		return errors.New("任务更新时间无效")
+	}
+	current, exists := canvasPathValue(node, "metadata.taskUpdatedAt")
+	if exists {
+		currentText, ok := current.(string)
+		if !ok {
+			return errors.New("当前任务更新时间无效")
+		}
+		currentTime, err := time.Parse(time.RFC3339Nano, currentText)
+		if err != nil {
+			return errors.New("当前任务更新时间无效")
+		}
+		if !incomingTime.After(currentTime) {
+			return nil
+		}
+	}
+	return setCanvasPath(node, "metadata.taskUpdatedAt", raw)
+}
+
 func canvasExpectedValueMatches(actual any, exists bool, expected json.RawMessage) bool {
 	if len(expected) == 0 {
 		return true
@@ -288,6 +380,12 @@ func applyCanvasOperations(payload map[string]json.RawMessage, operations []Canv
 			if index < 0 {
 				return canvasObjectMissing(op.ID)
 			}
+			mergeTaskTimestamp := hasTaskIdentityFence(nodes[index], op.Before) && taskTimestampPatchIsMergeable(op.Patch, op.Before)
+			// 任务观察者收敛栅栏：浏览器任务订阅、Agent 生成回写和用户编辑并发写同一节点。
+			// 同一任务身份（before 声明的 taskId 与节点当前 taskId 一致）下，若服务端
+			// 当前值恰好等于本操作要写入的值，说明另一个观察者已写入相同结果，接受收敛
+			// 并继续校验其余字段；不写的字段基线仍严格拒绝，任务身份不匹配也拒绝。
+			taskConverged := hasTaskIdentityFence(nodes[index], op.Before)
 			for path, expected := range op.Before {
 				if path == "id" {
 					return fmt.Errorf("节点 ID 不可修改")
@@ -297,11 +395,23 @@ func applyCanvasOperations(payload map[string]json.RawMessage, operations []Canv
 				if _, bookkeeping := canvasNodeBookkeepingFields[path]; bookkeeping {
 					continue
 				}
+				// Task timestamps are produced by independent task observers. When the
+				// task identity is fenced by the same operation's before map, merge the
+				// timestamp monotonically instead of treating observer order as content.
+				if path == "metadata.taskUpdatedAt" && mergeTaskTimestamp {
+					continue
+				}
 				actual, exists := canvasPathValue(nodes[index], path)
 				if !canvasExpectedValueMatches(actual, exists, expected) {
-					// Agent writeback and browser task subscriptions can publish the
-					// same result. Accept convergence, but keep read-only guards strict.
-					if desired, written := op.Patch[path]; written && len(desired) > 0 && canvasExpectedValueMatches(actual, exists, desired) {
+				// 任务时间栅栏：带任务身份与可合并时间戳的请求允许同值收敛与单调合并，
+				// 其余基线不匹配保持严格 CAS 拒绝。
+				if mergeTaskTimestamp && taskPatchAlreadyApplied(nodes[index], op.Patch, path) {
+					continue
+				}
+					// 同一任务身份的同值收敛：观察者已写入相同值时放行，未写字段仍严格拒绝。
+					// taskStatus 是纯观察者终态；旧日志可能没有 taskId 栅栏，只要目标值
+					// 已经等于云端当前值，就按同值收敛，避免过期状态基线阻塞用户编辑。
+					if (taskConverged || path == "metadata.taskStatus") && taskFieldConverged(nodes[index], op.Patch, path) {
 						continue
 					}
 					return canvasOperationConflict("节点 %q 的字段 %q 已被其他写入修改", op.ID, path)
@@ -316,6 +426,12 @@ func applyCanvasOperations(payload map[string]json.RawMessage, operations []Canv
 			}
 			sort.Strings(keys)
 			for _, path := range keys {
+				if path == "metadata.taskUpdatedAt" && mergeTaskTimestamp {
+					if err := mergeTaskUpdatedAtMonotonically(nodes[index], op.Patch[path]); err != nil {
+						return err
+					}
+					continue
+				}
 				if err := setCanvasPath(nodes[index], path, op.Patch[path]); err != nil {
 					return err
 				}

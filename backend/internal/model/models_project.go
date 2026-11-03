@@ -172,11 +172,11 @@ type AssetVersion struct {
 
 type AssetRepresentation struct {
 	ID             string    `json:"id" gorm:"primaryKey;size:36"`
-	TaskID         string    `json:"taskId,omitempty" gorm:"index;size:36;uniqueIndex:idx_asset_representations_task_role,priority:1"`
+	TaskID         string    `json:"taskId,omitempty" gorm:"index;size:36"`
 	AssetVersionID string    `json:"assetVersionId" gorm:"index;size:36;uniqueIndex:idx_asset_representations_version_role,priority:1"`
 	ResourceID     string    `json:"resourceId,omitempty" gorm:"index;size:36"`
 	MediaType      string    `json:"mediaType" gorm:"index;size:24"`
-	Role           string    `json:"role" gorm:"index;size:32;uniqueIndex:idx_asset_representations_task_role,priority:2;uniqueIndex:idx_asset_representations_version_role,priority:2"`
+	Role           string    `json:"role" gorm:"index;size:32;uniqueIndex:idx_asset_representations_version_role,priority:2"`
 	MetadataJSON   string    `json:"metadataJson" gorm:"type:text"`
 	CreatedAt      time.Time `json:"createdAt"`
 }
@@ -482,4 +482,47 @@ type BannerAnnouncement struct {
 	CreatedBy  string     `json:"createdBy" gorm:"size:36"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
+}
+
+// ProjectAssetGenerationBatch 持久记录项目多个资产单候选批量生成的幂等身份、预检摘要与整体状态。
+type ProjectAssetGenerationBatch struct {
+	ID                     string     `json:"id" gorm:"primaryKey;size:36"`
+	UserID                 string     `json:"userId" gorm:"index;size:36;uniqueIndex:idx_pag_batches_user_project_idem,priority:1"`
+	ProjectID              string     `json:"projectId" gorm:"index;size:80;uniqueIndex:idx_pag_batches_user_project_idem,priority:2;index:idx_pag_batches_project_created,priority:1"`
+	IdempotencyKey         string     `json:"idempotencyKey" gorm:"size:120;uniqueIndex:idx_pag_batches_user_project_idem,priority:3"`
+	RequestHash            string     `json:"requestHash" gorm:"size:64"`
+	PreflightDigest        string     `json:"preflightDigest" gorm:"size:64"`
+	Status                 string     `json:"status" gorm:"index;size:32"`
+	ConfigSummaryJSON      string     `json:"-" gorm:"type:text"`
+	TotalKnownMicrocredits int64      `json:"totalKnownMicrocredits"`
+	PriceUnknownCount      int        `json:"priceUnknownCount"`
+	StopRequestedAt        *time.Time `json:"stopRequestedAt,omitempty"`
+	CreatedAt              time.Time  `json:"createdAt" gorm:"index:idx_pag_batches_project_created,priority:2"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
+}
+
+// ProjectAssetGenerationBatchItem 持久记录批次内单个资产的逻辑生成项、安全输入快照与任务绑定。
+type ProjectAssetGenerationBatchItem struct {
+	ID                 string    `json:"id" gorm:"primaryKey;size:36"`
+	BatchID            string    `json:"batchId" gorm:"index;size:36;uniqueIndex:idx_pag_batch_items_batch_asset,priority:1;uniqueIndex:idx_pag_batch_items_batch_pos,priority:1"`
+	UserID             string    `json:"userId" gorm:"index;size:36"`
+	ProjectID          string    `json:"projectId" gorm:"index;size:80"`
+	Position           int       `json:"position" gorm:"uniqueIndex:idx_pag_batch_items_batch_pos,priority:2"`
+	AssetID            string    `json:"assetId" gorm:"size:80;uniqueIndex:idx_pag_batch_items_batch_asset,priority:2"`
+	AssetName          string    `json:"assetName" gorm:"size:160"`
+	AssetCategory      string    `json:"assetCategory" gorm:"size:32"`
+	BaseVersionID      string    `json:"baseVersionId" gorm:"size:36"`
+	ReferenceSource    string    `json:"referenceSource" gorm:"size:24"`
+	InputSnapshotJSON  string    `json:"-" gorm:"type:text"`
+	Status             string    `json:"status" gorm:"index;size:32"`
+	TaskID             string    `json:"taskId,omitempty" gorm:"index;size:36"`
+	Attempt            int       `json:"attempt"`
+	SubmissionKey      string    `json:"submissionKey" gorm:"size:64;uniqueIndex"`
+	AttemptHistoryJSON string    `json:"-" gorm:"type:text"`
+	KnownMicrocredits  int64     `json:"knownMicrocredits"`
+	PriceUnknown       bool      `json:"priceUnknown"`
+	ErrorReason        string    `json:"errorReason,omitempty" gorm:"size:80"`
+	ErrorMessage       string    `json:"errorMessage,omitempty" gorm:"type:text"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }

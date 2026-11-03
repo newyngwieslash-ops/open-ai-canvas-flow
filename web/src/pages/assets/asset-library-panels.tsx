@@ -245,7 +245,12 @@ export function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Lib
                             </p>
                         </div>
                     </div>
-                    {asset.kind === "entity" ? (
+                    {asset.kind === "entity" && (asset.category === "environment" || asset.category === "prop") ? (
+                        <div className="asset-archive-preview-note">
+                            <p>{String(asset.data.definition.description || "待生成图片")}</p>
+                            <p>{String(asset.data.definition.prompt || "")}</p>
+                        </div>
+                    ) : asset.kind === "entity" ? (
                         <CharacterArchive asset={asset} />
                     ) : (
                         <div className="asset-archive-preview">
@@ -271,7 +276,7 @@ export function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Lib
                     )}
                     <div className="flex flex-wrap gap-1.5">
                         {(asset.tags || []).map((tag) => (
-                            <Tag key={tag} className="m-0">
+                            <Tag key={tag} className="asset-archive-tag m-0">
                                 {tag}
                             </Tag>
                         ))}
@@ -374,7 +379,7 @@ export function AssetImageZoom({ asset }: { asset: LibraryAsset & { kind: "image
 
 export function assetArchiveFacts(asset: LibraryAsset) {
     const facts: Array<{ label: string; value: string }> = [
-        { label: "类型", value: assetKindLabel(asset.kind) },
+        { label: "类型", value: assetKindLabel(asset.kind, asset.category) },
         { label: "分类", value: assetCategoryLabel(asset.category) },
     ];
     if (asset.kind === "image" || asset.kind === "video") {

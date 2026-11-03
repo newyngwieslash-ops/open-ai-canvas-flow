@@ -1,3 +1,4 @@
+import { createClientUUID } from "@/lib/client-id";
 import { App, Button, Input, InputNumber, Modal, Progress, Segmented, Select, Spin, Switch, Tooltip } from "antd";
 import { Check, Camera, ChevronDown, Clapperboard, Expand, FileImage, History, ImagePlus, Images, LoaderCircle, Mic, Palette, Plus, RotateCcw, Search, ShoppingBag, Sparkles, Upload, UserRound, Video, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,8 +17,8 @@ import { creationVideoConfig } from "@/pages/create/creation-generation-config";
 import { imageQualityLabel } from "@/lib/image-quality";
 import { modelQuoteRequest } from "@/lib/model-pricing";
 import { quoteModel } from "@/services/api/logical-models";
-import { submitBackendGenerationTask } from "@/services/api/generation-task";
-import { cancelGenerationTask, queryGenerationTask, retryGenerationTask, type GenerationTask } from "@/services/api/task-center";
+import { prepareBackendGenerationTask } from "@/services/api/generation-task";
+import { createGenerationTask, cancelGenerationTask, queryGenerationTask, retryGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { capabilitySupportedModes, createWorkbenchTask, listWorkbenchTasks, listWorkbenchTools, normalizeWorkbenchGuide, resolveWorkbenchResourceURL, type WorkbenchKind, type WorkbenchPromptPreset, type WorkbenchTool } from "@/services/api/workbench";
 import { resourceStorageKey, resolveResourceUrl, uploadResourceFile } from "@/services/api/resources";
 import { formatCredits, requestCreditCost } from "@/constant/credits";
@@ -26,7 +27,7 @@ import { logicalModelIDForConfig, modelDisplayName, modelOptionName, resolveMode
 import { useUserStore } from "@/stores/use-user-store";
 
 import { workbenchCategoryLabel, workbenchCategories } from "./workbench-catalog";
-import { missingWorkbenchInput, workbenchPromptRequired } from "./workbench-input";
+import { missingWorkbenchInput, workbenchPromptRequired, workbenchVideoOperation } from "./workbench-input";
 import "./workbench.css";
 import "./workbench-count-picker.css";
 
@@ -336,6 +337,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
             input: {
                 textCount: prompt.trim() ? 1 : 0,
                 imageCount: references.filter((reference) => reference.kind === "image").length,
+                referenceImageCount: references.filter((reference) => reference.kind === "image" && reference.role !== "first_frame" && reference.role !== "last_frame").length,
                 videoCount: references.filter((reference) => reference.kind === "video").length,
                 audioCount: references.filter((reference) => reference.kind === "audio").length,
                 characterCount: 0,
@@ -526,7 +528,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
         const picked = accepted.slice(0, Math.max(0, maxCount - currentCount));
         if (picked.length < accepted.length) message.warning("部分素材超过当前输入槽位数量上限，未添加");
         const pending: WorkbenchReference[] = picked.map((file) => ({
-            id: crypto.randomUUID(),
+            id: createClientUUID(),
             name: file.name,
             kind: (file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "audio") as WorkbenchReference["kind"],
             previewUrl: URL.createObjectURL(file),
@@ -610,6 +612,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
                 ...(videoRequest ? { videoModel: selectedModel, size: videoRequest.ratio, videoSeconds: videoRequest.seconds, vquality: videoRequest.resolution.replace(/p$/i, "") } : {}),
             };
             const readyReferences = references.filter((reference) => reference.resourceId);
+            const videoOperation = kind === "video" ? workbenchVideoOperation(readyReferences) : undefined;
             const referenceSnapshot = readyReferences.map((reference) => ({ resourceId: reference.resourceId!, kind: reference.kind, role: reference.role, ...(reference.slotKey ? { slotKey: reference.slotKey } : {}) }));
             const createdTask =
                 logicalModelId || channel?.scope === "system"
@@ -623,7 +626,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
                           parameters,
                           references: readyReferences.map((reference) => ({ resourceId: reference.resourceId!, kind: reference.kind, role: reference.role, ...(reference.slotKey ? { slotKey: reference.slotKey } : {}) })),
                       })
-                    : await submitBackendGenerationTask({
+                    : await prepareBackendGenerationTask({
                           mode: kind,
                           prompt: submittedPrompt,
                           config: generationConfig,
@@ -663,11 +666,17 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
                           metadata: {
                               source: "workbench",
                               workbenchKind: kind,
+                              ...(videoOperation ? { videoEditOperation: videoOperation } : {}),
+                              ...Object.fromEntries(
+                                  readyReferences
+                                      .filter((reference) => reference.role === "first_frame" || reference.role === "last_frame")
+                                      .map((reference) => [reference.role === "first_frame" ? "videoStartFrameNodeId" : "videoEndFrameNodeId", reference.id]),
+                              ),
                               ...(tool ? { workbenchToolId: tool.id, workbenchToolName: tool.name } : {}),
                               ...(tool && preset ? { workbenchPresetId: preset.id } : {}),
                               workbench: { kind, ...(tool ? { toolId: tool.id } : {}), ...(tool && preset ? { presetId: preset.id } : {}), parameters, references: referenceSnapshot },
                           },
-                      });
+                      }).then((taskInput) => createGenerationTask({ ...taskInput, ...(videoOperation ? { operation: videoOperation } : {}) }));
             const task = await queryGenerationTask(createdTask.id);
             setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
             if (revision === workbenchRevisionRef.current) {
@@ -739,7 +748,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
         setReferences([]);
         const restoredReferences = await Promise.all(
             snapshot.references.map(async (reference, index): Promise<WorkbenchReference> => ({
-                id: crypto.randomUUID(),
+                id: createClientUUID(),
                 name: `${reference.kind === "image" ? "图片" : reference.kind === "video" ? "视频" : "音频"} ${index + 1}`,
                 kind: reference.kind,
                 resourceId: reference.resourceId,
@@ -1218,6 +1227,7 @@ export function WorkbenchPage({ kind }: { kind: WorkbenchKind }) {
                                             input: {
                                                 textCount: prompt.trim() ? 1 : 0,
                                                 imageCount: references.filter((reference) => reference.kind === "image").length,
+                                                referenceImageCount: references.filter((reference) => reference.kind === "image" && reference.role !== "first_frame" && reference.role !== "last_frame").length,
                                                 videoCount: references.filter((reference) => reference.kind === "video").length,
                                                 audioCount: references.filter((reference) => reference.kind === "audio").length,
                                                 characterCount: 0,

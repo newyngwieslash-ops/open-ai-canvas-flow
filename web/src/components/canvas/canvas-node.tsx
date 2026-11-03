@@ -49,8 +49,8 @@ type CanvasNodeProps = {
     batchPrimary?: boolean;
     batchMotion?: { x: number; y: number; index: number };
     onMouseDown: (event: React.MouseEvent, nodeId: string) => void;
-    onHoverStart: (nodeId: string) => void;
-    onHoverEnd: (nodeId: string) => void;
+    onHoverStart?: (nodeId: string) => void;
+    onHoverEnd?: (nodeId: string) => void;
     onConnectStart: (event: React.PointerEvent, nodeId: string, handleType: "source" | "target", handleId?: string, anchorRatio?: number) => void;
     onResize: (nodeId: string, width: number, height: number, position?: Position) => void;
     onTitleChange?: (nodeId: string, title: string) => void;
@@ -203,11 +203,11 @@ export const CanvasNode = React.memo(function CanvasNode({
             }}
             onMouseEnter={() => {
                 setHovered(true);
-                onHoverStart(data.id);
+                onHoverStart?.(data.id);
             }}
             onMouseLeave={() => {
                 setHovered(false);
-                onHoverEnd(data.id);
+                onHoverEnd?.(data.id);
             }}
             onContextMenu={(event) => onContextMenu(event, data.id)}
         >
@@ -220,7 +220,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 editing={isEditingTitle}
                 draft={titleDraft}
                 theme={theme}
-                onDraftChange={setTitleDraft}
+                onDraftChange={(value) => { setTitleDraft(value); onTitleChange?.(data.id, value); }}
                 onEdit={() => setIsEditingTitle(true)}
                 onCommit={commitTitle}
                 onCancel={() => { setTitleDraft(data.title); setIsEditingTitle(false); }}
@@ -272,7 +272,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onOpenTextEditor?.(data);
                         return;
                     }
-                    if (readOnly || data.type !== CanvasNodeType.Text) return;
+                    if (readOnly || data.metadata?.locked || data.type !== CanvasNodeType.Text) return;
                     event.stopPropagation();
                     setIsEditingContent(true);
                 }}
@@ -299,6 +299,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         theme={theme}
                         renderLOD={effectiveRenderLOD}
                         isEditingContent={isEditingContent}
+                        contentReadOnly={readOnly || Boolean(data.metadata?.locked)}
                         textareaRef={textareaRef}
                         isBatchRoot={isBatchRoot}
                         batchCount={batchCount}
@@ -590,6 +591,7 @@ function NodeExternalHeader({ node, scale, dimensionLabel, active, editable, edi
                     <input
                         autoFocus
                         value={draft}
+                        readOnly={!editable}
                         className="h-6 min-w-20 max-w-[190px] flex-1 truncate rounded bg-transparent px-1.5 text-xs font-medium outline-none"
                         style={{ background: "transparent", color: theme.node.text }}
                         onChange={(event) => onDraftChange(event.target.value)}

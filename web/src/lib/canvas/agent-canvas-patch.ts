@@ -46,7 +46,7 @@ function mergeIdentifiedArray(current: unknown, before: unknown, after: unknown)
 
 // Three-way merge: untouched local fields (e.g. a drag or prompt edit) survive.
 // A concurrently changed field or a deleted node is a conflict, never an overwrite.
-export function mergeThreeWayValue(current: unknown, before: unknown, after: unknown): unknown {
+export function mergeThreeWayValue(current: unknown, before: unknown, after: unknown, conflictPath = ""): unknown {
     if (equal(before, after) || equal(current, after)) return current;
     if (equal(current, before)) return after;
     if (record(current) && record(before) && record(after)) {
@@ -55,12 +55,12 @@ export function mergeThreeWayValue(current: unknown, before: unknown, after: unk
             if (["__proto__", "constructor", "prototype"].includes(key)) throw new Error("无效的画布增量字段");
             let value: unknown;
             try {
-                value = mergeThreeWayValue(current[key], before[key], after[key]);
+                value = mergeThreeWayValue(current[key], before[key], after[key], conflictPath ? `${conflictPath}.${key}` : key);
             } catch (error) {
-                // Scene timestamps are persistence bookkeeping emitted for every
-                // Previs mutation, not user-editable content. If both sides
-                // touched only that timestamp, the server snapshot wins.
-                if (key !== "updatedAt") throw error;
+                // Scene timestamps and task error text are observer bookkeeping,
+                // not user-authored content. Prefer the cloud snapshot for these
+                // fields while preserving every unrelated local edit.
+                if (key !== "updatedAt" && key !== "errorDetails") throw error;
                 value = after[key];
             }
             if (value === undefined) delete next[key];
@@ -79,12 +79,45 @@ function mergeItems<T extends { id: string }>(items: T[], changes: Change<T>[]):
     for (const { before, after } of changes) {
         const id = after?.id || before?.id;
         if (!id || (before && after && before.id !== after.id)) throw new Error("无效的画布增量节点");
-        const merged = mergeThreeWayValue(next.get(id) ?? null, before, after) as T | null;
+        const existing = next.get(id);
+        // A create delta (before=null) can be replayed by an SSE after=0 reconnect
+        // onto a canvas that already adopted the node and observed the task move on
+        // (e.g. queued → failed). The local node is a successor of `after`; treat the
+        // replay as converged and keep the local state instead of surfacing a conflict.
+        if (!before && after && existing) {
+            if (equal(existing, after)) continue;
+            if (createReplayConverged(existing, after)) continue;
+        }
+        const merged = mergeThreeWayValue(existing ?? null, before, after) as T | null;
         if (merged === null) next.delete(id);
         else next.set(id, merged);
     }
     const result = [...next.values()];
     return result.length === items.length && result.every((item, index) => item === items[index]) ? items : result;
+}
+
+// 任务观察字段（status/taskStatus/taskProgress/taskStage/errorDetails 等任务终态推进）
+// 是独立观察者的产物：本地比 create 快照更新是收敛，不是冲突。其余字段（标题、
+// 位置、提示词等用户编辑）必须与 after 全等，否则仍由 mergeThreeWayValue 判定冲突。
+const CREATE_REPLAY_TASK_OBSERVATION_KEYS = new Set(["status", "taskStatus", "taskProgress", "taskStage", "taskMediaStage", "taskProvider", "taskErrorCode", "taskOfficialStatus", "errorDetails", "taskUpdatedAt", "taskStartedAt", "taskCompletedAt", "taskDurationMs", "taskCreatedAt", "taskCanRecoverMedia", "taskReceiptRecorded", "generationErrorCode", "failedPromptFingerprint", "resourceReloadAvailable"]);
+
+function createReplayConverged<T extends { id: string }>(existing: T, after: T): boolean {
+    const existingRecord = existing as Record<string, unknown>;
+    const afterRecord = after as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(existingRecord), ...Object.keys(afterRecord)])) {
+        if (key === "metadata" || key === "updatedAt") continue;
+        if (!equal(existingRecord[key], afterRecord[key])) return false;
+    }
+    const existingMeta = (existingRecord.metadata || {}) as Record<string, unknown>;
+    const afterMeta = (afterRecord.metadata || {}) as Record<string, unknown>;
+    // 任务身份字段变化（换绑/首次绑定）不是观察推进，交给三路合并判定。
+    if (existingMeta.taskId !== afterMeta.taskId) return false;
+    if (existingMeta.taskClientOperationId !== afterMeta.taskClientOperationId) return false;
+    for (const key of new Set([...Object.keys(existingMeta), ...Object.keys(afterMeta)])) {
+        if (equal(existingMeta[key], afterMeta[key])) continue;
+        if (!CREATE_REPLAY_TASK_OBSERVATION_KEYS.has(key)) return false;
+    }
+    return true;
 }
 
 /**
@@ -133,10 +166,8 @@ function mergeConnectionOrder(previous: CanvasConnection[], incoming: CanvasConn
     return next;
 }
 
-export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvasPatch): CanvasProject {
-    if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
-    const byId = new Map(project.nodes.map((node) => [node.id, node]));
-    const nodeChanges = patch.nodes.map((change) => {
+function normalizeAgentNodeChanges(byId: ReadonlyMap<string, CanvasNodeData>, changes: AgentCanvasPatch["nodes"]) {
+    return changes.map((change) => {
         if (!change.after) return change;
         const current = byId.get(change.after.id);
         const beforeTask = change.before?.metadata?.taskId;
@@ -154,10 +185,46 @@ export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvas
         }
         return { ...change, before: { ...change.before!, metadata } };
     });
+}
+
+export function applyAgentCanvasPatch(project: CanvasProject, patch: AgentCanvasPatch): CanvasProject {
+    if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
+    const byId = new Map(project.nodes.map((node) => [node.id, node]));
+    const nodeChanges = normalizeAgentNodeChanges(byId, patch.nodes);
     const nodes = mergeItems(project.nodes, nodeChanges);
     const connections = mergeItems(project.connections, patch.connections);
     if (nodes === project.nodes && connections === project.connections) return project;
     return { ...project, nodes, connections, updatedAt: patch.updatedAt || project.updatedAt };
+}
+
+export function applyAgentCanvasPatchBatch(project: CanvasProject, patches: AgentCanvasPatch[]): CanvasProject {
+    for (const patch of patches) {
+        if (patch.canvasId !== project.id || !Array.isArray(patch.nodes) || !Array.isArray(patch.connections)) throw new Error("画布增量不属于当前画布或格式无效");
+    }
+    const updateOnly = patches.every((patch) => patch.connections.length === 0 && patch.nodes.every((change) => change.before && change.after && change.before.id === change.after.id));
+    if (!updateOnly) return patches.reduce((current, patch) => applyAgentCanvasPatch(current, patch), project);
+    const byId = new Map(project.nodes.map((node) => [node.id, node]));
+    let changed = false;
+    let updatedAt = project.updatedAt;
+    for (const patch of patches) {
+        const normalized = normalizeAgentNodeChanges(byId, patch.nodes);
+        let patchChanged = false;
+        for (const { before, after } of normalized) {
+            const id = after!.id;
+            const current = byId.get(id);
+            const merged = mergeThreeWayValue(current ?? null, before, after) as CanvasNodeData;
+            if (merged !== current) {
+                byId.set(id, merged);
+                patchChanged = true;
+            }
+        }
+        if (patchChanged) {
+            changed = true;
+            updatedAt = patch.updatedAt || updatedAt;
+        }
+    }
+    if (!changed) return project;
+    return { ...project, nodes: project.nodes.map((node) => byId.get(node.id)!), updatedAt };
 }
 
 export function mergeAgentCanvasEditor(previous: CanvasProject, incoming: CanvasProject, nodes: CanvasNodeData[], connections: CanvasConnection[], editorProject?: CanvasProject) {

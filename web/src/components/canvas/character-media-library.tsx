@@ -1,4 +1,5 @@
 import { Input } from "antd";
+import { isAssetAvailableForReference } from "@/lib/asset-availability";
 import { Check, ImagePlus, Loader2, Pause, Play, Search, Upload } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -7,7 +8,7 @@ import { CachedResourceImage } from "@/components/cached-resource-image";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { getResourceAccess, resolveResourceAccessURL, resourceIdFromStorageKey } from "@/services/api/resources";
 import { loadAssetLibraryPage } from "@/services/user-data-sync";
-import type { AudioAsset, ImageAsset } from "@/stores/use-asset-store";
+import { useAssetStore, type AudioAsset, type ImageAsset } from "@/stores/use-asset-store";
 
 const PAGE_SIZE = { image: 18, audio: 20 } as const;
 
@@ -20,7 +21,9 @@ function useCharacterMediaPages<K extends "image" | "audio">(kind: K, keyword: s
         queryFn: ({ signal, pageParam }) => loadAssetLibraryPage({ page: pageParam, pageSize: PAGE_SIZE[kind], kind, status: "active", query: query || undefined, signal }),
         getNextPageParam: (page, all) => (all.reduce((count, item) => count + item.assets.length, 0) < page.total ? all.length + 1 : undefined),
     });
-    const items = (pages.data?.pages.flatMap((page) => page.assets) || []).filter(
+    const localAssets = useAssetStore((state) => state.assets);
+    const unavailableIds = new Set(localAssets.filter((asset) => !isAssetAvailableForReference(asset)).map((asset) => asset.id));
+    const items = (pages.data?.pages.flatMap((page) => page.assets) || []).filter((asset) => isAssetAvailableForReference(asset) && !unavailableIds.has(asset.id)).filter(
         (asset): asset is K extends "image" ? ImageAsset : AudioAsset => asset.kind === kind && Boolean(resourceIdFromStorageKey((asset as ImageAsset | AudioAsset).data.storageKey)),
     );
     const sentinelRef = useRef<HTMLDivElement>(null);
@@ -105,7 +108,7 @@ export function CharacterImageLibrary({ currentResourceId, busyKey, canvasTitles
                             title={title}
                             aria-pressed={current}
                             disabled={Boolean(busyKey) || current}
-                            onClick={() => onPick(resourceId)}
+                            onClick={() => { const latest = useAssetStore.getState().assets.find((item) => item.id === asset.id); if (isAssetAvailableForReference(asset) && (!latest || isAssetAvailableForReference(latest))) onPick(resourceId); }}
                             className={`group relative aspect-[3/4] overflow-hidden rounded-lg bg-foreground/[.05] outline-none transition focus-visible:ring-2 focus-visible:ring-[var(--workspace-accent)] disabled:cursor-default ${current ? "ring-2 ring-[var(--workspace-accent)] ring-offset-2 ring-offset-background" : ""}`}
                         >
                             <CachedResourceImage
@@ -230,7 +233,7 @@ export function CharacterVoiceLibrary({
                                 <button
                                     type="button"
                                     disabled={Boolean(busyKey)}
-                                    onClick={() => onPick(resourceId, title)}
+                                    onClick={() => { const latest = useAssetStore.getState().assets.find((item) => item.id === asset.id); if (isAssetAvailableForReference(asset) && (!latest || isAssetAvailableForReference(latest))) onPick(resourceId, title); }}
                                     className="rounded-md px-2.5 py-1 text-xs font-medium text-foreground/55 opacity-0 outline-none transition hover:bg-foreground/[.07] hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--workspace-accent)] group-hover:opacity-100 disabled:cursor-wait"
                                 >
                                     {busyKey === resourceId ? <Loader2 className="size-3.5 animate-spin" /> : "使用"}

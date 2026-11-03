@@ -3,6 +3,75 @@ import { normalizeAssetCategory, type AssetCategory } from "@/lib/asset-category
 import type { GenerationTask } from "@/services/api/task-center";
 
 
+export type BindingCategory = "character" | "environment" | "prop";
+export type BindingEvidence = {
+    kind: "structured_id" | "exact_name" | "visual_label" | "structured_continuity" | "mention" | "speaker";
+    field: string;
+    start: number;
+    end: number;
+    text: string;
+};
+export type BindingIssue = {
+    kind: "invalid_id" | "category_mismatch" | "not_allowed" | "ambiguous" | "unmatched" |
+        "missing_version" | "missing_image" | "capacity_exceeded" | "context_warning";
+    message: string;
+};
+export type BindingCandidate = {
+    assetId: string;
+    category: BindingCategory;
+    name: string;
+    assetVersionId: string | null;
+    evidence: BindingEvidence[];
+    issues: BindingIssue[];
+    bindable: boolean;
+    missingImage: boolean;
+    defaultSelected: boolean;
+};
+export type BindingReference = { referenceId: string; assetVersionId: string; role: string; status: string };
+export type BindingArtifact = { artifactId: string; contentFingerprint: string; status: string; selected: boolean };
+export type BindingShotBaseline = {
+    shotId: string;
+    shotFingerprint: string;
+    revisionFingerprint: string;
+    references: BindingReference[];
+    artifacts: BindingArtifact[];
+};
+export type BindingVersionBaseline = {
+    assetVersionId: string;
+    versionFingerprint: string;
+    mediaFingerprint: string;
+    bindable: boolean;
+    missingImage: boolean;
+};
+export type BindingCatalogBaseline = {
+    assetId: string;
+    assetFingerprint: string;
+    linkFingerprint: string;
+    versions: BindingVersionBaseline[];
+};
+export type BindingBaseline = {
+    projectId: string;
+    unitId: string;
+    projectRevision: number;
+    shotIds: string[];
+    shots: BindingShotBaseline[];
+    catalog: BindingCatalogBaseline[];
+};
+export type BindingPreviewRequest = { shotIds: string[] };
+export type BindingShotPreview = {
+    shotId: string;
+    existingReferences: BindingReference[];
+    candidates: BindingCandidate[];
+    issues: BindingIssue[];
+    existingVersionCount: number;
+    remainingCapacity: number;
+};
+export type BindingPreview = { baseline: BindingBaseline; shots: BindingShotPreview[] };
+
+export function previewProjectUnitShotAssetBindings(projectId: string, unitId: string, input: BindingPreviewRequest, signal?: AbortSignal): Promise<BindingPreview> {
+    return http.post<BindingPreview>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}/shot-asset-bindings/preview`, input, { signal });
+}
+
 export type Project = {
     id: string;
     userId: string;
@@ -68,7 +137,10 @@ export type ProjectAsset = {
     previewText?: string;
     updatedAt: string;
     character?: CharacterCardSummary;
+    visual?: { definition: Record<string, unknown>; status: "missing" | "ready" };
     source?: string;
+    referenceImages?: Array<{ resourceId: string }>;
+    referenceImage?: { resourceId: string };
 };
 
 export type ProjectAssetFolder = {
@@ -206,6 +278,8 @@ export type ShotAssetReference = {
     createdAt: string;
     asset?: ProjectAsset;
     referencedVersion?: {
+        referenceImages?: Array<{ resourceId: string }>;
+        referenceImage?: { resourceId: string };
         id: string;
         assetId: string;
         version: number;
@@ -343,8 +417,8 @@ export function getProjectCore(id: string) {
     return http.get<ProjectCore>(`/projects/${encodeURIComponent(id)}/core`);
 }
 
-export function listProjectUnits(projectId: string) {
-    return http.get<{ units: ProjectUnit[]; canvasCounts: Record<string, number> }>(`/projects/${encodeURIComponent(projectId)}/units`);
+export function listProjectUnits(projectId: string, config?: { signal?: AbortSignal }) {
+    return http.get<{ units: ProjectUnit[]; canvasCounts: Record<string, number> }>(`/projects/${encodeURIComponent(projectId)}/units`, config);
 }
 
 export function getProjectOverview(projectId: string) {
@@ -359,7 +433,7 @@ export function listProjectCanvases(projectId: string, page = 1, pageSize = 40) 
     return http.get<ProjectCanvasPage>(`/projects/${encodeURIComponent(projectId)}/canvases`, { params: { page, pageSize } });
 }
 
-export function listProjectAssetsPage(projectId: string, options: { page?: number; pageSize?: number; category?: string; mediaType?: string; status?: string; folderId?: string; query?: string } = {}) {
+export function listProjectAssetsPage(projectId: string, options: { page?: number; pageSize?: number; category?: string; mediaType?: string; status?: string; folderId?: string; query?: string; signal?: AbortSignal } = {}, signal?: AbortSignal) {
     return http.get<ProjectAssetPage>(`/projects/${encodeURIComponent(projectId)}/assets`, { params: {
         page: options.page || 1,
         pageSize: options.pageSize || 40,
@@ -368,7 +442,7 @@ export function listProjectAssetsPage(projectId: string, options: { page?: numbe
         status: options.status || undefined,
         folderId: options.folderId,
         q: options.query || undefined,
-    } }).then((page) => ({ ...page, assets: page.assets.map(normalizeProjectAsset) }));
+    }, signal: signal || options.signal }).then((page) => ({ ...page, assets: page.assets.map(normalizeProjectAsset) }));
 }
 
 export function listProjectAssets(projectId: string) {
@@ -447,8 +521,8 @@ export function createProjectUnit(projectId: string, input: { kind: string; titl
     return http.post<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units`, input);
 }
 
-export function getProjectUnit(projectId: string, unitId: string) {
-    return http.get<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}`);
+export function getProjectUnit(projectId: string, unitId: string, config?: { signal?: AbortSignal }) {
+    return http.get<{ unit: ProjectUnit }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}`, config);
 }
 
 export function importProjectUnits(projectId: string, units: Array<{ kind: string; title: string; sourceText?: string }>) {
@@ -562,20 +636,74 @@ export function unbindCharacterVoice(assetId: string) {
     return http.delete<ProjectCharacterDetail>(`/characters/${encodeURIComponent(assetId)}/voice`);
 }
 
-export function createProjectCharacter(projectId: string, input: { name: string; definition?: Record<string, unknown> }) {
+export function createProjectCharacter(projectId: string, input: { name: string; definition?: Record<string, unknown>; referenceImages?: Array<{ resourceId: string }>; imageResourceId?: string; imageRole?: "portrait" | "turnaround_sheet"; folderId?: string }) {
     return http.post<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters`, input);
 }
 
-export function getProjectCharacter(projectId: string, assetId: string) {
-    return http.get<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}`);
+export function createProjectAssetEntity(projectId: string, input: { name: string; category: "environment" | "prop"; definition: Record<string, unknown>; referenceImages?: Array<{ resourceId: string }>; imageResourceId?: string; folderId?: string }) {
+    return http.post<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/asset-entities`, input);
 }
 
-export function updateProjectCharacter(projectId: string, assetId: string, input: { name: string; definition: Record<string, unknown> }) {
+export function updateProjectAssetReferenceImages(projectId: string, assetId: string, input: { referenceImages: Array<{ resourceId: string }>; expectedVersionId: string }) {
+    return http.put<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/reference-images`, input);
+}
+
+export function adoptProjectAssetImageCandidate(projectId: string, assetId: string, taskId: string, input: { expectedVersionId: string }) {
+    return http.post<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/image-candidates/${encodeURIComponent(taskId)}/adopt`, input);
+}
+
+export type ProfileAnalysisCategory = "character" | "environment" | "prop";
+export type ProfileAnalysisField = "appearance" | "physique" | "clothing" | "props" | "description" | "prompt";
+export type ProfileAnalysisModelSelection = { kind: "logical"; logicalModelId: string } | { kind: "system"; channelId: string; modelKey: string };
+export type ProfileAnalysisView = {
+    taskId: string;
+    projectId: string;
+    assetId: string;
+    category: ProfileAnalysisCategory;
+    baseVersionId: string;
+    source: { resourceId: string };
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    stage: string;
+    createdAt: string;
+    updatedAt: string;
+    canCancel: boolean;
+    canAdopt: boolean;
+    currentVersionId: string;
+    blockedReason: string;
+    // Detail-only allowlist projection: absent keys and explicit null remain distinct.
+    baseline?: { versionId: string; fields: Partial<Record<ProfileAnalysisField, unknown>> };
+    draft?: Partial<Record<ProfileAnalysisField, string>>;
+    adoption?: { adoptedVersionId: string; selectedFields: ProfileAnalysisField[]; adoptedAt: string } | null;
+    error?: { reason: string; message: string };
+};
+export type ProfileAnalysisAdoptInput = { expectedVersionId: string; selectedFields: ProfileAnalysisField[]; idempotencyKey: string };
+
+export function createProjectAssetProfileAnalysis(projectId: string, assetId: string, input: { expectedVersionId: string; sourceResourceId: string; modelSelection: ProfileAnalysisModelSelection }) {
+    return http.post<{ analysis: ProfileAnalysisView }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/profile-analyses`, input);
+}
+
+export function listProjectAssetProfileAnalyses(projectId: string, assetId: string, options: { limit?: number; beforeTaskId?: string; signal?: AbortSignal } = {}) {
+    return http.get<{ analyses: ProfileAnalysisView[]; nextCursor?: string }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/profile-analyses`, { signal: options.signal, params: compactApiParams({ limit: options.limit, beforeTaskId: options.beforeTaskId }) });
+}
+
+export function getProjectAssetProfileAnalysis(projectId: string, assetId: string, taskId: string, signal?: AbortSignal) {
+    return http.get<{ analysis: ProfileAnalysisView }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/profile-analyses/${encodeURIComponent(taskId)}`, { signal });
+}
+
+export function adoptProjectAssetProfileAnalysis(projectId: string, assetId: string, taskId: string, input: ProfileAnalysisAdoptInput) {
+    return http.post<{ adoptedVersionId: string; replayed: boolean; asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/profile-analyses/${encodeURIComponent(taskId)}/adopt`, input).then((result) => ({ ...result, asset: normalizeProjectAsset(result.asset) }));
+}
+
+export function getProjectCharacter(projectId: string, assetId: string, config?: { signal?: AbortSignal }) {
+    return http.get<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}`, config);
+}
+
+export function updateProjectCharacter(projectId: string, assetId: string, input: { name: string; definition: Record<string, unknown>; expectedVersionId: string }) {
     return http.patch<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}`, input);
 }
 
-export function replaceProjectCharacterRepresentations(projectId: string, assetId: string, representations: Array<{ role: string; resourceId: string; metadata?: Record<string, unknown> }>) {
-    return http.put<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/representations`, { representations });
+export function replaceProjectCharacterRepresentations(projectId: string, assetId: string, representations: Array<{ role: string; resourceId: string; metadata?: Record<string, unknown> }>, expectedVersionId: string) {
+    return http.put<ProjectCharacterDetail>(`/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/representations`, { representations, expectedVersionId });
 }
 
 /** 非角色项目资产（场景/道具等）图片绑定：每次绑定生成新资产版本。角色必须走 replaceProjectCharacterRepresentations。 */
@@ -603,8 +731,34 @@ export function deleteProjectShot(projectId: string, shotId: string) {
     return http.delete<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}`);
 }
 
-export function replaceProjectUnitShots(projectId: string, unitId: string, shots: Array<{ title: string; description: string; durationMs: number; revision?: Partial<ShotRevisionInput>; assetVersionIds?: string[] }>, expectedShotIds?: string[]) {
-    return http.put<{ shots: ProjectShot[] }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}/shots`, { shots, ...(expectedShotIds ? { expectedShotIds } : {}) });
+export type BindingSelection = { shotId: string; assetVersionIds: string[] };
+export type BindingAppendRequest = { baseline: BindingBaseline; selections: BindingSelection[] };
+export type BindingShotAppendResult = { shotId: string; addedCount: number; addedVersionIds: string[]; unchanged: boolean; references: BindingReference[]; artifacts: BindingArtifact[] };
+export type BindingAppendResult = { projectRevision: number; unchanged: boolean; addedCount: number; shots: BindingShotAppendResult[] };
+
+export function appendProjectUnitShotAssetBindings(projectId: string, unitId: string, input: BindingAppendRequest, signal?: AbortSignal) {
+    return http.post<BindingAppendResult>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}/shot-asset-bindings/append`, input, { signal }).then((result) => ({
+        ...result,
+        shots: (result.shots ?? []).map((shot) => ({
+            ...shot,
+            addedVersionIds: shot.addedVersionIds ?? [],
+            addedCount: typeof shot.addedCount === "number" ? shot.addedCount : (shot.addedVersionIds?.length ?? 0),
+            references: shot.references ?? [],
+            artifacts: shot.artifacts ?? [],
+        })),
+    }));
+}
+
+export type GeneratedBindingBaseline = Pick<BindingBaseline, "projectId" | "unitId" | "projectRevision" | "catalog"> & { taskId: string; taskResultFingerprint: string };
+export type GeneratedBindingInput = { taskId: string; baseline: GeneratedBindingBaseline; rowIndices: number[] };
+export type GeneratedBindingResolution = { taskId: string; baseline: GeneratedBindingBaseline; rows: Array<{ rowIndex: number; candidates: BindingCandidate[]; assetVersionIds: string[]; issues: BindingIssue[] }> };
+
+export function resolveGeneratedProjectUnitShotAssetBindings(projectId: string, unitId: string, input: { taskId: string }, signal?: AbortSignal) {
+    return http.post<GeneratedBindingResolution>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}/shot-asset-bindings/resolve-generated`, input, { signal });
+}
+
+export function replaceProjectUnitShots(projectId: string, unitId: string, shots: Array<{ title: string; description: string; durationMs: number; revision?: Partial<ShotRevisionInput>; assetVersionIds?: string[] }>, expectedShotIds?: string[], generatedBinding?: GeneratedBindingInput) {
+    return http.put<{ shots: ProjectShot[] }>(`/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(unitId)}/shots`, { shots, ...(expectedShotIds ? { expectedShotIds } : {}), ...(generatedBinding ? { generatedBinding } : {}) });
 }
 
 export function linkShotAsset(projectId: string, shotId: string, input: { assetVersionId: string; role: ShotAssetReference["role"] }) {
@@ -627,6 +781,10 @@ export function confirmProjectAssetCandidate(projectId: string, candidateId: str
     return http.post<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/asset-candidates/${encodeURIComponent(candidateId)}/confirm`, { assetId: assetId || "" });
 }
 
+export function bindProjectAssetImage(projectId: string, assetId: string, input: { resourceId: string; expectedVersionId: string }) {
+    return http.put<{ asset: ProjectAsset }>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/image`, input);
+}
+
 export function updateWorkflowStep(projectId: string, stepId: string, input: { status: string; outputJson?: string; error?: string }) {
     return http.patch<{ step: WorkflowStep }>(`/projects/${encodeURIComponent(projectId)}/workflow-steps/${encodeURIComponent(stepId)}`, input);
 }
@@ -634,3 +792,241 @@ export function updateWorkflowStep(projectId: string, stepId: string, input: { s
 export function registerProjectTaskOutput(projectId: string, stepId: string, input: { taskId: string; canvasId?: string; unitId?: string; shotId?: string; artifactType?: string; assetVersionId?: string; resourceId?: string; mediaType?: string; role?: string; metadataJson?: string; outputJson?: string }) {
     return http.post<{ step: WorkflowStep }>(`/projects/${encodeURIComponent(projectId)}/workflow-steps/${encodeURIComponent(stepId)}/task-output`, input);
 }
+
+export type ProjectAssetBatchReferenceSource = "original" | "current" | "none";
+
+export type ProjectAssetBatchItemInput = {
+    assetId: string;
+    expectedVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    prompt: string;
+    operation?: string;
+};
+
+export type PreflightProjectAssetBatchRequest = {
+    provider?: string;
+    model?: string;
+    logicalModelId?: string;
+    config?: Record<string, unknown>;
+    items: ProjectAssetBatchItemInput[];
+};
+
+export type ProjectAssetBatchPreflightItem = {
+    position: number;
+    assetId: string;
+    assetName: string;
+    assetCategory: string;
+    baseVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    referenceCount: number;
+    referenceResourceIds?: string[];
+    operation: string;
+    prompt: string;
+    knownMicrocredits: number;
+    priceUnknown: boolean;
+};
+
+export type ProjectAssetBatchPreflightResult = {
+    projectId: string;
+    model: string;
+    provider: string;
+    totalKnownMicrocredits: number;
+    priceUnknownCount: number;
+    preflightDigest: string;
+    items: ProjectAssetBatchPreflightItem[];
+};
+
+export type CreateProjectAssetBatchRequest = PreflightProjectAssetBatchRequest & {
+    idempotencyKey: string;
+    preflightDigest: string;
+};
+
+export type ProjectAssetBatchAttemptRecord = {
+    attempt: number;
+    taskId: string;
+    status: string;
+    errorReason?: string;
+    errorMessage?: string;
+    updatedAt: string;
+};
+
+export type ProjectAssetBatchItemStatus =
+    | "pending"
+    | "running"
+    | "cancel_requested"
+    | "succeeded"
+    | "failed"
+    | "stopped"
+    | "cancelled"
+    | "reconcile_required";
+
+export type ProjectAssetBatchItemView = {
+    id: string;
+    batchId: string;
+    position: number;
+    assetId: string;
+    assetName: string;
+    assetCategory: string;
+    baseVersionId: string;
+    referenceSource: ProjectAssetBatchReferenceSource;
+    status: ProjectAssetBatchItemStatus;
+    taskId?: string;
+    attempt: number;
+    attemptHistory?: ProjectAssetBatchAttemptRecord[];
+    knownMicrocredits: number;
+    priceUnknown: boolean;
+    errorReason?: string;
+    errorMessage?: string;
+    canRetry: boolean;
+    outputUrl?: string;
+    candidate?: {
+        assetId: string;
+        baseVersionId: string;
+        state: "pending_confirmation" | "adopted";
+        adoptedVersionId?: string;
+    };
+    updatedAt: string;
+};
+
+export type ProjectAssetBatchStatus =
+    | "pending"
+    | "running"
+    | "completed"
+    | "partial_failed"
+    | "stopped";
+
+export type ProjectAssetBatchView = {
+    id: string;
+    projectId: string;
+    status: ProjectAssetBatchStatus;
+    model: string;
+    provider: string;
+    totalCount: number;
+    totalKnownMicrocredits: number;
+    priceUnknownCount: number;
+    stoppedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+    items: ProjectAssetBatchItemView[];
+};
+
+export function preflightProjectAssetBatch(projectId: string, input: PreflightProjectAssetBatchRequest, signal?: AbortSignal) {
+    return http.post<ProjectAssetBatchPreflightResult>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/preflight`, input, { signal });
+}
+
+export function createProjectAssetBatch(projectId: string, input: CreateProjectAssetBatchRequest) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches`, input);
+}
+
+export function listProjectAssetBatches(projectId: string, options: { limit?: number; signal?: AbortSignal } = {}) {
+    return http.get<{ batches: ProjectAssetBatchView[] }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches`, {
+        signal: options.signal,
+        params: compactApiParams({ limit: options.limit }),
+    });
+}
+
+export function getProjectAssetBatch(projectId: string, batchId: string, signal?: AbortSignal) {
+    return http.get<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}`, { signal });
+}
+
+export function stopProjectAssetBatch(projectId: string, batchId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/stop`, {});
+}
+
+export function cancelProjectAssetBatchTasks(projectId: string, batchId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/cancel-tasks`, {});
+}
+
+export function retryProjectAssetBatchItem(projectId: string, batchId: string, itemId: string) {
+    return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}/retry`, {});
+}
+
+export type TurnaroundViewRole = "front" | "side" | "back";
+
+export type TurnaroundCropRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
+export type TurnaroundPlanSuggestedView = {
+    role: TurnaroundViewRole;
+    box?: TurnaroundCropRect;
+    note?: string;
+};
+
+export type TurnaroundSplitPlanDraft = {
+    views: TurnaroundPlanSuggestedView[];
+    manualReason?: string;
+    requiresManualReview: boolean;
+};
+
+export type TurnaroundSplitPlanView = {
+    taskId: string;
+    projectId: string;
+    assetId: string;
+    baseVersionId: string;
+    sourceResourceId: string;
+    sourceWidth: number;
+    sourceHeight: number;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    stage: string;
+    draft?: TurnaroundSplitPlanDraft;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type TurnaroundConfirmedCropBox = {
+    role: TurnaroundViewRole;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    confirmed: boolean;
+};
+
+export type ExecuteTurnaroundSplitRequest = {
+    idempotencyKey: string;
+    expectedVersionId: string;
+    sourceResourceId: string;
+    sourceWidth: number;
+    sourceHeight: number;
+    boxes: TurnaroundConfirmedCropBox[];
+};
+
+export type TurnaroundSplitExecutionResult = {
+    taskId: string;
+    projectId: string;
+    assetId: string;
+    baseVersionId: string;
+    adoptedVersionId: string;
+    sourceResourceId: string;
+    createdResources: Record<TurnaroundViewRole, string>;
+    replayed: boolean;
+    requestDigest: string;
+    character: ProjectCharacterDetail;
+};
+
+export function createCharacterTurnaroundSplitPlan(
+    projectId: string,
+    assetId: string,
+    input: { expectedVersionId: string; sourceResourceId: string; modelSelection: ProfileAnalysisModelSelection },
+) {
+    return http.post<{ plan: TurnaroundSplitPlanView }>(
+        `/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/turnaround-split-plans`,
+        input,
+    );
+}
+
+export function executeCharacterTurnaroundSplit(
+    projectId: string,
+    assetId: string,
+    input: ExecuteTurnaroundSplitRequest,
+) {
+    return http.post<TurnaroundSplitExecutionResult>(
+        `/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/turnaround-splits`,
+        input,
+    );
+}
+

@@ -93,7 +93,8 @@ func (r *Repository) ReleaseUploadSession(userID, id string) error {
 // SaveResourceWithinStorageLimit publishes ready bytes and consumes the session
 // reservation under the same database lock used by admission on every instance.
 func (r *Repository) SaveResourceWithinStorageLimit(resource *model.Resource, limit, dailyLimit int64, reservationID string) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+  tx := repo.db
 		if err := lockUploadStorage(tx, resource.UserID); err != nil {
 			return err
 		}
@@ -119,7 +120,7 @@ func (r *Repository) SaveResourceWithinStorageLimit(resource *model.Resource, li
 		}
 		// Save inside the transaction so physical-object deduplication uses the
 		// existing usage query; rollback leaves the resource non-ready on denial.
-		if err := tx.Save(resource).Error; err != nil {
+		if err := New(tx).saveLiveResource(resource); err != nil {
 			return err
 		}
 		stored, err := New(tx).UserStoredFileBytes(resource.UserID)

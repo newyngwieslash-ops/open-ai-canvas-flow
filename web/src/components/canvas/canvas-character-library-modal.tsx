@@ -1,4 +1,6 @@
 import { App, Button, Input } from "antd";
+import { isAssetAvailableForReference } from "@/lib/asset-availability";
+import { useAssetStore } from "@/stores/use-asset-store";
 import { Image as ImageIcon, Plus, Search, UserRound, Volume2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -51,13 +53,18 @@ export function CanvasCharacterLibraryModal({
         enabled: open,
         placeholderData: keepPreviousData,
     });
-    const characters = charactersQuery.data?.characters || [];
+    const localAssets = useAssetStore((state) => state.assets);
+    const characters = (charactersQuery.data?.characters || []).filter((item) => isAssetAvailableForReference(item.asset) && !localAssets.some((local) => local.id === item.asset.id && !isAssetAvailableForReference(local)));
     const total = charactersQuery.data?.total || 0;
     const canPack = Boolean(imageResourceId);
 
     const insertCharacter = async (asset: ProjectAsset) => {
-        await onInsert([projectCharacterToInsertPayload(asset)]);
-        onClose();
+        try {
+            await onInsert([projectCharacterToInsertPayload(asset)]);
+            onClose();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "角色不可引用");
+        }
     };
 
     const createAndInsert = async () => {

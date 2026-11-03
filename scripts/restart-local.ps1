@@ -1,5 +1,5 @@
 # 源铭振跃本地二次开发重启。
-# 前端默认 5178（受限时改用 15178），后端 8178。
+# 前端默认 5178（受限时改用 15178），后端默认 8178（受限时改用 18178）。
 # 数据目录、Go 缓存、Vite 代理约定见 docs/content/docs/backend/local-development.mdx
 
 [CmdletBinding()]
@@ -13,6 +13,28 @@ $ErrorActionPreference = "Stop"
 $WebPort = 5178
 $BackendPort = 8178
 
+# 本机代理软件（Clash/Surge 等）的 fake-IP 与 TUN 模式会把公网域名解析到
+# 198.18.0.0/15（RFC 2544 基准测试段）和 fdfe::/16（IPv6 ULA）。Go 的
+# IsPrivate() 会把后者判为私网，SSRF 防护因此拒绝全部外部渠道。这里按域名
+# 精确放行本地开发要验证的服务商入口，不关闭 SSRF。
+# 以 `*.` 开头的条目按子域后缀放行，用于对象存储这类由 bucket/region 拼接的域名。
+$allowedPrivateUpstreamHosts = @(
+    "localhost",
+    "127.0.0.1",
+    "api.yingce.tv",
+    "ai.yingce.tv",
+    "metaso.cn",
+    "yuxibox.cn",
+    "lxmone.xyz",
+    "*.qiniucs.com",
+    "*.qiniup.com",
+    "*.clouddn.com",
+    "*.qbox.me",
+    "*.aliyuncs.com",
+    "*.myqcloud.com",
+    "*.amazonaws.com"
+) -join ","
+
 function ConvertTo-ArgSet([string[]]$Values) {
     $set = @{}
     foreach ($value in @($Values)) {
@@ -25,7 +47,7 @@ $argSet = ConvertTo-ArgSet $Remaining
 if ($argSet.ContainsKey("--help") -or $argSet.ContainsKey("-h") -or $argSet.ContainsKey("/?")) {
     Write-Host "restart.bat [--check]"
     Write-Host ("  前端默认 http://localhost:{0}，端口受限时改用 15178。" -f $WebPort)
-    Write-Host ("  后端 http://127.0.0.1:{0}" -f $BackendPort)
+    Write-Host ("  后端默认 http://127.0.0.1:{0}，端口受限时改用 18178。" -f $BackendPort)
     Write-Host "  本项目占用指定端口则结束并重启；其他项目占用则写入 .local\restart.log 后退出。"
     exit 0
 }
@@ -153,8 +175,6 @@ function Get-RepoProcessRoot([int]$ProcessId) {
         if (-not $record) { break }
         if (Test-TextFromRepo ((@($record.CommandLine, $record.ExecutablePath, $record.Name) -join " "))) {
             $root = $current
-        } else {
-            break
         }
         $name = [string]$record.Name
         if ($name -match '(?i)^(explorer|services|svchost|wininit|winlogon)\.exe$') { break }
@@ -235,8 +255,8 @@ function Test-CommandExists([string]$Name) {
 }
 
 function Install-WebDependencies {
-    $viteBinary = Join-Path $webDir "node_modules\.bin\vite"
-    if (Test-Path -LiteralPath $viteBinary) { return }
+    $viteEntry = Join-Path $webDir "node_modules\vite\bin\vite.js"
+    if (Test-Path -LiteralPath $viteEntry) { return }
     Write-RestartLog INFO "web/node_modules 不存在，正在执行 bun install --frozen-lockfile"
     Push-Location $webDir
     try {
@@ -273,6 +293,11 @@ if ($webOcc.Status -eq "unavailable") {
     $webOcc = Get-PortOccupancy $WebPort
 }
 $backendOcc = Get-PortOccupancy $BackendPort "127.0.0.1"
+if ($backendOcc.Status -eq "unavailable") {
+    Write-RestartLog WARN ("后端端口 {0} 无法绑定，尝试备用端口 18178。{1}" -f $BackendPort, ($backendOcc.Details -join "; "))
+    $BackendPort = 18178
+    $backendOcc = Get-PortOccupancy $BackendPort "127.0.0.1"
+}
 
 Write-RestartLog INFO ("仓库: {0}" -f $repoRoot)
 Write-RestartLog INFO ("前端端口 {0}: {1}" -f $WebPort, $webOcc.Status)
@@ -300,6 +325,15 @@ if ($Check) {
 $killIds = New-Object "System.Collections.Generic.HashSet[int]"
 foreach ($procId in @($webOcc.Ours + $backendOcc.Ours)) {
     [void]$killIds.Add((Get-RepoProcessRoot $procId))
+    [void]$killIds.Add([int]$procId)
+}
+foreach ($port in @(5178, 15178, 8178, 18178)) {
+    foreach ($procId in @(Get-ListeningPids $port)) {
+        if (Test-ProcessFromRepo $procId) {
+            [void]$killIds.Add((Get-RepoProcessRoot $procId))
+            [void]$killIds.Add([int]$procId)
+        }
+    }
 }
 $marker = Read-RestartMarker
 if ($marker) {
@@ -347,21 +381,37 @@ $goModLiteral = ConvertTo-PowerShellLiteral $goModuleCache
 $backendAddr = "127.0.0.1:{0}" -f $BackendPort
 $proxyTarget = "http://127.0.0.1:{0}" -f $BackendPort
 
+# 禁用控制台快速编辑模式，防止鼠标误点选中控制台文本导致 Go 后端或 Vite 输出阻塞挂起。
+# 注意：Start-Process -ArgumentList 通过命令行传递 -Command 时，Windows CommandLineToArgvW 会剥离未转义的双引号，
+# 因此 C# DllImport 中的双引号必须写为 \"kernel32.dll\"，否则 Add-Type 会编译失败并被静默吞掉。
+$disableQuickEdit = @"
+try {
+    Add-Type -Name ConMode -Namespace Win32 -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m);'
+    `$hIn = [Win32.ConMode]::GetStdHandle(-10)
+    `$mode = [uint32]0
+    if ([Win32.ConMode]::GetConsoleMode(`$hIn, [ref]`$mode)) {
+        [void][Win32.ConMode]::SetConsoleMode(`$hIn, (`$mode -band (-bnot 0x40)) -bor 0x80)
+    }
+} catch {}
+"@
+
 $backendCommand = @"
 `$ErrorActionPreference = 'Stop'
+$disableQuickEdit
 Set-Location -LiteralPath $backendDirLiteral
 `$env:CANVAS_BACKEND_ADDR = '$backendAddr'
 `$env:CANVAS_BACKEND_DATA_DIR = $dataDirLiteral
-`$env:CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS = 'localhost,127.0.0.1'
+`$env:CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS = '$allowedPrivateUpstreamHosts'
 `$env:GOCACHE = $goBuildLiteral
 `$env:GOMODCACHE = $goModLiteral
 Write-Host '源铭振跃后端: http://$backendAddr' -ForegroundColor Cyan
-Write-Host '已放行本机模型上游: localhost, 127.0.0.1' -ForegroundColor DarkGray
+Write-Host '已放行本机模型上游: $allowedPrivateUpstreamHosts' -ForegroundColor DarkGray
 go run ./cmd/server
 "@
 
 $webCommand = @"
 `$ErrorActionPreference = 'Stop'
+$disableQuickEdit
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = '$proxyTarget'
 Write-Host '源铭振跃前端: http://localhost:$WebPort' -ForegroundColor Cyan
@@ -369,6 +419,12 @@ bun run vite --host 0.0.0.0 --port $WebPort --strictPort
 "@
 
 $backendProcess = Start-Process -FilePath $powerShellPath -WindowStyle Normal -WorkingDirectory $backendDir -PassThru -ArgumentList @("-NoLogo", "-NoExit", "-NoProfile", "-Command", $backendCommand)
+$backendDeadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $backendDeadline) {
+    if ((Get-ListeningPids $BackendPort).Count -gt 0) { break }
+    if ($backendProcess.HasExited) { break }
+    Start-Sleep -Milliseconds 200
+}
 $webProcess = Start-Process -FilePath $powerShellPath -WindowStyle Normal -WorkingDirectory $webDir -PassThru -ArgumentList @("-NoLogo", "-NoExit", "-NoProfile", "-Command", $webCommand)
 
 [pscustomobject]@{

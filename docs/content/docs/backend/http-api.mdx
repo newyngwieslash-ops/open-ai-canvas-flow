@@ -5,6 +5,94 @@ description: 信封、错误码与 OpenAPI
 
 # HTTP API 合同
 
+## 章节分镜生成资产合同
+
+候选来自 `GET /api/projects/:id/assets?page=1&pageSize=80` 的完整分页（`assets/total/page/pageSize/hasMore/categoryCounts/folderCounts`），不是章节 workspace 的已引用资产子集。章节文本任务的 `chapterAssetContext` 只提交 `projectId/unitId/scope`；服务端重建允许集合与摘要，不接受客户端操作、可信摘要或允许集合。摘要 UTF-8 上限 24 KiB，另检查实际完整 prompt 的模型上下文预算；超限拒绝且不截断目录。
+
+`POST /api/projects/:id/units/:unitId/shot-asset-bindings/resolve-generated` 接收 `{ taskId }`，请求体上限 64 KiB，只读返回 `{ taskId, baseline, rows }`。每行是 `{ rowIndex, candidates, assetVersionIds, issues }`；`rowIndex` 是真实输出零基序号。taskId 不是鉴权凭据：仍需当前登录、项目归属与真实任务 owner；任务必须为本项目本章节的 `canvas_text`、`storyboard`、`mode=text`、`succeeded`，并使用创建时服务端允许集合。
+
+`baseline` 必含 `projectId, unitId, projectRevision, taskId, taskResultFingerprint, catalog`。目录每项必含 `assetId, assetFingerprint, linkFingerprint, versions`，版本必含 `assetVersionId, versionFingerprint, mediaFingerprint, bindable, missingImage`；无版本资产也保留空 versions。基线按服务端完整返回值原样携回，不得只提交所选资产；指纹比较真实任务输入/结果与完整目录，不是签名或授权。
+
+`PUT /api/projects/:id/units/:unitId/shots` 保留人工 replace 合同，`shots` 必填且数量为 `1..200`，每镜 `title` 与 `description` 经 `TrimSpace` 后必须非空（`durationMs >= 0`）；新增可选 `generatedBinding: { taskId, baseline, rowIndices }`。章节生成路径必传且必须显式携带 `expectedShotIds`（无旧镜头为 `[]`）。rowIndices 与 shots 等长、无重复、在任务行范围内；服务端在同一 owner 协调替换事务中重新解析，校验完整基线、标题/描述/时长及完整 revision 脚本、对应行合法版本子集，每镜最多 6 个不同 assetVersionId。超过 6 个不可默认取前 6；UI 展示全部候选明确选择，取消零写入。前端按 `taskId` 恢复同一生成任务（避免重复创建模型任务，明确放弃任务后才重新生成）；`saveGeneratedChapterStoryboard` 在 `PUT /api/projects/:id/units/:unitId/shots` 遭遇网络或瞬时失败（非 `AbortError` 且非 `400`/`404`/`409`/`422` 终态 `ApiError`）时，按 `(projectId, unitId, taskId)` 在 `pendingGeneratedStoryboardSaves` 中缓存已准备完毕的 `{ shots, expectedShotIds, generatedBinding: { taskId, baseline, rowIndices }, issues }` 保存输入，同任务重试直接重放原 `shots`、`expectedShotIds`、`baseline` 与 `rowIndices` 而不再重新调用 `resolve-generated` 或 `confirmIssues`，并在保存成功、收到 `400`/`404`/`409`/`422` 终态错误或显式放弃任务（`clearPendingGeneratedStoryboardSave`）时清除缓存。
+
+模型字段 `projectAssetRefs` 每项为 `{ assetId?, category, name? }`，category 为 `character|environment|prop`。有效例：目录存在角色 `asset-1` 时 `{ "assetId":"asset-1", "category":"character" }`；无 ID 时 `{ "category":"character", "name":"阿明" }` 仅在完整同类目录精确唯一时成立（仅 TrimSpace）。无效例：`{ "assetId":"unknown", "category":"character", "name":"阿明" }` 不按名称兜底；类别错配、任务范围外 ID 同样阻止生成保存。普通提及、对白说话人不默认视觉绑定。candidate 的 assetVersionId 必返但可为 null，evidence 使用 Unicode code-point 半开区间，结构化无文本区间为 0/0；业务判断用 issues.kind，不解析 message。
+
+workspace 引用版本的可选 `referencedVersion.referenceImages`（及首图兼容字段 `referencedVersion.referenceImage`）仅返回经 ready、owner、image 资源校验的绑定版本原图；缺失时不得回退当前资产 head。共享画布协议及人工 replace 不要求 generatedBinding，无 schema 迁移。存量镜头的只读预览与原子追加写路径见下节“章节存量镜头资产预览与追加合同”。
+
+PUT 请求体上限 2 MiB，成功信封的 data 为 `{ shots: [...] }`。失败沿统一信封：无登录 401/unauthorized；镜头数量（1..200）/必填项、任务/范围/格式/脚本/生成基线不匹配及已有镜头集合变化为 400/invalid_argument；`resolve-generated` 与 `PUT /api/projects/:id/units/:unitId/shots` 的项目、章节或生成任务不存在或不属于当前用户（仓储 `gorm.ErrRecordNotFound`）统一经 `mapStoryboardBindingNotFoundError` 映射为 404/not_found（`ErrProjectNotFound`，不泄露跨账号资源存在性）；项目归属变化或 owner 协调归属扩展重试耗尽为 409/conflict；owner 协调预算或可重试锁失败为 503/unavailable；未分类内部错误为 500/internal。不得把生成基线或镜头集合变化写成 409，也不把全部并发错误笼统写成 409 或 503，或通过 msg 推断细分错误。
+
+### 章节存量镜头资产预览与追加合同
+
+存量镜头的资产自动匹配与追加绑定拆分为只读预览与受并发基线保护的原子追加两个端点：
+
+- `POST /api/projects/:id/units/:unitId/shot-asset-bindings/preview`：请求体上限 64 KiB，入参 `{ shotIds: string[] }`。服务端对 `shotIds` 执行 `TrimSpace` 与去重后要求镜头数量在 `1..100` 范围内；接口严格只读（通过 `WithStoryboardAssetSnapshot` 与 `ReadStoryboardAssetSnapshot` 读取一致性快照），不创建模型任务、不写入 `shot_asset_references`、不使任何已有产物失效。服务端核验当前登录用户对项目、章节及全部目标镜头的归属（任一缺失或越权均通过 `service.IsProjectNotFound` 映射返回 `404 / not_found`，不泄露跨账号项目或镜头信息），返回 `data: { baseline, shots }`：
+  - `shots` 按去重排序后的镜头顺序返回每镜 `{ shotId, existingReferences, candidates, issues, existingVersionCount, remainingCapacity }`。`existingReferences` 携带完整 `(referenceId, assetVersionId, role, status)` 元组；`existingVersionCount` 统计该镜头已绑定的不同 `assetVersionId` 数，`remainingCapacity = max(0, 6 - existingVersionCount)`。`POST /preview` 不会从 `shots[].candidates` 中剔除已绑定的 `assetVersionId`，而是由解析器 `applyStoryboardAssetCapacity` 在计算 `TotalVersionCount`（已有不同版本与可绑定默认候选版本的并集）时对已绑定的 `assetVersionId` 去重；当合并后的不同版本总数超过 `6` 时，全部候选 `defaultSelected` 置为 `false` 并附加 `capacity_exceeded` issue。前端 `ChapterAssetBindingDrawer` 在组装新 `selections` 时过滤已绑定的 `assetVersionId`（`POST /append` 服务端亦按集合差 `D = S(u) \ versionId(B(u))` 去重）。
+  - `baseline` 为 `{ projectId, unitId, projectRevision, shotIds, shots, catalog }`：`shotIds` 与 `shots` 均按 `shotId` 升序排列且一一对应（`1..100`），每镜 `BindingShotBaseline` 含 `shotId, shotFingerprint, revisionFingerprint, references, artifacts`；`catalog` 按 `assetId` 升序排列且包含当前关联的全部资产及既有引用涉及的资产（含无版本资产 `versions: []`），版本按 `assetVersionId` 升序并携带 `versionFingerprint`、`mediaFingerprint`、`bindable`、`missingImage`。
+- `POST /api/projects/:id/units/:unitId/shot-asset-bindings/append`：请求体上限 512 KiB，入参 `{ baseline, selections }`。`baseline` 是不可信客户端提交的期望快照（untrusted expectation snapshot），不是签名或授权凭据；`selections`（每项 `{ shotId, assetVersionIds }`）非空且必须完整覆盖 `baseline.shotIds` 全部镜头（本次不新增引用的镜头传 `assetVersionIds: []`），不得包含基线外镜头，同一 `shotId` 若重复出现且去重后的版本集合不一致则以 `400` 拒绝。
+  - **事务内重算与严格校验顺序**：请求进入事务前先校验登录（`401`）、项目与章节归属（`404 / not_found`）、非归档状态及 `validateBindingBaseline` / `selections` 结构完整性（`400 / storyboard_asset_binding_invalid_request`）。随后在 `WithStoryboardAssetOwners` 锁与单个数据库事务内重新核验项目/章节与归档状态，执行 `LockStoryboardBindingAppendScope` 加锁并按以下固定顺序判定：
+    1. **跨项目/跨章节镜头校验**：目标 `shotIds` 中存在属于其他项目或章节的镜头（`shot.ProjectID != projectID || shot.UnitID != unitID`）-> 返回 `422`（`code=42201`，`storyboard_asset_binding_invalid_reference`）；
+    2. **预览后镜头删除校验**：目标 `shotIds` 在当前章节中缺失（已删除）-> 返回 `409`（`storyboard_asset_binding_conflict`）；
+    3. **完整基线比对与精确后态判定**：读取 `ReadStoryboardAssetSnapshot` 重算当前 `currentPreview.Baseline`，与请求 `baseline`（`projectRevision`、`shotIds`、`shots`、`catalog`）完整比对；若不一致则检查是否满足 `isStrictExpectedPostState`（若满足则在完成后续引用与容量核验后进入 `200 OK` 幂等重放，否则立即返回 `409 storyboard_asset_binding_conflict` 提示刷新预览）；
+    4. **所选 `assetVersionIds` 目录与媒体资源准入校验**：逐镜校验所选 `assetVersionId` 存在于当前快照、资产与版本状态合法（`draft | review | confirmed`，拒绝 `deleting`）、归属当前用户与项目关联、分类属于 `character | environment | prop`，并通过 `RequireAssetVersionReferences` 校验 -> 任一不满足返回 `422`（`code=42201`，`storyboard_asset_binding_invalid_reference`）。注意：仅缺少参考图的有效版本（`missingImage: true`，`DefinitionJSON` 未引用图片资源）仍满足 `bindable: true` 且 `POST /append` 正常返回 `200 OK`；仅当资产/版本未关联、缺失、类别不符、处于 `deleting` 状态，或 `version.DefinitionJSON` 显式引用的资源 ID 不存在、跨账号、非 `ready` 或处于 `deleting`（存在未完成 `ResourceDeletionIntent` / `ResourceDeletionJob`）时才返回 `42201`；
+    5. **单镜头不同版本容量校验**：单镜头所选、已有或合并去重后的不同 `assetVersionId` 数 `distinct(versionId(B ∪ D)) > 6` -> 返回 `422`（`code=42202`，`storyboard_asset_binding_capacity_exceeded`）。
+  - **三类 `200` 成功分支（统一返回 `data: { projectRevision, unchanged, addedCount, shots }`，每镜含 `{ shotId, addedCount, addedVersionIds, unchanged, references, artifacts }`，其中 `references` 均为完整 `(referenceId, assetVersionId, role, status)` 元组）**：
+    1. **首次真实追加（`addedCount > 0`，`D ≠ ∅`）**：仅插入缺失的 `(shot_id, asset_version_id)` 引用行，新行固定使用 `role: "reference"`、`status: "linked"`（`reference/linked`），保留既有引用行的 `referenceId`、`role` 与 `status`；在 `ApplyStoryboardShotAssetBindingsAppend` 中，**仅对本次发生真实新增引用的镜头（`addedCount > 0`）** 将其全部非 `failed` 的 `ShotArtifact` 行更新为 `status = "stale"` 且 `selected = false`（取消当前选中），将其已 `failed` 的 `ShotArtifact` 行保持 `status = "failed"` 且将 `selected` 清零为 `false`（保留全部历史产物记录与媒体文件，`addedCount == 0` 的未改动镜头产物完全不修改），调用一次 `invalidateUnitWorkflowTx(..., "storyboard", updatedAt)` 使章节 `storyboard` 之后的工作流阶段失效，并在同一事务内通过 `project.revision` CAS 递增一次项目修订号（返回 `unchanged: false`）。
+    2. **全部已存在零写幂等（`totalIntendedAdded == 0` 且基线一致）**：所选版本均已绑定在该镜头且基线未漂移时，执行零数据库写入（不插入引用、不失效产物、不调用 `invalidateUnitWorkflowTx`、不递增 `projectRevision`、不改写 `projects.updated_at`），返回顶层 `unchanged: true, addedCount: 0, projectRevision: currentProject.Revision` 及每镜 `unchanged: true, addedCount: 0, addedVersionIds: []`。
+    3. **精确后态幂等重放（`isStrictExpectedPostState`）**：客户端因断网或超时重发同一 `{ baseline, selections }` 时，若当前数据库状态精确等于该请求首次成功提交后的期望终态（`totalIntendedAdded > 0`、`current.ProjectRevision == baseline.ProjectRevision + 1`、`catalog` 与 `shotIds` 未变、每镜 `shotFingerprint` 与 `revisionFingerprint` 未变、当前引用精确等于 `baseline.references` 加上 `addedByShot[shotId]` 且新增项均为 `role: "reference", status: "linked"`、发生新增引用的镜头上全部非 `failed` 产物为 `status = "stale"` 且 `selected = false` 而 `failed` 产物为 `status = "failed"` 且 `selected = false`、未新增引用的镜头产物保持原状），服务端执行零数据库写入、零再次失效与零修订号递增，直接返回 `200 OK`，顶层为 `unchanged: true, addedCount: 0, projectRevision: currentProject.Revision`，每镜为 `unchanged: true, addedCount: 0, addedVersionIds: []`（并携带刷新后的当前 `references` 与 `artifacts`），避免断连重试误报 `409`。
+
+| HTTP 状态 | 业务 `code` | 机器可读 `reason` | 触发场景与前端处理 |
+| --- | --- | --- | --- |
+| `400` | `400` | `storyboard_asset_binding_invalid_request` / `invalid_argument` | `append` 请求体格式错误、已归档项目、基线字段/升序/映射非法、`shotIds` 不在 `1..100`、`selections` 未完整覆盖或重复 `shotId` 冲突；`preview` 参数非法返回 `400 / invalid_argument` |
+| `401` | `401` | `unauthorized` | 未登录或会话失效 |
+| `404` | `404` | `not_found` | `preview` 的项目/章节/目标镜头不存在或不属于当前用户；`append` 的项目/章节不存在或不属于当前用户 |
+| `409` | `409` | `storyboard_asset_binding_conflict` | 目标镜头已删除、基线漂移且不满足 `isStrictExpectedPostState`、`project.revision` CAS 失败、或 `WithStoryboardAssetOwners` 归属扩展重试（最多 2 次重启）耗尽；前端必须重拉 `preview` 刷新基线后再确认，不得用旧基线盲目重试 |
+| `422` | `42201` | `storyboard_asset_binding_invalid_reference` | 目标镜头跨项目/章节，或基线未漂移但所选 `assetVersionId` 不存在、越权、未关联、非 `character\|environment\|prop`、状态非法（含 `deleting`），或 `DefinitionJSON` 显式引用的资源缺失/越权/非 `ready`/处于 `deleting`（注：仅无参考图的有效版本 `missingImage: true` 仍满足 `bindable: true` 并返回 `200`） |
+| `422` | `42202` | `storyboard_asset_binding_capacity_exceeded` | 单镜头已有、所选或合并去重后的不同 `assetVersionId` 数超过 `6` |
+| `500` | `500` | `internal` | 未分类内部错误 |
+| `503` | `503` | `storyboard_asset_binding_busy` | `WithStoryboardAssetOwners` 5 秒锁预算超时，或 PostgreSQL `55P03`/`40P01`/`40001`、SQLite `SQLITE_BUSY`/`SQLITE_LOCKED`/`database is locked` 在最多 3 次有界尝试后仍未获锁（`Retryable: true`）；前端保留原 `{ baseline, selections }` 直接重试 |
+
+#### `WithStoryboardAssetOwners` 并发协调与资源删除 / Outbox 边界
+
+- **跨驱动 owner 协调锁派生与锁层次（`project_asset_binding_lock.go`）**：
+  - `WithStoryboardAssetOwners(ctx, ownerIDs, fn)` 要求在最外层开启新事务（禁止在已持有行锁的事务内嵌套调用），在 5 秒总上下文预算与最多 3 次有界尝试内获取 owner 协调锁：
+    - **PostgreSQL**：事务首步执行 `SET LOCAL lock_timeout = '5s'`；对去重后的非空逻辑 `ownerID` 按字典序升序排列（`sort.Strings(owners)`），逐个计算 `sum := sha256.Sum256([]byte("storyboard-assets:" + owner))`，取前 8 字节大端序转换为有符号 64 位整数 `key := int64(binary.BigEndian.Uint64(sum[:8]))`，按逻辑 `ownerID` 升序执行单参数 `SELECT pg_advisory_xact_lock(key)`。
+    - **SQLite**：在第一次事务读取前执行 `UPDATE assets SET id = id WHERE 1 = 0`，使 `go-sqlite3` 立即取得写事务锁（`RESERVED`），且不触碰 `upload` 表。
+  - **管理员目标 owner 解析、跨项目共享资产发现与归属扩展重启**：管理员操作或后台清理始终从数据库读取目标项目、资产、资源及物理对象别名的真实 `userID` 作为加锁 owner，绝不使用管理员自身 `userID`。当共享资产关联到多个项目或操作涉及跨项目/跨资产引用时（`DiscoverStoryboardBindingAppendOwners`、`WithStoryboardAssetWrite`、`withStoryboardResourceWrite`、`withStoryboardUserAssetsWrite`、`withStoryboardDeletionJobWrite`、`WithStoryboardProjectWrite`），先在锁外发现初始 owner 集合，进入事务后再重读数据库并通过 `RequireStoryboardAssetOwners` 复核；若锁内发现新关联的 owner（`storyboardOwnersExpanded`），立即完整回滚当前事务，将新 owner 并入集合重新按字典序升序加锁，最多扩展重启 2 次（共 3 次尝试），仍不稳定则返回 `409 storyboard_asset_binding_conflict`。
+  - **固定表序与主键升序行锁**：取得 owner 协调锁并通过 `RequireStoryboardAssetOwners` 后，`LockStoryboardBindingAppendScope`（及 `lockStoryboardShotRows`）先调用 `lockResourceLifecycle`（PostgreSQL 执行 `SELECT pg_advisory_xact_lock(hashtext('resource-lifecycle')::bigint)`，SQLite 执行 `UPDATE resources SET status = status WHERE 1 = 0`），再按固定表顺序与主键 `id` 升序（`ORDER BY id FOR UPDATE`）依次锁定：`projects` -> `project_units` -> `shots` -> `project_asset_links` -> `assets` -> `asset_versions` -> `shot_revisions` -> `asset_representations` -> `resources` -> `shot_asset_references` -> `shot_artifacts`。
+- **共享同一 owner 协调锁的全部竞争写路径**：
+  1. 分镜与工作流写路径：章节生成保存与人工替换 `ReplaceProjectUnitShots`（`PUT /api/projects/:id/units/:unitId/shots`）、存量镜头追加绑定 `AppendProjectUnitShotAssetBindings`（`POST /api/projects/:id/units/:unitId/shot-asset-bindings/append`）、以及 `CreateProjectShot`、`UpdateProjectShot`、`DeleteProjectShot`、`UpdateShotRevision`、`CreateShotArtifact`、`SelectShotArtifact`、`AdoptShotImageCandidate`、`ReorderProjectShots`；
+  2. 项目与章节写路径：`UpdateProject`、`CreateProjectUnit`、`UpdateProjectUnit`、`DeleteProjectUnit`、资产关联与解绑 `LinkProjectAsset` / `UnlinkProjectAsset` / `ReorderProjectAssets`；
+  3. 资产与版本写路径：`UpsertUserAsset`（`UpsertAsset`）、`ReplaceUserAssets`（`ReplaceAssets`）、`CreateProjectAssetEntity`（`CreateProjectEntity`）、`CreateProjectCharacter`、`UpdateCharacter`、`UpdateProjectCharacter`、`SaveCharacterVersion`、`ConfirmProjectCharacterCandidate`、`SetProjectReferenceImages`（`CommitAssetReferenceVersion`）、`ReplaceCharacterRepresentations`、`ReplaceProjectCharacterRepresentations`、`ReplaceProjectAssetRepresentations`、`BindProjectAssetImage`、`AdoptProjectImageCandidate`、`AdoptProjectProfileAnalysis`；
+  4. 素材/资源删除与持久删除队列写路径（持久模型为 `ResourceDeletionIntent`、`ResourceDeletionObject`、`ResourceDeletionJob`）：用户删除/回收站彻底清理 `DeleteUserAsset`、`PurgeUserAsset`、`PurgeUserAssets`（经 `DeleteAssetAndResources` / `DeleteAssetsAndResources` -> `withStoryboardResourceWrite` -> `stageResourceDeletion`）、脱离引用孤儿资源清理 `DeleteDetachedResources`（`cleanupDetachedResources`）、管理员存储资源删除 `DeleteAdminResources`、以及删除 worker 的 `PrepareResourceDeletion` / `FinishResourceDeletion`（经 `withStoryboardDeletionJobWrite`）。
+- **资源删除、`ResourceDeletionIntent` / `ResourceDeletionObject` / `ResourceDeletionJob` 与物理存储边界**：
+  - 所有资产与资源删除入口在写入 `ResourceDeletionIntent`（`pending`）、`ResourceDeletionObject`（`pending`）、`ResourceDeletionJob`（`pending`/`processing`）并将 `Asset.Status` / `Resource.Status` 置为 `deleting` 前，均通过 `withStoryboardResourceWrite` / `withStoryboardUserAssetsWrite`（底层调用 `WithStoryboardAssetOwners`）及 `resourceLifecycleTransaction` 与分镜绑定事务串行化。
+  - 若删除事务先提交，目标资产或资源状态已变为 `deleting`，后执行的 `POST /append` 或 `PUT /shots` 会因 `catalog` 基线漂移返回 `409 storyboard_asset_binding_conflict`，或被 `RequireAssetVersionReferences`（仅放行未处于 `deleting` 的资产/版本及归属当前用户、`status == "ready"` 的被引用资源）拒绝并返回 `42201 storyboard_asset_binding_invalid_reference`，绝不复活已进入删除流程的资产/资源或写入悬挂引用。
+  - 若 `POST /append` 或 `PUT /shots` 先提交，**所有**删除入口（含 `DeleteUserAsset`、回收站彻底删除 `PurgeUserAsset` / `PurgeUserAssets`、孤儿清理 `DeleteDetachedResources`、管理员删除 `DeleteAdminResources` 及删除 worker 的 `PrepareResourceDeletion` / `finalizeDeletionIntent`）在协调锁与生命周期锁内重新执行 `deletionReferences`（含 `AssetBusinessReferences`、`ResourceReferenceSnapshotExcludingAssets` 与 `RequireNoOriginalImageReferences`）复核活跃引用，检测到新写入的分镜引用后均以 `ResourceDeletionReferencedError` / `ErrOriginalImageReferenced` **拒绝删除**，不存在绕过活跃引用的强制删除旁路。
+  - **物理存储边界声明**：数据库级 owner 协调锁与事务保证的是数据库引用关系与删除状态的一致性，**不承诺外部对象存储或本地磁盘物理字节的永久可用**（因此物理缺图或未就绪资源在读取与预览时统一降级为 `missingImage: true` 提示，而不阻塞历史分镜查看；跨远端对象存储的完整物理结算由独立变更 `add-remote-storage-physical-settlement` 承接）。
+
+## 画布实时会话
+
+`GET /api/canvas-projects/:id/realtime` 使用登录 Cookie 升级为 WebSocket，握手校验当前用户对画布的归属和请求 Origin。首帧 `welcome` 提供服务端分配的 `selfId` 和窗口 Presence；客户端发送 `presence`，服务端推送 `peer`、`leave`、`invalidate` 和 `heartbeat`。Presence 只含有界世界坐标和拖拽矩形，不包含密钥、编辑租约 token、画布正文或实际保存指令。
+
+`invalidate` 在事务提交后发送，客户端通过 `GET /api/canvas-projects/:id/sync-status` 校验版本与租约，再按需读取正文；长连接不代表云端保存成功。正常且无活动 Agent 时每 30 秒补偿查询，断线或活动 Agent 期间使用原有轮询。未登录返回 401，画布缺失或不属于当前用户返回 404，不允许的来源返回 403，实时服务不可用返回 503。完整协议和部署边界见[画布操作同步](./canvas-operations-sync)。
+
+## 视频工作台的生成模式
+
+`POST /api/workbench/tasks` 的视频任务根据已校验的 `references` 推导操作类型，客户端不需要提交泛化的 `video` 操作：
+
+| 输入 | 操作 |
+| --- | --- |
+| 无媒体素材 | `text_to_video` |
+| 仅首帧或尾帧图片，可附带音频 | `image_to_video` |
+| 普通参考图、参考视频，或包含普通参考图的组合 | `reference_to_video` |
+| 仅音频 | `audio_to_video` |
+
+图片的 `role=first_frame/last_frame` 表示帧约束；`reference` 或未指定角色表示普通参考，不能静默改成首帧。模式、素材数量和参数共同参与模型能力校验及价格档选择；不支持的组合在创建任务和计费前拒绝。执行输入的 `metadata.videoEditOperation` 与任务操作保持一致，并保留帧素材标识。浏览器自定义渠道的工作台任务使用同一模式规则，其他入口沿用各自的意图解析。
+
+## 图片响应格式
+
+渠道模型的 `capabilityConfig.image.responseFormat` 包含 `supported` 和可选的 `default`。默认值为 `auto`，表示请求中不发送 `response_format`，由上游决定返回 URL 或 Base64；`b64_json` 和 `url` 会分别强制发送对应值。该配置按模型保存，不根据 `openai-image` 协议名称自动推断，避免兼容网关不接受 Base64 时生成失败。需要持久化 Base64 结果的模型（例如已验证的 ddcat 图片模型）应将默认值设为 `b64_json`。
+
 ## 用户登录日志
 
 菜单“用户与运营 → 用户登录日志”，页面 `/admin/login-logs`。查询在 service 校验管理员权限：匿名 401、普通用户 403。
@@ -65,6 +153,10 @@ Fisher 创建响应中的有效 `X-Task-Id` 会保留给客户端和已有任务
 
 `metaso-minimax-video` 是 MiniMax V2 协议中转插件：创建 `POST {baseUrl}/v2/video_generation`、查询 `GET /v2/query/video_generation/{taskId}`，Bearer API Key 鉴权，默认 Base URL 为 `https://metaso.cn/api/minimax`。参数档位：模型固定 `MiniMax-H3`；分辨率 480P/768P/1080P/2K（默认 768P，按大写原样透传，2K 为密塔开放档位）；时长 4–15 整数秒（默认 5）；比例 21:9/16:9/4:3/1:1/3:4/9:16（默认 16:9，无任何参考素材时必须显式指定）。参考素材以公网 URL 提交（`requiresPublicMediaUrls`），角色映射为 first_frame / reference_image / reference_video / reference_audio，首帧至多 1 张、参考图 9 张、参考视频与参考音频各 3 条。密塔不接收 `audio_control`、`start_time_seconds`、`generate_audio` 与 `aigc_watermark`，插件从源头不发送。创建只读取 `task_id`；查询响应按 `task.status` 归一，成片 URL 取自 `task.content.url` 并由宿主立即下载持久化（`resultEphemeral`）。错误消息按 `task.error.message` → `error.message` → `base_resp.status_msg` → `task.message` 兜底。
 
+## yuxibox Seedance 视频中转
+
+`yuxibox-seedance-video` 是 yuxibox（yuxibox.cn）Seedance 家族的声明式视频协议插件：创建 `POST {baseUrl}/v1/videos`（JSON）、查询 `GET {baseUrl}/v1/videos/{task_id}`，Bearer API Key 鉴权，默认 Base URL 为 `https://yuxibox.cn`；上游未提供取消接口。该端点按请求体 `model` 路由到上游不同计费模型，协议形状一致，因此插件不锁定单一模型名，模型可用性由上游 `GET /v1/models` 与该渠道分组决定（当前上游 Seedance 系含 `seedance2.5-yx-count`、`seedance-2.5（YX）`、`seedance-2.5（YX）-按次`、`seedance-2.0（YX）`），本地只校验请求契约。参数档位：时长上限 30 整数秒（默认 30，以字符串 `seconds` 发送），各模型实际档位不同（`seedance-2.0（YX）` 为 5/10/15 秒、`seedance-2.5（YX）` 为 5–30 秒、`按次` 固定 30 秒、`yx-count` 为 10–30 秒），由渠道模型的 capabilityConfig 与上游校验共同决定；画幅七档 `adaptive/16:9/9:16/1:1/4:3/3:4/21:9`（默认 16:9，统一走 `ratio` 单字段，不发送 `size`）；输出固定 720P，不暴露分辨率选择。参考素材以公网 HTTPS 或 data URL 提交（`requiresPublicMediaUrls`）：`reference_images` 最多 30 张、`videos` 最多 10 条、`audios` 最多 10 条；不发送 multipart `input_reference`。查询状态词：`queued`/`in_progress` 处理中、`completed` 完成、`failed` 失败。计费按上游模型广场公布的按秒或按条价格与令牌分组倍率结算，以 yuxibox 控制台为准。同一视频不重复提交：已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。成片 URL 按 `video_url` → `download_url` → `downloadUrl` → 兼容字段提取并由宿主立即下载持久化（`resultEphemeral`）；URL 全缺失时以 `GET {baseUrl}/v1/videos/{task_id}/content`（Bearer，MP4 二进制，支持 Range）兜底下载。成片短链为本站 `/v/` 形式、完成后 7 天有效；部分视频为 HEVC 编码，播放器须支持。错误消息按 `error.message` → `message` → `fail_reason` 兜底。
+
 ## 注册邮箱等价检查
 
 公开注册与邮箱绑定的唯一性检查将 `gmail.com` 和 `googlemail.com` 视为同一域，移除本地部分的点及 `+` 后缀。例如 `a.b+x@googlemail.com` 与 `ab@gmail.com` 不允许创建两个账号。其他域保留点和 `+`；现有域名白名单规则保持不变。
@@ -114,6 +206,8 @@ Fisher 创建响应中的有效 `X-Task-Id` 会保留给客户端和已有任务
 
 ## 画布资源完整性与 operations 写入
 
+`PATCH /canvas-projects/:id/operations` 每次接受 1–500 条操作。前端超限变更按原顺序分批提交，每批发送前保存准确的请求 ID、请求正文和未提交操作；只有全部确认并读回后，界面才标记整份画布已保存。响应丢失时重放同一批 ID 和正文，依靠服务端事务回执去重；冲突停止在当前批，不放宽字段基线。大变更由多笔事务组成，中途失败可能已有部分批次落库，本地仍保留完整待提交快照与后续操作，不能将部分成功显示成全部完成。
+
 画布 operations 应用前校验当前文档中的资源引用；引用须属于当前用户且处于 `ready`。引用收集器递归遍历受支持的资源字段，因此 `nodes[节点 ID].metadata.videoPreview.storageKey` 等嵌套派生封面也会参与检查。维护写入会保留必要的损坏文档审计信息；若资源在事务期间缺失或状态变化，事务回滚，画布 revision 不递增。
 
 HTTP 409 不能一概解释为并发冲突：对象或字段基线冲突使用 `reason: conflict`；资源完整性失败使用 `reason: canvas_history_resources_missing`，并在 `details` 中返回 `resourceIds` 和 `missingResources`（含资源 ID、JSON 路径、节点 ID、引用类型及 `source`）。客户端应按 `reason` 分流，不解析 `msg` 猜测原因。普通 operations 不会绕过资源校验或 revision 语义，维护修复也不能把缺失主媒体写回为有效画布。
@@ -138,9 +232,15 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 
 此恢复能力接入声明式媒体协议返回 URL/data URL 的任务路径；旧协议自行下载、协议二进制下载端点以及无恢复记录的历史失败任务不自动补录。历史任务需先核实上游结果可用性、资源归属及原账单，再单独制定修复动作。
 
+## 素材读取合同
+
+素材详情、批量读取、分页列表和用户数据快照统一返回完整素材记录。`id`、`kind`、`title`、分类、状态和主版本以素材表列为准；媒体内容保留在 `data` 中。项目上传资源转换为素材时即写入该合同，媒体大小使用 `data.bytes`；只有存储键的媒体仍返回字符串类型的 `url`（图片为 `dataUrl`），可以为空，由 `storageKey` 定位资源。
+
+已有项目上传素材的资源元数据在读取时组装为同一合同，真实大小从已记录的 `size` 映射为 `bytes`。该过程不创建新素材 ID，也不为缺少资源定位或真实文件大小的素材伪造有效数据。
+
 ## 素材彻底删除
 
-`DELETE /assets/:id` 表示用户确认后的彻底删除，不依赖服务端当前记录是否已经同步为 `archived`。接口仍校验登录用户和素材归属，但不会因画布、任务、项目或历史快照仍有引用而拒绝；事务会删除素材及对应历史资源索引，并通过删除 Outbox 清理未被其他素材复用的物理对象。其他素材共享的同一物理对象继续保留。移入回收站仍通过素材写入接口把状态更新为 `archived`，不能用 DELETE 代替可恢复归档。
+严格两阶段删除修订正在实施，运行服务是否加载以实际部署为准。`DELETE /assets/:id` 校验登录用户和素材归属；画布、任务、项目或其他业务仍引用时拒绝并返回引用来源，包括原清空/强制清除入口。无引用且具备生产者停写证据时持久化删除意图并进入 `deleting`，保留资产、版本、表现与资源记录，直到必要物理对象全部成功后再清理。P1缺少停写证据时返回既有409冲突，不将业务上传成功/失败或过期时间当作物理结算；旧无证据资源也不会自动放行。私有操作记录不进入公开资源JSON。仍被其他保留资源使用的共享物理对象不删除。移入回收站仍通过素材写入接口更新为 `archived`，不能用 DELETE 代替可恢复归档。
 
 素材页及素材选择器的批量彻底删除、清空回收站统一调用 `POST /assets/batch-delete`，请求体直接为 JSON 数组（不是 `{ ids: [...] }`）：
 
@@ -149,10 +249,10 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 ```
 
 - 每次 1–1000 项，单个请求体最多 256 KiB；ID 去除首尾空白并去重，空 ID / 非数组返回 400，任一 ID 不存在或不属于当前用户返回 404，整批不删除。
-- 成功信封 `data.ids` 为请求传入的数组。前端等待服务端成功后一次更新本地集合并冲刷持久化；失败不回退为逐条 DELETE，不先移除本地记录。
-- 整批素材、版本、表现、业务关联、待删资源及对应历史资源索引，与物理删除 Outbox 在同一数据库事务中提交，数据库失败整批回滚。共享检查排除整批被删素材，避免两条互相共享的选中素材残留文件。
-- 物理空间由后台删除队列异步释放，失败保留任务重试；接口成功不代表对象存储已经清理完成。未选中素材使用的资源，以及其他 Resource 行（包括其他用户）复用的物理对象继续保留。
-- 旧画布 / 任务 / 历史快照记录本身保留，但被删媒体链接将失效。此操作不可恢复；没有数据库结构迁移。
+- 成功信封 `data.ids` 为请求传入的数组，表示已受理。前端保留已知记录并标记 `deleting`，不再把服务端状态作为本地编辑回传；通过授权批量读取确认记录已不存在后才移除，不能根据筛选页缺项推断完成。失败不回退为逐条 DELETE，不先移除本地记录。素材管理提供“删除中”视图，禁止编辑、恢复、移动和新引用；失败由后台自动重试，不伪造物理删除完成或手动重试结果。
+- 整批引用检查和删除意图入队在短事务内提交，数据库失败整批回滚；不提前删除资产历史和资源记录。共享检查排除同一删除意图内的资源，同时保留其他资源使用的物理对象。
+- 物理空间由后台队列异步释放；接口成功仅表示删除请求已接受，不代表对象存储已经清理完成。失败或部分对象成功后保留记录、完成状态和作业继续重试，不重新变为就绪。网络删除不占用长数据库事务。
+- 存在业务引用时不会通过失效媒体链接来强制完成清理。删除意图与对象完成状态需要前向数据库迁移；迁移代码测试不表示现有部署已升级。
 
 ## 密码登录限流
 
@@ -175,17 +275,20 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 `PATCH /admin/settings/registration` 的两个协议字段为可选指针语义：不提交表示保留已保存内容，提交空串表示明确清空。注册开关与协议正文可以分开保存，单独切换 `enabled` 不会覆盖协议。当前只校验本次注册的同意标志，不保存长期协议版本或签署凭证。前后端需一起更新，旧客户端缺少同意标志时无法注册。
 ## 站点皮肤主按钮
 
-### 画布配置、更新公告与 Live2D（外观合同版本 10）
+### 画布配置、更新公告、状态动画包与 Live2D（外观合同版本 11）
 
 外观设置新增 `updates: { enabled, currentVersion, releases }`，由管理员通过 `PATCH /admin/settings/appearance` 保存；关闭开关保留草稿，但 `GET /public/appearance` 返回关闭状态与空公告列表，前端恢复内置更新日志。开启时公开版本与内容块，当前版本须对应公告版本。媒体上传、管理员预览、公开引用读取及限制详见 [自定义更新公告](/docs/backend/update-announcements)。JSON 请求上限为 512KB；无数据表迁移。
 
-`GET /public/appearance` 和管理员 `GET /admin/settings/appearance` 返回 `canvas`；管理员通过 `PATCH /admin/settings/appearance` 随外观配置统一保存。字段为 `agentName`（1–24 字）、`launcherLabel`（0–24 字）、`panelTitle`（1–40 字）、`welcomeTitle`（1–100 字）、`welcomeDescription`（0–200 字）、`inputPlaceholder`（1–160 字）、`avatarType`（`orb|live2d`）、`avatarHeight`（120–360 整数）、`live2dResourceId`、`live2dEntry`。入口由服务端核验覆盖；Live2D 无有效资源时拒绝启用。名称以数据形式投影到每轮 Agent 执行上下文，不提供自由系统提示词配置，也不改变工具权限。
+`GET /public/appearance` 和管理员 `GET /admin/settings/appearance` 返回 `canvas`；管理员通过 `PATCH /admin/settings/appearance` 随外观配置统一保存。字段为 `agentName`（1–24 字）、`launcherLabel`（0–24 字）、`panelTitle`（1–40 字）、`welcomeTitle`（1–100 字）、`welcomeDescription`（0–200 字）、`inputPlaceholder`（1–160 字）、`avatarType`（`orb|bundle|live2d`）、`avatarHeight`（120–360 整数）、`live2dResourceId`、`live2dEntry`、`avatarBundleResourceId` 和状态到 clip 名的 `avatarClipStates`。状态键为 `idle|queued|running|waiting_approval|completed|failed|cancelled|rejected`；状态动画包为空资源 ID 时使用内置 `/doll/avatar.json`。启用上传包时服务端核验资源归属、ZIP 与每个状态引用的 clip。名称以数据形式投影到每轮 Agent 执行上下文，不提供自由系统提示词配置，也不改变工具权限。
 
 当前默认品牌和 Agent 名称为“源铭振跃”。旧默认品牌、SEO、版权及 Agent 的精确识别、自定义配置保留边界见 [画布 Agent 外观与 Live2D](/docs/backend/canvas-agent-appearance)。公开与管理 GET 不写库，Canvas 身份投影不执行严格保存校验；保存继续校验完整配置并向上返回失败。品牌识别不提升 `schemaVersion`（仍为 10），不新增字段或改变 API 路径。
 
 - `POST /admin/settings/appearance/live2d`：管理员 multipart `file` 上传，受上传频率和配额限制。成功信封的 `data.model` 为 `{ resourceId, entry }`，上传不会发布。ZIP 限 128 MiB、256 条目、解压合计 384 MiB、单文件 128 MiB；只接收 model3/MOC3/PNG/JSON，拒绝路径穿越、脚本和外部资源。
 - `GET /admin/settings/appearance/live2d/:id/*file`：管理员预览，校验资源归属；其他管理员仅能查看当前外观已引用模型。
 - `GET /public/appearance/live2d/:id/*file`：仅提供当前启用模型的数据文件。停用或更换后旧模型拒绝公开访问。成功为文件内容，失败为错误信封；响应带 `nosniff` 和私有、需重新验证的缓存策略。
+- `POST /admin/settings/appearance/avatar-bundles`：管理员 multipart `file` 导入状态动画 ZIP，受上传频率和配额限制。ZIP 最大 128 MiB、解压总量最大 384 MiB、最多 128 个条目；包含根目录 `avatar.json` 和其逐一引用的 MP4。成功信封 `data.bundle` 返回 `{ resourceId, manifest }`，不会自动启用。
+- `GET /admin/settings/appearance/avatar/:id/*file`：上传者可预览未启用包，其他管理员只能预览当前配置引用包中的 manifest 或 MP4。
+- `GET /public/appearance/avatar/:id/*file`：只提供当前启用动画包中经 manifest 引用的文件；MP4 支持 Range，停用或更换后旧包拒绝公开读取。
 
 管理员资源列表增加 `kind=live2d` 筛选；引用中的模型禁止删除，清除外观引用后按既有资源删除流程清理。
 
@@ -275,7 +378,9 @@ Token 报价的 `estimated` 为 `true`，`quantity` 是预留 Token 数。参考
 
 前端先把未确认请求和请求基线写入账号隔离的本地 journal，再发 HTTP 请求。journal 保存已确认基线、原始请求、请求生成时的本地投影和创建时间；刷新后只重放原请求，随后把请求之后的新编辑按新的基线生成下一批 operations。服务端返回完整画布时，客户端只合并仍未确认的本地 mutations，视口仍属于本地视图状态，不进入远端 operations。
 
-云端 Agent、媒体生成终态回写、预演台、创作提交以及 LibTV/TapNow 导入都复用同一 operations 服务。Agent 事件中的 `canvasPatch` 只是一种有界通知；过大、删除或无法完整表达的变更使用 `requiresRefresh: true`，客户端重新读取后按未确认请求继续重放。用户界面不提供版本记录、加载云端版、覆盖云端或手动重试入口，失败请求由后台自动重放并在同步状态中显示当前状态。
+打开画布时，旧浏览器缓存与云端更新按会话原基线合并，再同时更新编辑器与缓存。不能先把最新云端版本设为基线、再直接提交旧缓存，否则其他设备或 Agent 新增而缓存中没有的节点会被误判为删除。已落盘的明确删除请求仍按原 journal 重放。operations 明确返回字段冲突后，客户端读取最新基线，保留当前本地编辑的字段，合入云端无关变化，再以新 mutationId 提交；响应未知时仍重放原 ID/body。已删除对象不复活，旧任务观察值不能覆盖云端的新任务绑定及较新结果。对于没有可验证内容哈希、又与云端不同的旧缓存，合并前在当前账号的 localforage 中保存最多三份恢复副本（`yingce:canvas-unverified-recovery:<canvasId>`）；副本落盘失败时不替换本地内容、不发送推导删除。
+
+云端 Agent、媒体生成终态回写、预演台、创作提交以及 LibTV/TapNow 导入都复用同一 operations 服务。Agent 事件中的 `canvasPatch` 只是一种有界通知；过大、删除或无法完整表达的变更使用 `requiresRefresh: true`，客户端重新读取后按未确认请求继续重放。用户界面不提供版本记录、加载云端版、覆盖云端或手动重试入口，不弹出同步报错；失败请求由后台自动重放，未确认时不显示已同步。同账号同输入框并发输入按共同基线的文字增删合并；租约只约束服务端写入，客户端保持可编辑，每批保存确认后释放凭据供另一端接手。存在未确认请求时，先重放 receipt，再合入后续输入，避免响应丢失后重复插入本机文字。
 
 平移和缩放只持久化浏览器视口，不生成远端 operations。保存日志仅记录请求/链路 ID、画布/用户 ID、版本、节点数量变化及 HTTP 状态，不记录正文、提示词或媒体 URL。
 
@@ -322,14 +427,15 @@ operations 的结构化配额在提交事务内实时统计账号的素材/画�
 - `canvas_apply_ops` 必须带 `snapshotHash`，每批最多 20 项；`add_node` 可省略坐标：服务端按画布内容落位（优先贴合本批连线的对端，否则追加到同泳道之后并避让已有节点），不再落到原点重叠；`update_node` 的 patch 额外支持 `x`/`y`（坐标绝对值上限 1e6）用于微调单个节点。支持新增文本、Markdown、图片、视频、音频、分组与分镜表节点，以及 `connect_nodes` 引用连线。媒体占位节点的 `content` 是提示词，不是媒体 URL；只建节点不提交收费生成。`update_node` 的字段映射完全由能力 registry 决定：文本 / Markdown 可改标题和正文，图片 / 视频 / 音频可改标题和下一次生成使用的提示词草稿；媒体更新参数中的 `content` 写入 `metadata.composerContent`，不会覆盖媒体结果 `metadata.content`、已提交提示词 `metadata.prompt`、任务状态或引用状态。锁定节点、删除、任意元数据写入、自连接、重复边与不存在的端点仍被服务端拒绝。
 - `canvas_arrange_nodes` 只改节点坐标：`snapshotHash` 必需，`mode` 取 `auto`（有引用连线按依赖分层、否则按媒体类型分区）/`flow`/`byType`/`row`/`column`/`grid`，`groups` 把节点按给定顺序排成横向位置带（仅位置分带，不创建容器、不改层级），`align` 做对齐或等距分布，`gap` 调整组间距，`dryRun` 只预演。`nodeIds` 省略时整理全部可整理节点，锁定节点、背板等容器节点、隐藏批次子节点与已归属背板的子节点保持不动并在回执中说明；一次最多 50 个节点。整理与 `add_node` 的自动落位共用服务端布局实现（`backend/internal/canvas/layout`），与前端“自动整理节点”使用同一套常量与算法。
 - `model_list` 复用生成面板的当前模型目录。生成前传 `mode` 和实际 `referenceNodeIds`（无参考传空数组），服务端读取当前用户画布内的就绪资源，按真实素材类型、数量及生成操作构建意图并调用统一能力匹配，不让多图生视频落入仅文生视频候选；返回 `intent` 供核对。空参数仍可浏览完整目录；空候选不降级到不匹配模型。每项的 `selection` 是 `logicalModelId` 或 `channelId` + `channelModelKey`，工具调用必须原样选择一种，不猜 ID 或混用；时长、画幅、音频、价格仍需核对返回配置，任务准入再次强校验。
-- `generate_media` 支持图片 / 视频 / 音频：必填 `mode`、`prompt`、`nodeId`（可续用草稿，无草稿时才新建）、`title`、有序 `referenceNodeIds`（无参考传空数组），再加一种模型选择；`snapshotHash` 可省略，省略时服务端使用当前画布内容快照。图片 / 视频要求 `size`，视频要求正数 `durationSeconds`，图片 / 音频时长为 0。可传来源节点 `sourceNodeId`、`quality`、视频 `videoGenerateAudio`。`sourceNodeId` 仅接文本 / 镜头提示词节点；参考图片、视频、音频只放 `referenceNodeIds`，无文本来源时留空且不重复传入。引用从当前画布节点的账号资源解析，校验归属、类型、就绪状态和模型能力，不接受任意 URL。图片生成仅接图片参考；视频可按模型能力接图片、视频、音频参考；音频生成当前仅支持文本输入。
+- `generate_media` 支持图片 / 视频 / 音频，必填 `mode`、完整 `prompt`、有序 `referenceNodeIds`（无参考传空数组）。续用草稿传真实 `nodeId`，新建可省略，执行器按运行和工具调用身份生成稳定 ID；`title` 省略时保留草稿原名或使用默认名称。执行器创建草稿和连线，无需先调用通用画布写入工具。`snapshotHash` 可省略，由服务端取当前内容快照。`size`、`imageResolution`、`quality`、视频 `durationSeconds` / `videoGenerateAudio` 默认由已有草稿或所选模型合同解析，图片 / 音频时长为 0。`sourceNodeId` 仅接文本 / 镜头提示词节点，媒体放 `referenceNodeIds`；引用从当前账号资源解析并校验归属、类型、就绪状态和模型能力，不接受 URL。图片仅接图片参考；视频按能力接图片、视频、音频；音频当前仅支持文本输入。
+- `configurationChange` 可选，形如 `{ "fields": ["size"], "userInstruction": "改成9:16" }`，对应值仍填顶层字段。仅允许 `model`、`size`、`quality`、`imageResolution`、`durationSeconds`、`videoGenerateAudio`，字段须有值且符合模式；未列出的已有配置继续继承。引用必须逐字来自最新真实用户消息，不能引用历史、工具结果或生成提示词。该结构只表示变更提案来源，不能代替收费授权；实际配置和引用依据展示在原有生成审批中，批准后才提交。用户直接编辑审批配置仍严格校验，不经过 LLM 提示规范化。
 - 参数选择与收费授权分开：用户明确说“随便 / 你决定 / 按默认”时，Agent 可从当前目录选择能力及预算匹配的模型，优先用户最近明确使用的可用模型，其次价格清楚的低成本选项；支持时沿用参考图原始比例，否则选目录默认，时长用目录默认。未要求音频且模型不支持时用默片。用户接受已推荐方案后不再要求特定确认口令；仅真正缺失或冲突的阻塞项一次性询问。本轮已有目录结果应复用。以上是 Agent 的参数选择策略，服务端仍强校验具体规格，不提供绕过预算 / 能力校验的默认兜底，也不绕过独立收费审批。
 - 媒体参数先进行无任务、无预留账单的准入校验，再在同一事务创建草稿节点、来源 / 资产连线及待审批检查点；`approval_requested` 和运行中的 `approval` 携带目录真实 `modelName`。用户批准后才在事务中绑定任务、创建预留账单并更新检查点；拒绝或取消保留未生成草稿，不提交媒体任务。`nodeId` 可续用同类型、未锁定、idle、无任务且无媒体结果的空白占位节点或当前运行草稿；跨轮 Agent 草稿还要求原运行属于同一用户和画布、已结束且清理完成。续用必须重新读取快照并重新审批，不能复用旧审批、覆盖已有任务或成品，不能通过循环新建节点绕过限制。画布读取的 `generationDraft` 提示未提交、原运行状态、是否仍在清理及仍需审批；写入仍重新强校验。已明确审批的规格不得被模型默认值静默替换。媒体终态回写原节点；已删除或已换任务的节点不自动复活，结果仍可从任务中心查看。
 - `generate_media.prompt` 使用 `@图片1`、`@视频1`、`@音频1` 引用素材，各类型按 `referenceNodeIds` 的出现顺序独立编号，文本来源不占媒体编号。角色主图属于图片序列，与普通图片共享编号；编辑器显示时保留 `@角色N` 前缀，但 N 仍对应实际图片位置，例如角色、场景图、角色依次显示为 `@角色1`、`@图片2`、`@角色3`，任务使用 `@图片1`、`@图片2`、`@图片3`。已有标签保留；遗漏的画布素材以“素材名称：@标签”补入 `【资产参考】`，不推断素材用途。节点入边同步排列，草稿、审批和实际任务的标签对应同一组参考资源，编辑器与任务仅转换显示前缀。未绑定的媒体编号和补齐后超过16000字符的提示词会在提交前被拒绝，模型自身的提示词长度限制仍由任务准入校验。临时标注图没有持久画布节点，不自动添加无法解析的编辑器标签；历史节点不自动改写。
 - Agent 的 `snapshotHash` 忽略顶层 `viewport`、`updatedAt`。`canvas_get_state` 另返回 `mediaSnapshotHash`，供 `generate_media.snapshotHash` 使用：仅比较节点与连线，节点忽略 `position`、`width`、`height`、`createdAt`、`updatedAt`，保留全部业务字段及未知 metadata。生成草稿审批也固定该哈希，移动、调整显示尺寸、自动补时间戳和保存聊天记录不会使生成审批失效，执行保留最新展示信息；提示词、素材、锁定状态、任务绑定和连线变化仍需重新读取并审批。画布修改与撤销继续使用完整内容哈希，数据库写入保持完整快照 CAS。发布前已按旧算法生成的待审批内容可能要求重新读取和审批，不自动替换旧快照重提任务。
 - `canvas_get_state.nodes[].outputReference` 的 `ready` / `issue` 仅表示该节点产物能否作为其他生成的参考，不诊断本节点的生成输入。`generation` 返回当前画布、当前用户所属任务的 `taskId`、`taskStatus` 和安全的失败 / 取消 `error`；无任务绑定为 `not_submitted`，无法验证归属或读取失败为 `unavailable`。节点无法作为草稿提交时返回 `submitBlockedReason` / `submitBlockedIssue`，与写路径共用节点准入规则；未被阻止不等于已获授权，草稿所属运行和审批仍在提交时校验。`task_get` 同样返回安全错误详情。`generate_media` 准入失败可返回 `snapshot_conflict`、`task_bound`、`target_locked` 等结构化 `reason` 和 `nodeId`，不自动选择新节点或重新生成。
 - `task_get` / `generation` 的执行状态与回写状态分开：`succeeded` 不返回执行 `error`；回写失败仍通过 `writebackOutcome` / `writebackError` 暴露，不能因生成成功而隐藏。失败 / 取消任务保留脱敏错误，缺少详情不能伪装成成功。Agent 文本步骤的持久诊断为 `upstream_dns_failed` 时，`run_failed.reason` 同步该分类并明确提示检查渠道域名及后端 DNS，不自动重跑。
-- `generate_media` / `image_layer_split` 必须将 `model_list.selection` 展开到顶层参数：提供非空 `logicalModelId`，或完整的非空 `channelId` + `channelModelKey`，不得混用；未使用的字段可省略或传空字符串，不能传 `null` 或仅含空白的字符串。后端在读取画布、创建草稿、审批与计费前校验选择结构；返回 `reason: invalid_tool_arguments`、`field`、`issue` 和本轮工具 `parameters`，区分 `required`、`mutually_exclusive`、`type_mismatch`、`invalid_value`。合法结构不代表模型可用，仍须通过目录、能力、权限和价格校验；不猜测模型、不补全选择、不切换渠道，也不吞掉未知字段。
+- 模型选择将 `model_list.selection` 展开到顶层：非空 `logicalModelId`，或完整非空 `channelId` + `channelModelKey`，不得混用；未使用字段可省略或传空字符串，不能传 `null` 或纯空白。`generate_media` 完全省略选择字段时，仅允许继承草稿或本轮最新同模式、同参考节点查询的唯一候选；最新查询失败、无候选、多候选或存在未查询的临时参考时不补模型。`image_layer_split` 仍要求显式选择。显式选择先检查结构，省略时在解析草稿和目录后检查，均早于创建草稿、审批和计费。错误返回 `reason: invalid_tool_arguments`、`field`、`issue` 和本轮工具 `parameters`。补齐后仍校验目录、能力、权限、价格和预算，不猜模型、不切换渠道、不吞掉未知字段。
 - `canvas_apply_ops` 创建节点、编辑提示词或连线不会提交生成任务，也不会改变已提交任务的输入；收费生成独立使用 `generate_media`。操作参数错误按数组项返回 `field`（例如 `ops[0].snapshotHash`）和 `issue`（例如 `unexpected_field`、`type_mismatch`、`required`），并附本轮工具 schema；不把未知字段误报成缺少其他必填字段，不回显任意参数键和值。
 - `read_only` 只允许读取；`request_approval` 对写画布和媒体生成暂停为 `waiting_approval`；`auto` 可在预算内执行已授权画布操作，但图片 / 视频生成始终独立审批，不能绕过。`maxGenerationTasks` / `maxVideoSeconds` 为非负整数，0 表示该项不设业务上限，正数按本轮累计执行；不再固定 8 次模型调用、8 个生成任务或 120 秒视频。积分上限仍必填且大于 0，实际报价在任务创建与预留积分前校验，时长必须符合所选模型的实际能力。失败事件保留具体错误和已有任务的 `taskId`、`nodeId`、`status`；媒体结果的 `phase` 区分 `admission` 与 `completion`，`taskSubmitted` 表达是否已提交。已提交的收费生成失败作为工具错误交回模型，整轮保持可继续，不得自动重试收费生成；只有生成结果无法回写画布时才把整轮标为 `failed`。模型应报告错误，不能自行删减提示词。
 - 必须有当前用户已保存的画布。系统提示里的 `canvasSummary` 是节点目录，不是整张画布的 JSON：每条只含 `id`、`type`、截断后的 `title`，以及不支持操作的类型标记；最多列入 120 个节点，并按约 24KB 兜底截断，装不下的节点记入 `omittedNodes` 与 `totalNodes`。正文、提示词、媒体和结构化表不进目录，由 `canvas_get_state` 按 `offset` 每页读取 40 个节点、资产可引用状态及相关连线，按 `nodeIds` 精读最多 8 个节点（正文每字段最多 16000 字符），通过 `hasMore` / `nextOffset` 和字段 `Truncated` 判断是否完整。工具结果留在当轮消息里，历史压缩会卸掉可重读正文，不会在后续每一步把整页结果再打包一次。分镜表包含镜头、角色节点与资产绑定；摘要每页最多 20 行，精读每次 1 行，可用 `storyboardOffset` 翻页；单行叙事文本累计最多 24000 字符，角色 / 绑定各最多 16 项。上下文不含媒体 URL、任意元数据或未同步修改；节点名称不等于图像视觉识别。普通任务重试接口不能重试 Agent 任务。
@@ -425,6 +531,7 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | --- | --- | --- | --- |
 | 0 | 200 | — | 成功 |
 | 400 | 400 | `invalid_argument` | 请求不合法 |
+| 400 | 400 | `task_active_limit_exceeded` | 当前账号排队/运行中的活动任务已达 `activeTaskLimit`（`POST /tasks` 与 `POST /tasks/:id/retry` 均未入队且未预占积分，可退避等待已有任务结束后重试） |
 | 401 | 401 | `unauthorized` | 未登录 |
 | 403 | 403 | `forbidden` | 无权限 |
 | 404 | 404 | `not_found` | 资源不存在 |
@@ -440,6 +547,12 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | 42901 | 429 | `rate_limited` | 请求限流（可带 Retry-After） |
 
 模型错误把已有字符串码放进 `reason`（如 `model_capability_not_supported`），`code` 仍为 400。
+
+任务提交（`POST /api/tasks`）与任务重试（`POST /api/tasks/:id/retry`）的四类失败区分：
+- `400 / code=400 / reason=task_active_limit_exceeded`：当前账号同时处于 `queued` 或 `running` 的任务已达到 `activeTaskLimit`；确定本次请求未入队且未预占积分（不承诺参考媒体上传零副作用），客户端可按有界退避等待已有任务完成后重试。
+- `429 / code=42901 / reason=rate_limited`：进入任务创建前被创建频率限制拒绝，带 `Retry-After` 响应头；确定未创建任务且未预占积分，客户端按 `Retry-After`（或默认退避）等待。
+- 其他 `400 / reason=invalid_argument`（或模型/配额/权限明确 4xx）：参数、状态或余额等确定性拒绝，不得当作容量排队自动退避重发。
+- 网络断开、超时、无响应或 `5xx`：非幂等任务创建/重试的受理结果不确定，即使 `retryable=true` 也严禁自动重放 POST，须通过任务详情/列表核对。
 
 常量：后端标准原因定义在 `backend/internal/kernel/error_codes.go`，由 `app` 和 `service` 兼容导出；前端业务模块按 `ApiError.reason` 分支。
 
@@ -471,6 +584,125 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | DELETE | `/api/tools/:id` | 仅删除自己的用户工具，不能删除内置或他人工具 |
 
 生成提示词工具引用格式为 `@[tool:type:ID:label:icon]`，label 使用 URI 编码。名称和图标只用于展示，不作为授权依据。服务端在任务入队及执行前检查用户可见性、启用状态、工具类型和生成模式；无效、越权、嵌套工具或数据库错误必须失败，不能把未解析 token 发送给模型。风格和九宫格仅用于图片，运镜和特效仅用于视频。入队校验不冻结工具快照：排队期间删除工具将导致执行失败。
+
+## 场景与道具图片
+
+`PUT /api/projects/:id/assets/:assetId/image` 接收 `{ resourceId, expectedVersionId }`，返回标准信封 `data={ asset }`。只允许当前用户在自己项目内，为场景或道具绑定本人已就绪的图片；资源必须有有效尺寸和图片 MIME。两个字段均必填，过期版本拒绝，主版本必须属于目标资产。
+
+项目资产摘要可包含 `visual={ definition, status }`：definition 保留描述与提示词，status 为 `missing|ready`。未出图的设定使用 `entity`；真实图片绑定后，同一资产使用 `image` 和真实资源定位，旧版本及图片引用保留。继续使用现有资产、版本、表现表，无数据库迁移。
+
+受管图片任务使用 `metadata.operation=project_asset_image`、`projectAssetId` 和 `projectAssetVersionId`，由任务成功事务绑定资源，媒体保存恢复同样适用。结果的 `projectAssetImageStatus=bound|stale` 表示已绑定或资产版本已变化；stale 仍保留生成文件，不能自动重发收费请求。历史画布图片匹配只信任服务端版本表现记录，不信任客户端自报的历史。
+
+## 项目参考图资产（首版实施中，待验证）
+
+以下首版合同已完成初版实现，正在独立审查修复与回归收尾，不代表所有路由及真实生成链路已经验收。范围仅为角色 `character`、场景 `environment` 和道具 `prop`；不扩展到材料或其他分类。验收状态见[待测试](/docs/progress/pending-test)。
+
+### 创建、原图与采用
+
+所有接口要求登录，由服务端校验项目、资产、目录和资源归属。名称去除首尾空白后必须非空；图片资源必须属于当前用户、上传完成、状态为 `ready`，并通过图片类型、MIME 和尺寸校验。
+
+| 方法与路径 | 请求与返回合同 |
+| --- | --- |
+| `POST /api/projects/:id/asset-entities` | `{ category, name, definition, folderId?, referenceImage?: { resourceId }, imageResourceId? }`；`category` 仅 `environment` 或 `prop`。实体、首版本、可选成品绑定及项目目录关联原子创建；成功信封 `data={ asset }`。 |
+| `POST /api/projects/:id/characters`（已有接口扩展） | 保留 `name`、`definition`，增加可选 `referenceImage: { resourceId }`、`imageResourceId`、`imageRole`、`folderId`。`imageRole` 为 `portrait` 或 `turnaround_sheet`，缺省 `portrait`；继续返回原角色详情合同。 |
+| `PUT /api/projects/:id/assets/:assetId/reference-image` | `{ resourceId, expectedVersionId }`，两个 ID 均必填且非空；本版不支持清除原图。创建定义新版本，保留成品、声音和其他定义；成功信封 `data={ asset }`。 |
+| `POST /api/projects/:id/assets/:assetId/image-candidates/:taskId/adopt` | `{ expectedVersionId }`，必填且非空；成品资源只能由服务端从该任务结果读取，不接受客户端另传资源替换。成功信封 `data={ asset }`。 |
+
+资产摘要增加可选 `referenceImage: { resourceId }`。原图保存在版本定义的 `referenceImage.resourceId`，不是 `primary` 成品表现；后续生成和采用不能用结果替换已保存原图，历史版本继续保留其原图引用。通用 `definition` 更新不得绕过专用接口注入或清除该字段；角色编辑需保留未修改的表现、声音和原图，并以版本条件更新防止覆盖并发采用。
+
+直接使用成品不发起生成。普通角色照片按 `portrait` 仅绑定 `primary`；明确声明为 `turnaround_sheet` 时，同一张图片可同时绑定 `primary` 和 `turnaround_sheet`。角色生成仍只提供三视图输出，不增加肖像生成；场景与道具成品为 `primary`。
+
+### 图片任务模式与候选输出
+
+复用现有图片任务与计费链路，在 `input.metadata` 中记录目标资产和基准版本，并增加以下字段：
+
+| 字段 | 合同 |
+| --- | --- |
+| `adoptionMode` | `manual` 或 `auto`，省略等同 `auto`，未知值拒绝。新手动确认流程显式传 `manual`，不改变旧调用的自动绑定行为。 |
+| `referenceSource` | `original` 从基准定义读取原图，`current` 从基准 `primary` 读取当前成品，`none` 为无参考文生图；选择当前成品不修改原图。 |
+| `projectAssetVersionId` | 生成基准版本；设置原图后应使用返回的新版本，而不是此前的版本。 |
+
+本版限制单张参考和单张输出，多图请求必须拒绝，不能静默截取第一张。带参考的系统模型和自定义渠道均须在任务创建时确认参考图能力；不支持或能力未知时，在入队和上游调用前拒绝，不能悄悄退化为文生图。不自动从图片反推名称或设定，不做多图融合、批量生成或拆分。
+
+`manual` 成功只保存候选和图片资源，不推进资产主版本。任务结果及摘要的安全投影增加：
+
+```json
+{
+  "assetImageCandidate": {
+    "assetId": "asset-id",
+    "baseVersionId": "base-version-id",
+    "state": "pending_confirmation"
+  }
+}
+```
+
+`state` 仅为 `pending_confirmation` 或 `adopted`；已采用时可返回 `adoptedVersionId`。完成、媒体保存恢复及项目读取补偿均须遵守手动模式；失败、取消或尚未采用不覆盖当前成品。此前“场景与道具图片”节的生成后自动绑定描述适用于 `auto`（含缺省）调用。
+
+### 候选恢复查询
+
+`GET /api/tasks?projectId=...&assetImageCandidates=true&assetId=...&pageSize=50&beforeTaskId=...` 的成功信封 `data` 为 `TaskSummary[]`，不是额外分页对象；条目包含 `assetImageCandidate` 和预览地址 `previewUrl`。
+
+- `projectId` 必填；`assetId` 可选，用于限制目标资产。
+- `pageSize` 为 1–100，默认 50。首屏不传 `beforeTaskId`，下一页传上一页末条任务 ID。
+- 按 `created_at DESC, id DESC` 做 keyset 分页；少于 `pageSize` 条时结束。必须先按用户、项目、目标资产和候选范围过滤，再限制页大小，不能截取最近一批任务后在前端筛选。
+- 查询包含已结束任务，不得与 `activeOnly` 组合；非法、越权或不属于查询范围的游标应拒绝。
+- 刷新后从任务中心重新读取待确认或已采用状态，不以弹窗内存、本地缓存或仅活动任务为唯一来源；详情与摘要仅返回安全投影，不暴露密钥输入。
+
+### 在途检测与完成轮询
+
+`GET /api/tasks?projectId=...&activeOnly=true&assetId=...&pageSize=1` 是独立的目标资产活动任务查询，用于刷新期间检测在途任务及完成轮询，成功信封 `data` 为 `TaskSummary[]`。服务端校验当前用户、项目归属、资产归属及资产与项目关联，在数据库 `limit` 前按项目、目标资产和活动状态过滤；不能先取全项目最近 100 条再交给前端找目标资产。
+
+此查询不携带 `assetImageCandidates=true`，不使用成功候选的 `beforeTaskId` keyset 合同。活动任务结束后重新查询成功候选列表；活动列表为空不等于生成成功，也不能代替失败状态判断或自动采用。
+
+### 版本冲突与幂等
+
+采用前校验任务用户、项目、目标资产、`manual` 模式、成功状态、唯一已就绪图片，以及任务基准版本。首次采用必须满足“任务基准版本 = 请求 `expectedVersionId` = 当前主版本”，通过数据库 CAS 和事务原子创建版本、绑定表现及更新采用状态；写入失败整体回滚。
+
+版本变化返回 **HTTP 409**，机器可读 `reason=project_asset_version_changed`。前端应刷新当前资产并保留候选，不强制覆盖、不因冲突自动重新发起收费生成。同一任务已被采用时，重放不重复创建版本，返回**当前资产摘要**，而不是把资产退回原采用版本；候选仍可关联原 `adoptedVersionId`。
+
+## 资产参考图档案分析（实施中，待验证）
+
+本节为已确认、正在实施的合同，不表示当前运行服务已加载接口。分析只生成待审阅草稿，不自动改写资产。首发仅接受服务端可信目录的系统或逻辑视觉文本模型；原图必须来自当前基准版本，不能提交图片 URL、成品替代、客户端提示词或能力声明。
+
+| 方法 | 路径 | data |
+| --- | --- | --- |
+| POST | `/api/projects/:id/assets/:assetId/profile-analyses` | `{ analysis }` |
+| GET | `/api/projects/:id/assets/:assetId/profile-analyses` | `{ analyses, nextCursor? }` |
+| GET | `/api/projects/:id/assets/:assetId/profile-analyses/:taskId` | `{ analysis }` |
+| POST | `/api/projects/:id/assets/:assetId/profile-analyses/:taskId/adopt` | `{ adoptedVersionId, replayed, asset }` |
+
+创建请求为 `{ expectedVersionId, sourceResourceId, modelSelection }`；模型选择为 `{ kind: "logical", logicalModelId }` 或 `{ kind: "system", channelId, modelKey }`。请求上限 16 KiB，严格拒绝未知键、重复键和尾随 JSON。创建不保证幂等，响应丢失须先查询恢复，不能盲目重发收费请求。通用任务创建不能伪造该操作，普通任务重试不能对分析任务原地重跑。
+
+列表参数 `limit` 默认 20、范围 1–50，`beforeTaskId` 必须属于相同用户、项目和资产范围；按 `created_at DESC, id DESC` 分页，目标过滤在 LIMIT 前，包含活动及终态任务。列表省略草稿正文及历史基准，详情返回草稿和可选 `baseline={ versionId, fields }`。基准读取经过用户、项目、资产、任务及历史版本归属校验，`fields` 只包含对应分类允许的字段，保留原 JSON 类型并区分缺失与 `null`；不包含原图、内部收据或其他定义。基准缺失或损坏时明确不可用，禁止首次采用，不以当前定义冒充历史值。已有采用收据的精确重放不依赖基准重建。已清理任务的详情返回 404，不重建草稿。
+
+`ProfileAnalysisView` 包含 `taskId/projectId/assetId/category/baseVersionId/source.resourceId/status/stage/createdAt/updatedAt`，以及服务端计算的 `canCancel/canAdopt/currentVersionId/blockedReason`。可选 `draft`、`adoption={ adoptedVersionId, selectedFields, adoptedAt }` 和安全 `error={ reason, message }`；不公开内部摘要或原始模型响应。角色草稿仅 `appearance/physique/clothing/props`，场景和道具仅 `description/prompt`，全部为字符串。空串表示未知，不能用于清空字段；原文最多 32 KiB UTF-8，每字段最多 2,000 Unicode code points。额外键、重复键、错误类型或非法结构令分析失败，而不是截断后采用。
+
+采用请求仅 `{ expectedVersionId, selectedFields, idempotencyKey }`，上限 8 KiB；字段集非空、不重复，值完全取服务端草稿。幂等键为 16–64 位 ASCII 字母、数字、下划线或连字符。一次分析只能采用一次字段集；未选字段保持原值和 JSON 类型，选中历史数组字段意味着整个字段替换为文本。采用与收据原子提交，保留参考图、声音、表现及真实媒体任务来源。同键同参数重放返回原采用版本与当前资产；同键异参或已采用后改字段集返回冲突。版本变化保留草稿，不覆盖新版本、不自动重跑分析。
+
+普通素材同步同样不得回退已有版本：已有主版本的资产若收到旧 `primaryVersionId` 或缺失主版本的快照，返回 HTTP 409、`reason=project_asset_version_changed`，保持当前版本及采用结果不变。客户端应刷新当前资产后重新审阅元数据编辑，不可静默替换基准后覆盖；携带当前主版本的元数据编辑与未版本化素材同步保持原行为。
+
+取消使用已有 `POST /api/tasks/:id/cancel`。本操作支持 queued/running 逻辑取消，以取消与成功提交的数据库条件更新赢家决定终态；关闭弹窗不取消。逻辑取消不保证供应商已停止或退费。页面轮询安全视图，不消费原始 token；通用任务详情、事件流和诊断同样不能暴露未校验原文。
+
+新增原因码：400 `asset_profile_analysis_invalid_request`；404 `asset_profile_analysis_not_found`；409 `project_asset_version_changed`、`asset_profile_analysis_source_changed`、`asset_profile_analysis_not_adoptable`、`asset_profile_analysis_idempotency_conflict`、`asset_profile_analysis_already_adopted`、`asset_profile_analysis_baseline_unavailable`、`task_state_changed`；422 `asset_profile_analysis_source_unavailable`、`asset_profile_analysis_model_unsupported`、`asset_profile_analysis_model_unknown`、`asset_profile_analysis_invalid_result`；503 `asset_profile_analysis_write_busy`。认证、配额、计费与 SSRF 错误保持原语义，异步失败通过 `analysis.error.reason` 判断，不解析显示文案。
+
+## 项目资产批量图片生成
+
+支持在项目资产页跨分类（角色、场景、道具等，单批最多 `MaxProjectAssetBatchItems = 50` 项且同一批次内 `assetId` 不重复）发起批量图片生成。每个生成项独立创建 `adoptionMode=manual` 的单图 `canvas_image` 任务，成功产出仅进入待确认候选，不自动覆盖资产主版本，也不提供批量一键采用。
+
+| 方法 | 路径 | data |
+| --- | --- | --- |
+| POST | `/api/projects/:id/asset-generation-batches/preflight` | `ProjectAssetBatchPreflightResult` |
+| POST | `/api/projects/:id/asset-generation-batches` | `{ batch }` |
+| GET | `/api/projects/:id/asset-generation-batches` | `{ batches }` |
+| GET | `/api/projects/:id/asset-generation-batches/:batchId` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/stop` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/cancel-tasks` | `{ batch }` |
+| POST | `/api/projects/:id/asset-generation-batches/:batchId/items/:itemId/retry` | `{ batch }` |
+
+- **预检与费用摘要（`preflight`）**：逐项校验项目归属、资产归属、`expectedVersionId == primaryVersionId`、`referenceSource=original|current|none` 的参考图完整性及所选模型的多参考图上限与字节预算，汇总已知积分费用 `totalKnownMicrocredits`、未知价格项数量 `priceUnknownCount` 及 `preflightDigest`，不入队、不扣费。
+- **幂等创建与对账（`POST /asset-generation-batches`）**：按 `(userId, projectId, idempotencyKey)` 保证幂等。同键同参数重放返回同一批次及已创建的 `taskId`（若因中断存在未绑定 `taskId` 的项，先通过 `tasks.creation_submission_id = submission_key` 对账恢复，仅对确认未创建任务的 `pending` 项补派发）；同键异参返回 HTTP 409 `reason=batch_idempotency_conflict`；预检摘要或资产版本变化返回 HTTP 409 `reason=batch_preflight_stale` 或 `project_asset_version_changed`。
+- **停止未提交项 vs 取消已提交任务分离**：`POST .../stop` 仅将 `status=pending` 且 `taskId=""` 的未派发项原子更新为 `stopped`，阻止后续派发与扣费；`POST .../cancel-tasks` 对已关联的 `queued/running` 任务发起取消，已成功产出的手动候选保持不变。
+- **局部失败重试与 `reconcile_required` 保护**：`POST .../items/:itemId/retry` 仅允许对 `status=failed` 且 `canRetry=true` 的项重试，将旧 `taskId` 归档至 `attemptHistory`、递增 `attempt` 并生成新 `submissionKey` 创建新任务。若任务缺失记录或带有待恢复媒体检查点（`MediaRecoveryJSON` / `CanRecoverMedia`），状态标记为 `reconcile_required` 且 `canRetry=false`，禁止盲目重发收费请求。
 
 ## 平台技能策展
 

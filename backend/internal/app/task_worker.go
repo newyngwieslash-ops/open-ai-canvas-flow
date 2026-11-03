@@ -259,11 +259,12 @@ func (w *taskWorkerCoordinator) processClaimedTask(task *model.Task, globalSlot 
 		return s.finishTaskMediaRecovery(task, result, err)
 	}
 	providerSucceeded := routeResult.providerSucceeded
-	if err == nil {
-		result, err = s.persistGeneratedMediaResult(task.UserID, result)
+	if err == nil && task.Operation == profileAnalysisOperation {
+		result, err = profileCompletionResult(*task, result)
+		canvasOps = nil
 	}
 	if err == nil {
-		_, err = s.finalizeCharacterTurnaroundTask(*task, result)
+		result, err = s.persistGeneratedMediaResult(task.UserID, result)
 	}
 	if err != nil {
 		channelSlotFailedBeforeRequest := false
@@ -301,7 +302,7 @@ func (w *taskWorkerCoordinator) processClaimedTask(task *model.Task, globalSlot 
 		if isVideoTaskType(task.Type) && newAPIChannel2TaskSyncExpired(*task, err, time.Now()) {
 			err = errors.New("上游任务长时间未同步，已停止自动查询，请确认渠道任务状态后重试。")
 		}
-		if errors.Is(err, context.DeadlineExceeded) || deadlineExpired {
+		if task.Operation != profileAnalysisOperation && (deadlineExpired || (errors.Is(err, context.DeadlineExceeded) && !taskErrorStorageRead.MatchString(err.Error()))) {
 			// 画布 Agent 的单步超时是可恢复事件（运行期会关思考重试同一步），
 			// 因此必须与"任务执行超时"区分开，否则只能整轮判死。
 			if cloudAgentModelOperation(task) {

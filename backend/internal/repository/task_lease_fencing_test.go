@@ -15,7 +15,7 @@ func TestTaskLeaseFencesExpiredAndReclaimedWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Task{}, &model.Result{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Task{}, &model.Result{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.Task{ID: "task", UserID: "user", Status: model.TaskStatusQueued}).Error; err != nil {
@@ -49,7 +49,7 @@ func TestTaskLeaseFencesExpiredAndReclaimedWriters(t *testing.T) {
 		}
 	}
 	old.Status = model.TaskStatusSucceeded
-	if err := repo.SaveTaskCompletion(old, model.TaskStatusRunning, []model.Result{{ID: "stale"}}); !errors.Is(err, ErrTaskStateConflict) {
+	if err := repo.SaveTaskCompletion(old, model.TaskStatusRunning, []model.Result{{ID: "stale", TaskID: old.ID, UserID: old.UserID}}); !errors.Is(err, ErrTaskStateConflict) {
 		t.Fatalf("stale completion: %v", err)
 	}
 	var count int64
@@ -65,7 +65,7 @@ func TestTaskLeaseFencesExpiredAndReclaimedWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.Status = model.TaskStatusSucceeded
-	if err := repo.SaveTaskCompletion(current, model.TaskStatusRunning, []model.Result{{ID: "valid", TaskID: current.ID}}); err != nil {
+	if err := repo.SaveTaskCompletion(current, model.TaskStatusRunning, []model.Result{{ID: "valid", TaskID: current.ID, UserID: current.UserID}}); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := repo.Task(current.ID)

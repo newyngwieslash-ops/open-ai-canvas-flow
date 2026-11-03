@@ -16,7 +16,7 @@ import { CANVAS_STORE_KEY, commitPendingCanvasStorePersistenceLocked, pendingCan
 
 export type AssetKind = "text" | "image" | "video" | "audio" | "model" | "entity";
 export type { AssetCategory } from "@/lib/asset-category";
-export type AssetStatus = "draft" | "review" | "confirmed" | "archived";
+export type AssetStatus = "draft" | "review" | "confirmed" | "archived" | "deleting";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
 export type ImageAsset = AssetBase<"image"> & { data: { dataUrl: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string } };
 export type VideoAsset = AssetBase<"video"> & { data: { url: string; storageKey?: string; width: number; height: number; durationMs?: number; hasAudio?: boolean; bytes: number; mimeType: string } };
@@ -285,6 +285,8 @@ const assetStorage: PersistStorage<AssetStore> = {
 
 async function normalizePersistedAsset(asset: Asset): Promise<Asset> {
     asset = parseAssetRecord(asset);
+    // Deleting records are read-only receipts, not media migration/upload inputs.
+    if (asset.status === "deleting") return asset;
     const storageKey = "data" in asset && asset.data && "storageKey" in asset.data ? asset.data.storageKey : undefined;
     const resourceId = resourceIdFromStorageKey(storageKey);
     if (resourceId) {
@@ -410,10 +412,12 @@ export const useAssetStore = create<AssetStore>()(
                     })(),
                 );
             },
-            updateAsset: (id, patch) =>
+            updateAsset: (id, patch) => {
+                if (get().assets.find((asset) => asset.id === id)?.status === "deleting") throw new Error("删除中，失败将自动重试");
                 set((state) => ({
                     assets: state.assets.map((asset) => (asset.id === id ? parseAssetRecord({ ...asset, ...patch, updatedAt: new Date().toISOString() }) : asset)),
-                })),
+                }));
+            },
             removeAsset: async (id) => get().removeAssets([id]),
             removeAssets: async (ids) => {
                 const removedIds = new Set(ids);

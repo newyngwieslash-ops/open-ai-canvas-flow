@@ -78,7 +78,6 @@ export function CanvasScriptNodeContent({
     nodes,
     batch,
     pipeline,
-    scale,
     mentionReferences,
     onOpen,
     onCreateImageNodes,
@@ -94,6 +93,7 @@ export function CanvasScriptNodeContent({
     onAddRow,
     onRemoveRow,
     onUpdateRow,
+    onEditAssets,
     onPromptChange,
     onGenerateScript,
     onModelChange,
@@ -108,7 +108,6 @@ export function CanvasScriptNodeContent({
     nodes: CanvasNodeData[];
     batch?: CanvasGenerationBatch;
     pipeline: CanvasStoryboardPipelineProgress;
-    scale: number;
     mentionReferences: CanvasResourceReference[];
     onOpen: () => void;
     onCreateImageNodes: () => void;
@@ -124,7 +123,8 @@ export function CanvasScriptNodeContent({
     onAddRow: () => void;
     onRemoveRow: (rowId: string) => void;
     onUpdateRow: (rowId: string, patch: Partial<StoryboardRow>) => void;
-    onPromptChange: (prompt: string) => void;
+    onEditAssets: (rowId: string) => void;
+    onPromptChange: (prompt: string) => boolean | void;
     onGenerateScript: (prompt: string) => void;
     onModelChange: (model: string) => void;
     onShotDurationChange: (duration: StoryboardShotDuration) => void;
@@ -139,7 +139,7 @@ export function CanvasScriptNodeContent({
     const generationConfig = buildGenerationConfig(effectiveConfig, node, "text");
     const simpleMode = workspaceMode === "simple";
     const rows = node.metadata?.storyboard?.rows || [];
-    const [prompt, setPrompt] = useState(node.metadata?.composerContent || "");
+    const prompt = node.metadata?.composerContent || "";
     const [scrollTop, setScrollTop] = useState(0);
     const composerHeightChangeRef = useRef(onComposerHeightChange);
     const reportedComposerHeightRef = useRef<number | null>(null);
@@ -345,7 +345,7 @@ export function CanvasScriptNodeContent({
                             <CompactInput value={row.videoMotionPrompt} placeholder="描述视频运动、镜头和动作" onChange={(value) => onUpdateRow(row.id, { videoMotionPrompt: value })} borderColor={theme.node.stroke} />
                             <CompactInput value={row.dialogue} placeholder="台词或旁白" onChange={(value) => onUpdateRow(row.id, { dialogue: value })} borderColor={theme.node.stroke} />
                             <div className="flex h-full min-w-0 items-center px-3">
-                                <StoryboardAssetsCell bindings={row.assetBindings || []} nodes={nodes} />
+                                <StoryboardAssetsCell bindings={row.assetBindings || []} nodes={nodes} onEdit={() => onEditAssets(row.id)} disabled={node.metadata?.locked} />
                             </div>
                         </div>
                     ))
@@ -392,11 +392,12 @@ export function CanvasScriptNodeContent({
                     className="thin-scrollbar h-full min-h-0 w-full touch-pan-y resize-none overflow-y-auto overflow-x-hidden overscroll-contain rounded-md border bg-transparent px-3 py-2 text-sm leading-5 outline-none transition placeholder:opacity-45 focus:ring-1"
                     style={{ borderColor: theme.node.stroke, color: theme.node.text, "--tw-ring-color": theme.node.muted } as CSSProperties}
                     value={prompt}
+                    readOnly={Boolean(node.metadata?.locked)}
                     placeholder="输入剧本或剧情，以及总时长等要求，自动拆分为镜头"
                     onContentSizeChange={resizePrompt}
                     onChange={(value) => {
-                        setPrompt(value);
-                        onPromptChange(value);
+                        if (node.metadata?.locked || onPromptChange(value) === false) return false;
+                        return true;
                     }}
                     onKeyDown={(event) => {
                         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -466,15 +467,15 @@ export function CanvasScriptNodeContent({
                         onClick={submitPrompt}
                     />
                 </div>
-                <RowHandle side="left" top={composerHeight / 2} scale={scale} tone="idle" theme={theme} title="连接文本节点作为项目设定" onPointerDown={(event) => onConnectStart(event, "context", "target")} />
+                <RowHandle side="left" top={composerHeight / 2} tone="idle" theme={theme} title="连接文本节点作为项目设定" onPointerDown={(event) => onConnectStart(event, "context", "target")} />
             </div>
             {rows.map((row, index) => {
                 const top = STORYBOARD_HEADER_HEIGHT + index * STORYBOARD_ROW_HEIGHT + STORYBOARD_ROW_HEIGHT / 2 - scrollTop;
                 if (top < STORYBOARD_HEADER_HEIGHT + 4 || top > STORYBOARD_HEADER_HEIGHT + tableHeight - 4) return null;
                 return (
                     <div key={`ports-${row.id}`}>
-                        <RowHandle side="left" top={top} scale={scale} tone={batchItemTone(batchItemByRowId.get(row.id)) || row.status} theme={theme} onPointerDown={(event) => onConnectStart(event, row.id, "target")} />
-                        <RowHandle side="right" top={top} scale={scale} tone={batchItemTone(batchItemByRowId.get(row.id)) || row.status} theme={theme} onPointerDown={(event) => onConnectStart(event, row.id, "source")} />
+                        <RowHandle side="left" top={top} tone={batchItemTone(batchItemByRowId.get(row.id)) || row.status} theme={theme} onPointerDown={(event) => onConnectStart(event, row.id, "target")} />
+                        <RowHandle side="right" top={top} tone={batchItemTone(batchItemByRowId.get(row.id)) || row.status} theme={theme} onPointerDown={(event) => onConnectStart(event, row.id, "source")} />
                     </div>
                 );
             })}
@@ -488,6 +489,7 @@ export function CanvasScriptEditor({
     open,
     onClose,
     onUpdateRows,
+    onEditAssets,
     onVisibleColumnsChange,
     onGenerateImages,
     onGenerateVideos,
@@ -498,6 +500,7 @@ export function CanvasScriptEditor({
     open: boolean;
     onClose: () => void;
     onUpdateRows: (rows: StoryboardRow[]) => void;
+    onEditAssets: (rowId: string) => void;
     onVisibleColumnsChange: (columns: StoryboardColumn[]) => void;
     onGenerateImages: (rowIds: string[]) => void;
     onGenerateVideos: (rowIds: string[]) => void;
@@ -558,7 +561,7 @@ export function CanvasScriptEditor({
                 ) : option.value === "durationSeconds" ? (
                     <InputNumber min={1} max={60} value={row.durationSeconds} addonAfter="s" onChange={(value) => updateRow(row.id, { durationSeconds: Number(value) || 1 })} />
                 ) : option.value === "assets" ? (
-                    <StoryboardAssetsCell bindings={row.assetBindings || []} nodes={nodes} />
+                    <StoryboardAssetsCell bindings={row.assetBindings || []} nodes={nodes} onEdit={() => onEditAssets(row.id)} disabled={node?.metadata?.locked} />
                 ) : option.value === "shotSize" ? (
                     <Select
                         className="w-full"
@@ -730,7 +733,6 @@ function editorRow(shotNumber: number): StoryboardRow {
 function RowHandle({
     side,
     top,
-    scale,
     tone,
     theme,
     title,
@@ -738,21 +740,19 @@ function RowHandle({
 }: {
     side: "left" | "right";
     top: number;
-    scale: number;
     tone?: StoryboardRow["status"];
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
     title?: string;
     onPointerDown: (event: ReactPointerEvent) => void;
 }) {
     const color = tone === "loading" ? theme.accent.primary : tone === "error" ? theme.accent.danger : tone === "success" ? theme.node.activeStroke : theme.node.muted;
-    const inverseHitScale = 1 / Math.max(scale, 0.05);
     return (
         <button
             type="button"
             aria-label={title || `${side === "left" ? "输入" : "输出"}连接点`}
             title={title || `${side === "left" ? "引入参考" : "连接到图片、视频或生成节点"}`}
             className={`canvas-connection-handle absolute z-[var(--node-z-handle)] flex -translate-y-1/2 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 ${side === "left" ? "left-0 -translate-x-1/2" : "right-0 translate-x-1/2"}`}
-            style={{ top, width: 32 * inverseHitScale, height: 32 * inverseHitScale, "--tw-ring-color": theme.accent.primary } as CSSProperties}
+            style={{ top, width: "calc(32px * var(--canvas-live-inverse-scale, 1))", height: "calc(32px * var(--canvas-live-inverse-scale, 1))", "--tw-ring-color": theme.accent.primary } as CSSProperties}
             onPointerDown={onPointerDown}
         >
             <span className="block size-2.5 rounded-full border-2 shadow-sm transition-transform hover:scale-110" style={{ boxSizing: "border-box", borderColor: theme.node.panel, background: color }} />

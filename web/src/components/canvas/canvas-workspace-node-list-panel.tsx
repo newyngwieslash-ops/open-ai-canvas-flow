@@ -55,7 +55,7 @@ export function CanvasWorkspaceNodeListPanel({
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" role="listbox" aria-label="画布节点列表">
                 {results.length ? (
-                    results.map((node) => <CanvasNodeListItem key={node.id} node={node} config={config} active={selectedNodeIds.has(node.id)} onSelect={() => onFocus(node.id)} />)
+                    results.map((node) => <CanvasNodeListItem key={node.id} node={node} config={config} active={selectedNodeIds.has(node.id)} onSelect={onFocus} />)
                 ) : (
                     <WorkspaceState icon="canvas" compact title="没有匹配节点" description="换一个关键词继续搜索。" />
                 )}
@@ -64,7 +64,7 @@ export function CanvasWorkspaceNodeListPanel({
     );
 }
 
-const CanvasNodeListItem = memo(function CanvasNodeListItem({ node, config, active, onSelect }: { node: CanvasNodeData; config: AiConfig; active: boolean; onSelect: () => void }) {
+const CanvasNodeListItem = memo(function CanvasNodeListItem({ node, config, active, onSelect }: { node: CanvasNodeData; config: AiConfig; active: boolean; onSelect: (nodeId: string) => void }) {
     const times = canvasNodeSearchTimes(node);
     const materialSummary = canvasNodeMaterialSummary(node, config);
     const context = canvasNodeSearchContext(node);
@@ -80,7 +80,7 @@ const CanvasNodeListItem = memo(function CanvasNodeListItem({ node, config, acti
                 contentVisibility: "auto",
                 containIntrinsicSize: "48px",
             }}
-            onClick={onSelect}
+            onClick={() => onSelect(node.id)}
         >
             <CanvasNodeListThumbnail node={node} />
             <span className="min-w-0 self-center">

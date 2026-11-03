@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,7 +31,11 @@ func newMediaRecoveryTestService(t *testing.T) (*Service, *gorm.DB) {
 	if err := database.MigrateSchema(db); err != nil {
 		t.Fatal(err)
 	}
-	return &Service{repo: repository.New(db), dataDir: t.TempDir(), activeCancels: make(map[string]context.CancelFunc)}, db
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, ".settings-key"), make([]byte, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return &Service{repo: repository.New(db), dataDir: dataDir, activeCancels: make(map[string]context.CancelFunc)}, db
 }
 
 func mediaTestPNG(t *testing.T) []byte {
@@ -143,9 +149,42 @@ func TestMediaRecoveryDownloadFailureResumesSameTaskAfterRestart(t *testing.T) {
 func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	s, db := newMediaRecoveryTestService(t)
-	seedOSSEnabled(t, db, "media-user", "http://127.0.0.1:1")
+	picture := mediaTestPNG(t)
+	var storageReady atomic.Bool
+	var uploads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("media recovery should upload the staged object, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !storageReady.Load() {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "<Error><Code>ServiceUnavailable</Code><Message>storage unavailable</Message></Error>")
+			return
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Equal(payload, picture) {
+			t.Errorf("recovery changed staged media: %v", err)
+		}
+		uploads.Add(1)
+		w.Header().Set("ETag", `"recovered-object"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	setting := model.UserOSSSetting{
+		ID: newID(), UserID: "media-user", Enabled: true,
+		ValueJSON: fmt.Sprintf(`{"provider":"s3","endpoint":%q,"bucket":"test-bucket","accessKeyId":"test-id","accessKeySecret":"test-secret","region":"us-east-1"}`, server.URL),
+	}
+	if err := db.Create(&setting).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.repo.SaveSystemSetting(&model.SystemSetting{Key: ossSettingKey, ValueJSON: `{"allowUserS3":true}`}); err != nil {
+		t.Fatal(err)
+	}
 	task := seedMediaTask(t, db, providerConfig{})
-	temp, err := s.stageInlineMedia(mediaTestPNG(t))
+	temp, err := s.stageInlineMedia(picture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,11 +204,8 @@ func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 	if _, err := os.Stat(s.mediaTempPath(temp)); err != nil {
 		t.Fatal("upload failure discarded download", err)
 	}
-	// Simulate fixing storage configuration on the same existing object identity.
-	resource.Provider, resource.ObjectKey = "local", "recovered/picture.png"
-	if err := s.repo.SaveResource(resource); err != nil {
-		t.Fatal(err)
-	}
+	// Recovery must preserve the producer's physical identity while the storage endpoint recovers.
+	storageReady.Store(true)
 	output, err := s.resumeTaskMedia(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
@@ -178,8 +214,11 @@ func TestMediaRecoveryUploadFailureReusesStagedFileAndResource(t *testing.T) {
 		t.Fatal(err)
 	}
 	ready, _ := s.resourceForUploadKey(task.UserID, mediaUploadKey(task.ID, 0))
-	if ready.ID != resource.ID || ready.Status != model.ResourceStatusReady {
+	if ready.ID != resource.ID || ready.Status != model.ResourceStatusReady || ready.Provider != resource.Provider || ready.ObjectKey != resource.ObjectKey {
 		t.Fatal("resource identity changed")
+	}
+	if uploads.Load() != 1 {
+		t.Fatalf("expected one successful staged upload, got %d", uploads.Load())
 	}
 	var count int64
 	db.Model(&model.Resource{}).Where("user_id = ?", task.UserID).Count(&count)
@@ -441,5 +480,188 @@ func TestMediaRecoveryAudioKeepsAllReturnedResults(t *testing.T) {
 	}
 	if _, ok := result["audio"]; !ok {
 		t.Fatal("legacy singular audio result missing")
+	}
+}
+
+func TestMediaRecoveryStoryboardWorkflowOutputRegistersWithinOwnerTransaction(t *testing.T) {
+	s, db := newMediaRecoveryTestService(t)
+	project, unit := seedWorkflowProject(t, db)
+	if err := s.EnsureBuiltinProjectWorkflowTemplate(); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := s.CreateUnitWorkflow("user-1", project.ID, unit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storyboardStep model.WorkflowStepInstance
+	for _, step := range workflow.Steps {
+		if step.StepKey == "storyboard" {
+			storyboardStep = step
+		}
+	}
+	if err := db.Model(&model.WorkflowStepInstance{}).Where("id = ?", storyboardStep.ID).Update("status", model.WorkflowStepStatusRunning).Error; err != nil {
+		t.Fatal(err)
+	}
+	shot, err := s.CreateProjectShot("user-1", project.ID, CreateProjectShotRequest{UnitID: unit.ID, Title: "镜头12", Description: "裴让出门回望", DurationMs: 7000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	input, err := json.Marshal(canvasGenerationInput{
+		Mode:   "image",
+		Prompt: "镜头12分镜图",
+		Metadata: map[string]interface{}{
+			"source":         "short-drama-workflow",
+			"workflowStepId": storyboardStep.ID,
+			"unitId":         unit.ID,
+			"shotId":         shot.ID,
+			"shotRevisionId": shot.CurrentRevisionID,
+			"artifactType":   "storyboard",
+			"mediaType":      "image",
+			"role":           "output",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := now.Add(time.Hour)
+	task := &model.Task{
+		ID:             newID(),
+		UserID:         "user-1",
+		ProjectID:      project.ID,
+		Type:           "canvas_image",
+		Status:         model.TaskStatusRunning,
+		Prompt:         "镜头12分镜图",
+		InputJSON:      string(input),
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &expires,
+		RouteRun:       1,
+		CreatedAt:      now,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	temp, err := s.stageInlineMedia(mediaTestPNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &mediaCheckpoint{Mode: "image", StartedAt: now, Items: []mediaCheckpointItem{{TempName: temp, MIMEType: "image/png"}}}
+	if err := s.saveMediaCheckpoint(task, checkpoint, "local_save"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := s.materializeTaskMedia(context.Background(), task, providerConfig{}, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finishTaskMediaRecovery(task, output, nil); err != nil {
+		t.Fatalf("finishTaskMediaRecovery() error = %v", err)
+	}
+	saved, err := s.repo.Task(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != model.TaskStatusSucceeded || saved.MediaStage != "completed" {
+		t.Fatalf("unexpected task state: status=%s mediaStage=%s error=%s", saved.Status, saved.MediaStage, saved.Error)
+	}
+	var artifacts []model.ShotArtifact
+	if err := db.Find(&artifacts, "shot_id = ?", shot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 || artifacts[0].Status != "ready" {
+		t.Fatalf("unexpected shot artifacts: %+v", artifacts)
+	}
+}
+
+type deadlineExceededReader struct{}
+
+func (deadlineExceededReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("Client.Timeout or context cancellation while reading body: %w", context.DeadlineExceeded)
+}
+func (deadlineExceededReader) Close() error { return nil }
+
+func TestMediaHydrationBodyTimeoutPreservesReferenceReadError(t *testing.T) {
+	s, db := newMediaRecoveryTestService(t)
+	now := time.Now()
+	setting := model.UserOSSSetting{
+		ID:        newID(),
+		UserID:    "media-user",
+		Enabled:   true,
+		ValueJSON: `{"provider":"qiniu","endpoint":"https://up-z2.qiniup.com","bucket":"yingce-dev","accessKeyId":"ak-test","accessKeySecret":"sk-plaintext","region":"z2","publicBaseUrl":"https://cdn.example.test"}`,
+	}
+	if err := db.Create(&setting).Error; err != nil {
+		t.Fatal(err)
+	}
+	resource := &model.Resource{
+		ID:        "res-qiniu-timeout",
+		UserID:    "media-user",
+		Kind:      "image",
+		Status:    model.ResourceStatusReady,
+		Provider:  "qiniu",
+		Endpoint:  "https://up-z2.qiniup.com",
+		Bucket:    "yingce-dev",
+		ObjectKey: "open-ai-canvas/users/media-user/image/ref.png",
+		MimeType:  "image/png",
+		Size:      1024,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := db.Create(resource).Error; err != nil {
+		t.Fatal(err)
+	}
+	prevGetOrigin := getOriginOSSObjectRange
+	getOriginOSSObjectRange = func(_ ossSettingValue, _ string, _ string) (*ossObjectStream, error) {
+		return &ossObjectStream{Body: deadlineExceededReader{}, StatusCode: http.StatusOK, ContentLength: 1024}, nil
+	}
+	defer func() { getOriginOSSObjectRange = prevGetOrigin }()
+
+	input, err := json.Marshal(canvasGenerationInput{
+		Mode:   "image",
+		Prompt: "test",
+		Config: providerConfig{
+			APIFormat:     "openai",
+			InterfaceType: string(model.ChannelInterfaceOpenAIImage),
+			BaseURL:       "https://api.openai.com/v1",
+			APIKey:        "sk-test",
+			Model:         "gpt-image-1",
+			Size:          "1024x1024",
+		},
+		ReferenceImages: []providerMedia{{
+			ID:         "ref-1",
+			Name:       "裴让",
+			Type:       "image/*",
+			StorageKey: "resource:" + resource.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := now.Add(time.Hour)
+	task := &model.Task{
+		ID:             newID(),
+		UserID:         "media-user",
+		Type:           "canvas_image",
+		Operation:      "image",
+		Status:         model.TaskStatusRunning,
+		Prompt:         "test",
+		InputJSON:      string(input),
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &expires,
+		StartedAt:      &now,
+		RouteRun:       1,
+		CreatedAt:      now,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	_ = s.taskWorker().processClaimedTask(task, nil)
+	saved, err := s.repo.Task(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != model.TaskStatusFailed {
+		t.Fatalf("expected failed status, got %s", saved.Status)
+	}
+	if !strings.Contains(saved.Error, "读取任务参考资源失败") {
+		t.Fatalf("expected reference read failure preserved, got %q", saved.Error)
 	}
 }

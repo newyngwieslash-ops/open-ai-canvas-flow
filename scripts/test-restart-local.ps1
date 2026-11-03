@@ -1,8 +1,23 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
+$scriptPath = Join-Path $PSScriptRoot 'restart-local.ps1'
+foreach ($ps1File in @(Get-ChildItem -Path $PSScriptRoot -Filter '*.ps1')) {
+    $bytes = [System.IO.File]::ReadAllBytes($ps1File.FullName)
+    if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+        throw ("{0} must keep UTF-8 BOM for Windows PowerShell 5.1." -f $ps1File.Name)
+    }
+    $tokens = $null
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1File.FullName, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw $parseErrors[0] }
+}
 $tokens = $null
 $parseErrors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'restart-local.ps1'), [ref]$tokens, [ref]$parseErrors)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw $parseErrors[0] }
+$rawText = [System.IO.File]::ReadAllText($scriptPath, [System.Text.Encoding]::UTF8)
+if ($rawText.Contains('[DllImport("kernel32.dll")]')) {
+    throw 'restart-local.ps1 $disableQuickEdit must escape inner quotes as \"kernel32.dll\" for Start-Process -Command.'
+}
 $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PortOccupancy' }, $true)
 . ([scriptblock]::Create($function.Extent.Text))
 

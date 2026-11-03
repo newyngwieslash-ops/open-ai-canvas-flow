@@ -1,0 +1,16 @@
+{
+  "change": "add-project-asset-batch-generation",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "task_hash_policy": "task-content-v1",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "94a5c65975e9687c0a2f5698da09567dc0f2bf3de6e5fd5dc90e78205550a732",
+  "files": [
+    { "path": "docs/openspec/changes/add-project-asset-batch-generation/proposal.md", "sha256": "624cd3a4bb12d715e733686d22ac492ffdc790e7fe5d1ac6c701e8890c46d205" },
+    { "path": "docs/openspec/changes/add-project-asset-batch-generation/design.md", "sha256": "5079f8735aefd829fc31031639842c91bccfdc96d9cf7f7f54861a2a2a41fc4f" },
+    { "path": "docs/openspec/changes/add-project-asset-batch-generation/tasks.md", "sha256": "72e39443ffb16c9f7f049fbebbfc4a392144809bc9e3ffbeb13ec0c8b5404d8f" },
+    { "path": "docs/openspec/changes/add-project-asset-batch-generation/.openspec.yaml", "sha256": "0ad492a63d87e00a8bc135b0a1a2b19270dbb9ffd997a69b89fd4ab72015a944" },
+    { "path": "docs/openspec/changes/add-project-asset-batch-generation/specs/project-asset-batch-generation/spec.md", "sha256": "832e9f9efc75bb03d8c7f67da54a4257985b985306446e25f17ab4a8ce255d60" }
+  ]
+}

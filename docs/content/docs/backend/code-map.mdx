@@ -5,6 +5,31 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## 短剧当前章节批量图片生成
+
+- 共享镜头图片请求构造：`web/src/pages/projects/detail/workflow-image-generation.ts` 的 `buildWorkflowImageInput` / `prepareWorkflowImageSubmission` 统一构造单镜与批量图片生成请求（`storyboard` / `action_board`），使用镜头当前已保存 `currentRevisionId` 与逐镜有效资产引用，批量路径不调用 `saveProjectShot` / `createShotRevision`。
+- 候选分类、基线指纹与报价预检：`web/src/pages/projects/detail/workflow-batch-plan.ts` 的 `classifyBatchCandidates` 区分 `missing` / `failed` / `stale` / `ready` / `active` / `syncing` / `blocked`；`fingerprintBatchShot` 计算镜头基线指纹，`buildBatchPreview` 聚合逐镜报价及不可生成原因。
+- 浏览器用户隔离恢复日志：`web/src/pages/projects/detail/workflow-batch-storage.ts` 通过 `localForageStorageForScope` 保存最小白名单恢复记录（不含提示词正文、base64 参考图或 API Key）。
+- 单活动槽位调度与生命周期：`web/src/pages/projects/detail/workflow-batch-runner.ts` 与 `use-workflow-image-batch.ts` 执行单镜串行补位、`task_active_limit_exceeded` / `rate_limited` 退避等待、已失败任务原 `taskId` 重试（需要恢复保存的任务不在批次中重新生成，提示到任务中心处理）、未知提交冻结（不自动重放 POST）、同源 `navigator.locks` 防并发与账号切换/卸载 epoch + drain 栅栏。`beforePost` 在实际任务请求之前检查停止意图，覆盖技能、媒体及原任务读取准备阶段；日志共享写队列和快照比较阻止旧预览、旧刷新及另一标签覆盖新回执。
+- 章节替换保护：`chapter-storyboard-production.ts` 的 `saveGeneratedChapterStoryboardWithBatchGuard` 被 `workflow.tsx` 与 `chapters.tsx` 的生成保存、自动恢复共同调用，在同章锁内核对未结批次并在最终 PUT 前复核发起时账号/章节。旧确认不能借用新章节 controller；缺少 Web Locks 时仅禁批量，无未结日志的普通单镜操作仍可用。
+- 确认弹窗与工作台入口：`web/src/pages/projects/detail/workflow-image-batch-dialog.tsx`、`workflow-production-workbench.tsx`、`workflow.tsx` 在「匹配镜头资产」旁提供「批量分镜图」「批量动作预演」与章节内进度条。画布 `use-canvas-generation-batches.ts` 与 `runBackendGenerationTaskBatch` 仅服务画布节点/批量表，不负责短剧项目镜头批量生成。
+- 容量错误合同：`backend/internal/app/task_active_limit_error.go`、`task_creation.go`、`task_lifecycle.go` 与 `handler/routes.go` 将账号活动任务达 `activeTaskLimit` 映射为 `HTTP 400 / reason: "task_active_limit_exceeded"`。
+
+## 章节分镜资产生成解析、预览与追加保存
+
+- 完整目录：`web/src/pages/projects/detail/chapter-asset-candidates.ts` 调用 `services/api/projects.ts` 的分页 API，独立于 workspace 已引用资产；`project-chapter-ai.ts` 组织章节任务与 `projectAssetRefs`，`chapter-storyboard-production.ts` 接入解析、容量选择与保存。
+- 确定性解析与存量镜头预览/追加：`backend/internal/app/project_asset_binding_resolver.go` 处理 ID、同类精确名称、有效版本和缺图；`project_asset_binding_generated.go` 的 `prepareStoryboardAssetTask` 由任务创建链重建可信允许集合/摘要，执行 24 KiB 与完整提示词上下文预算检查，`ResolveGeneratedProjectUnitShotAssetBindings` 只读核验真实任务并返回完整基线；`backend/internal/app/project_asset_binding.go` 的 `PreviewProjectUnitShotAssetBindings` 只读计算存量镜头现有引用、剩余容量、增量候选与 `BindingBaseline`，`AppendProjectUnitShotAssetBindings` 在事务内重算并校验不可信基线、精确后态幂等重放（`isStrictExpectedPostState`）、引用可用性（`RequireAssetVersionReferences`）与单镜头容量上限。
+- 并发锁与仓储：`backend/internal/repository/project_asset_binding_lock.go` 的 `WithStoryboardAssetOwners` 提供 PostgreSQL 固定升序 `pg_advisory_xact_lock` 与 SQLite 立即写锁升级、5 秒总预算及最多 3 次有界重试，供分镜保存/追加、项目资产关联、资产/版本演进及资源删除/Outbox 竞争写路径共用；`backend/internal/repository/project_asset_binding.go` 的 `WithStoryboardAssetSnapshot` 与 `ReadStoryboardAssetSnapshot` 提供只读一致性快照读取，`DiscoverStoryboardBindingAppendOwners` 与 `LockStoryboardBindingAppendScope` 负责 owner 闭包发现与固定表序/主键升序行锁，`ApplyStoryboardShotAssetBindingsAppend` 原子插入缺失引用（`role = "reference", status = "linked"`）、仅将本次发生真实新增引用的镜头上全部非 `failed` 产物更新为 `status = "stale"` 且 `selected = false`（`failed` 产物保持 `failed` 且 `selected = false`，保留历史记录并调用 `invalidateUnitWorkflowTx`），再通过 `project.revision` CAS 递增修订号。
+- HTTP/事务：`handler/project_unit_routes.go` 注册 `shot-asset-bindings/resolve-generated`、`shot-asset-bindings/preview` 与 `shot-asset-bindings/append`（含 `service.IsProjectNotFound` 的 404 映射），`project_workflow_routes.go` 的 PUT shots 调用 `service` 类型别名与 `app/project_shot.go`（`resolveGeneratedStoryboard` 与 `ReplaceProjectUnitShots` / `replaceProjectUnitShotsLocked` 统一经 `mapStoryboardBindingNotFoundError` 将缺失或跨用户的 `project`/`unit`/`task` 映射为 `ErrProjectNotFound` 即 `404 / not_found`）；`validateGeneratedStoryboard` 在 owner 协调事务中复核基线、行关联、全脚本与合法版本子集，再交 `repository/repository_shots_workflows.go` 原子替换。普通人工 replace 保持原合同；无数据库 schema 迁移。
+- 真实入口：`chapters.tsx`、`workflow.tsx` 与 `workflow-production-workbench.tsx` 保留 `taskId` 恢复真实任务并经 `saveGeneratedChapterStoryboard` 重试（`PUT` 网络/瞬时失败时在 `pendingGeneratedStoryboardSaves` 缓存已准备的 `{ shots, expectedShotIds, generatedBinding: { taskId, baseline, rowIndices }, issues }` 直接重放，不再重调 `resolve-generated` 或重复确认，终态 `400`/`404`/`409`/`422` 或 `clearPendingGeneratedStoryboardSave` 显式放弃任务时清理缓存）；`web/src/pages/projects/detail/chapter-asset-binding-drawer.tsx`、`workflow-production-workbench.tsx`、`workflow.tsx` 与 `workflow-stage-views.tsx` 接入存量镜头单镜/整章批量“匹配镜头资产”抽屉、错误码分支（`services/api/error-codes.ts`）与原请求重试；`project_workbench_read.go` 组装绑定版本的可选原图，`workflow-shot-references.ts` 阻止缺图回退当前 head。共享画布生成协议不因章节适配而改写。
+
+## 画布实时会话
+
+- 传输入口：`backend/internal/handler/canvas_realtime.go` 校验登录与 Origin、管理 WebSocket；`app/canvas_realtime.go` 校验画布归属，`internal/canvas/realtime.go` 负责临时 Presence、房间隔离与 Redis 分发，`realtime_devices.go` 管理跨实例统一窗口编号及临时租期。
+- 提交通知：`repository/canvas_change_notifications.go` 与 `repository.go` 在外层事务提交后合并通知，回滚丢弃；operations、历史保存、租约、Agent 任务创建及任务结果回写沿用该边界。
+- 前端连接：`web/src/services/canvas-realtime-client.ts` 管理合并发送和重连，`canvas-realtime.ts` 按账号与画布共享窗口内连接；`pages/canvas/use-canvas-project-lifecycle.ts` 联动状态校验和独立租约维护。
+- 光标与拖拽：`components/canvas/canvas-collaboration-layer.tsx` 管理设备列表和多人事件采集，单窗口停止采集；`canvas-presence-renderer.ts` 负责按帧复用 DOM 投影远端图形，高频坐标不经过 React。`nginx.conf`、`web/vite.config.ts` 转发 WebSocket Upgrade。
+
 ## 用户登录日志
 
 - 持久化：`backend/internal/model/models_login_log.go`、`repository/login_logs.go`；会话与日志原子提交在 `repository/account.go`，schema v53 在 `database/migrations.go`。
@@ -86,7 +111,7 @@ Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` �
 | 页面装配和跨域动作协调 | `web/src/pages/canvas/project.tsx` |
 | 画布领域规则和生成协议 | `web/src/lib/canvas/canvas-project-domain.ts`、`canvas-project-generation.ts`、`produced-model.ts` |
 | 项目恢复、持久化和项目级动作 | `web/src/pages/canvas/use-canvas-project-lifecycle.ts` |
-| 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts`、`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
+| 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts` 协调快照和确认；`web/src/services/canvas-mutation-batches.ts` 按服务端 500 条上限顺序提交、先持久化后发送并保留重放 ID；`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
 | 内部资源保护与维护快照 | `backend/internal/canvas/canvas_history.go`、`repair_resources.go`、`backend/internal/repository/canvas_history.go`；仅供资源完整性维护和审计，不提供用户历史树、预览或恢复入口 |
 | Patch 历史、生成任务和重试控制 | `web/src/pages/canvas/use-canvas-history.ts`、`use-canvas-generation.ts`、`use-canvas-generation-executor.ts`、`use-canvas-generation-retry.ts` |
 | 文本、图片、视频和音频生成执行 | `web/src/pages/canvas/canvas-*-generation-executor*.ts` |
@@ -98,9 +123,16 @@ Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` �
 | 派生渲染模型和画布分层 | `web/src/pages/canvas/use-canvas-render-model.ts`、`canvas-project-world-layers.tsx`、`canvas-project-context-menu.tsx`、`canvas-project-status-dialogs.tsx` |
 | 顶栏、反馈和 screen-space 浮层 | `web/src/pages/canvas/canvas-project-top-bar.tsx`、`canvas-project-feedback.tsx`、`canvas-project-selection-toolbar.tsx`、`components/canvas/canvas-workspace-overlays.tsx` |
 | 媒体弹窗装配 | `web/src/pages/canvas/canvas-project-media-dialogs.tsx` |
-| 画布视口、拖拽、缩放和框选 | `web/src/components/canvas/canvas-viewport.tsx`、`web/src/lib/canvas/canvas-live-viewport.ts` |
+| 画布视口、拖拽、缩放和框选 | `web/src/components/canvas/canvas-viewport.tsx`、`web/src/lib/canvas/canvas-live-viewport.ts`；`pages/canvas/use-canvas-image-wheel-resize.ts` 合并单选图片 Ctrl 滚轮尺寸、历史和保存，`lib/canvas/canvas-wheel.ts` 识别离散滚轮，角点与滚轮共用 registry 最小尺寸规则 |
 | 节点渲染与节点工具 | `web/src/components/canvas/canvas-node.tsx`、`canvas-node-hover-toolbar.tsx`、`canvas-node-toolbar.tsx` |
 | 图片多角度、宫格切分与多选框 | `canvas-node-angle-dialog.tsx`、`canvas-angle-scene.tsx`、`canvas-grid-split-picker.tsx`、`web/src/lib/canvas/canvas-grid-split.ts`、`canvas-selection.ts` |
+| 图片自然比例与默认尺寸 | `web/src/lib/canvas/canvas-node-size.ts`；上传、生成结果和派生图片共用尺寸规则，节点调整继续使用现有角点入口 |
+| 图片编辑副本与工具菜单 | `web/src/lib/canvas/tool-registry/definitions/node-hover-tools.tsx` 声明入口；`web/src/pages/canvas/use-canvas-node-operations.ts` 负责带来源连线的复制；`web/src/components/canvas/canvas-node-toolbar.tsx` 与 `canvas-grid-split-picker.css` 共用菜单布局、滚动及子面板视口约束 |
+| 浮层可用区与小屏模式 | `web/src/lib/canvas/canvas-overlay-layout.ts` 计算侧栏/工具区边界并维护面板矩形通知；`canvas-workspace-overlays.tsx` 发布实测面板布局，`canvas-node-toolbar.tsx` 避让；`web/src/hooks/use-focus-mode.ts` 以用户明确偏好优先于小屏默认 |
+| 图片方向与资源保留 | `web/src/pages/canvas/use-canvas-image-rotation.ts` 协调首次副本、只读、锁定和异步提交；`web/src/lib/canvas/canvas-image-edit-copy.ts` 共用编辑副本创建、来源线及空位；`web/src/lib/canvas/canvas-image-rotation.ts` 更新节点与引用行状态；`web/src/services/canvas-image-rotation.ts` 从原图旋转、上传并复用方向资源；原图及派生资源由 `backend/internal/assets/references.go`、`web/src/services/user-data-sync-media.ts`、`canvas-missing-resources.ts` 收集 |
+| 批量表编辑与渲染 | `web/src/components/canvas/canvas-batch-table-node.tsx` 处理行编辑、内部滚动及添加/插入；`web/src/lib/canvas/canvas-batch-window.ts` 限定大表挂载行；`canvas-batch-row-equality.ts` 判断影响行展示的引用变化 |
+| 批量表参考图绑定 | `web/src/pages/canvas/use-canvas-batch-references.tsx` 协调选择、上传、替换确认和按列重置；`web/src/lib/canvas/canvas-batch-references.ts` 同步列默认、保留单格覆盖，维护稳定行/列句柄并筛除离屏格线绘制；`web/src/pages/canvas/use-canvas-batch-table.ts` 保留 AI 列表和既有列模式的行规则 |
+| 批量任务输入冻结 | `web/src/lib/canvas/canvas-batch-table-state.ts` 准备任务；`canvas-batch-input-snapshot.ts` 保存提示词及最小资源引用快照；`web/src/pages/canvas/use-canvas-generation-batches.ts` 持久化队列与重试，`use-canvas-generation-executor.ts` 以快照构建本次输入，不读取排队期间变更后的源图 |
 | 生成 Composer | `web/src/components/canvas/canvas-node-prompt-panel.tsx`、`canvas-config-composer.tsx` |
 | 风格中心、用户风格编辑与项目快照 | `web/src/components/canvas/canvas-style-picker-modal.tsx`、`style-profile-editor-modal.tsx`、`style-asset-binding-modal.tsx`、`web/src/lib/canvas/style-profile.ts`、`web/src/services/api/style-profiles.ts` |
 | 分镜脚本节点 | `web/src/components/canvas/canvas-script-node.tsx` |
@@ -209,3 +241,7 @@ HTTP 请求 -> handler -> service（稳定导入面 / 别名）-> app（组合�
 - `web/src/services/inspiration-catalog.ts`：全量目录与画廊池的运行时加载、内存缓存与失败退回。
 - `web/src/stores/use-inspiration-store.ts`：自建／覆盖／隐藏／收藏的本地持久化与导入导出。
 - `web/scripts/import-inspirations.mjs`：外部来源同步、等距抽取、缩略图生成与画廊池落盘；产物在 `web/public/inspirations/` 与 `web/public/inspiration-thumbs/`。
+
+## 画布外观
+
+`web/src/lib/canvas/canvas-appearance.ts` 管理预设快照、浅深记忆与默认偏好；`web/src/components/canvas/canvas-appearance-controls.tsx` 管理展开与微调；`web/src/components/canvas/canvas-toolbar.tsx` 限制外观和添加节点浮层尺寸。`web/src/stores/canvas/use-canvas-store.ts` 在创建时写入实际外观与线网格默认值，后续沿用画布持久化。

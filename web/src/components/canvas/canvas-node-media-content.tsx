@@ -18,7 +18,7 @@ import { bindCanvasVideoHoverPreview } from "@/lib/canvas/canvas-video-hover-pre
 import { resolveVideoMediaUrl } from "@/services/file-storage";
 import { hydrateCanvasVideoPreview } from "@/services/canvas-video-preview";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { fitImageMaterialNodeSize, fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitImageMaterialNodeSize, fitImageNodeSize } from "@/lib/canvas/canvas-node-size";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { prepareCanvasImage } from "@/services/canvas-image-loader";
 import { getResourceAccess, refreshResource, resourceIdFromStorageKey, resolveResourceAccessURL } from "@/services/api/resources";
@@ -477,8 +477,9 @@ export function ImageContent({
 }: Pick<CanvasNodeContentProps, "renderLOD" | "node" | "theme" | "isBatchRoot" | "batchCount" | "batchPreviewNodes" | "batchExpanded" | "batchOpening" | "batchRecovering" | "onToggleBatch">) {
     const imageContainerRef = useRef<HTMLDivElement>(null);
     const nearViewport = useNearViewport(imageContainerRef, renderLOD !== "shell");
+    const loadEnabled = renderLOD !== "shell" && nearViewport;
     const resourceVariant = renderLOD === "full" && (node.metadata?.imageLayer || node.metadata?.imageLayerGroup) ? "original" : "thumbnail";
-    const { url, loading, originalWidth, originalHeight } = useNodeResourceUrl(node, nearViewport, resourceVariant);
+    const { url, loading, originalWidth, originalHeight } = useNodeResourceUrl(node, loadEnabled, resourceVariant);
     const importedFromLibTV = node.metadata?.importSource?.provider === "libtv";
     const { updateMediaNode } = useCanvasNodeActions();
     const measuredSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -504,12 +505,12 @@ export function ImageContent({
         updateMediaNode?.(node.id, (current) => {
             const metadata = current.metadata;
             const needsMetadata = metadata?.naturalWidth !== naturalWidth || metadata?.naturalHeight !== naturalHeight;
-            if (current.metadata?.freeResize || current.metadata?.manualSize) {
+            if (current.metadata?.freeResize || current.metadata?.manualSize || current.metadata?.locked) {
                 return needsMetadata ? { ...current, metadata: { ...metadata, naturalWidth, naturalHeight } } : current;
             }
             // 独立素材使用有界预览框；解码回调不能重新把细长文字放大成超宽节点。
             const materialPreview = metadata?.imageLayerMaterial || (metadata?.isBatchRoot && batchPreviewNodes?.some((child) => child.metadata?.imageLayerMaterial));
-            const size = materialPreview ? fitImageMaterialNodeSize(naturalWidth, naturalHeight) : fitNodeSize(naturalWidth, naturalHeight);
+            const size = materialPreview ? fitImageMaterialNodeSize(naturalWidth, naturalHeight) : fitImageNodeSize(naturalWidth, naturalHeight);
             const needsResize = Math.abs(size.width - current.width) >= 1 || Math.abs(size.height - current.height) >= 1;
             if (!needsMetadata && !needsResize) return current;
             return {

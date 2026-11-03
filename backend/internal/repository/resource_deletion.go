@@ -10,9 +10,11 @@ import (
 )
 
 func (r *Repository) ClaimNextResourceDeletionJob(owner string, leaseDuration time.Duration) (*model.ResourceDeletionJob, error) {
+	owner = owner + ":" + deletionID()
 	var job model.ResourceDeletionJob
 	now := time.Now()
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
 		available := "(status = ? OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))) AND next_attempt_at <= ?"
 		query := tx.Where(available, model.ResourceDeletionStatusPending, model.ResourceDeletionStatusProcessing, now, now).
 			Order("next_attempt_at asc, created_at asc").Limit(1)
@@ -50,12 +52,13 @@ func (r *Repository) ClaimNextResourceDeletionJob(owner string, leaseDuration ti
 }
 
 func (r *Repository) CompleteResourceDeletionJob(id string, owner string) error {
-	return r.db.Where("id = ? AND lease_owner = ?", id, owner).Delete(&model.ResourceDeletionJob{}).Error
+	// Completion requires the claimed generation and retained intent, not just an owner.
+	return ErrResourceDeletionLeaseLost
 }
 
 func (r *Repository) RetryResourceDeletionJob(id string, owner string, lastError string, nextAttemptAt time.Time) error {
-	return r.db.Model(&model.ResourceDeletionJob{}).
-		Where("id = ? AND lease_owner = ?", id, owner).
+	result := r.db.Model(&model.ResourceDeletionJob{}).
+		Where("id = ? AND lease_owner = ? AND status = ? AND lease_expires_at > ?", id, owner, model.ResourceDeletionStatusProcessing, time.Now()).
 		Updates(map[string]any{
 			"status":           model.ResourceDeletionStatusPending,
 			"last_error":       lastError,
@@ -63,5 +66,12 @@ func (r *Repository) RetryResourceDeletionJob(id string, owner string, lastError
 			"lease_owner":      "",
 			"lease_expires_at": nil,
 			"updated_at":       time.Now(),
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrResourceDeletionLeaseLost
+	}
+	return nil
 }

@@ -491,19 +491,40 @@ func allowPrivateUpstreams() bool {
 	return value == "1" || value == "true" || value == "yes"
 }
 
-// allowedPrivateUpstreamHost lets operators pin only explicitly trusted upstream
+// AllowedPrivateUpstreamHost lets operators pin only explicitly trusted upstream
 // hostnames to an internal route without disabling SSRF protection for every URL.
+//
+// 条目可以是精确主机名，也可以是 `*.example.com` 形式：对象存储的源站域名由
+// bucket 和 region 拼接（<bucket>.s3.<region>.qiniucs.com），无法预先枚举。
 func AllowedPrivateUpstreamHost(host string) bool {
 	host = normalizeOutboundHost(host)
 	if host == "" {
 		return false
 	}
 	for _, configured := range strings.Split(os.Getenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS"), ",") {
-		if normalizeOutboundHost(configured) == host {
+		configured = normalizeOutboundHost(configured)
+		if configured == "" {
+			continue
+		}
+		if configured == host {
+			return true
+		}
+		if suffix, ok := strings.CutPrefix(configured, "*."); ok && allowedByWildcardSuffix(host, suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+// allowedByWildcardSuffix 只接受真正的子域名：必须存在至少一个标签，且按标签边界匹配，
+// 避免 `*.example.com` 顺带放行 `notexample.com`。
+func allowedByWildcardSuffix(host string, suffix string) bool {
+	suffix = normalizeOutboundHost(suffix)
+	if host == "" || suffix == "" {
+		return false
+	}
+	trimmed, ok := strings.CutSuffix(host, "."+suffix)
+	return ok && trimmed != "" && !strings.HasSuffix(trimmed, ".")
 }
 
 func normalizeOutboundHost(host string) string {

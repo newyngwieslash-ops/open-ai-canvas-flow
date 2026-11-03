@@ -23,7 +23,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		Size:                  ImageSizeConfig{Parameter: "size", Values: defaultImageSizeValues(), Default: "1:1", AllowCustom: true},
 		Quality:               ImageQualityConfig{Supported: true, Values: []string{"auto", "low", "medium", "high"}, Default: "auto"},
 		TransparentBackground: VideoBooleanConfig{Supported: true, Default: false},
-		ResponseFormat:        ParameterSupport{Supported: true},
+		ResponseFormat:        ParameterSupport{Supported: true, Default: "auto"},
 		OutputFormat:          ParameterSupport{Supported: true},
 		MaxOutputs:            15,
 	}
@@ -55,7 +55,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		image.Resolution = ImageResolutionConfig{Supported: true, Values: []string{"1k", "2k"}, Default: "2k"}
 		image.Quality = ImageQualityConfig{Supported: false, Default: "auto"}
 		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
-		image.ResponseFormat = ParameterSupport{Supported: true}
+		image.ResponseFormat = ParameterSupport{Supported: true, Default: "auto"}
 		image.OutputFormat = ParameterSupport{Supported: false}
 		image.MaxOutputs = 1
 	case model.ChannelInterfaceVolcengineArkImage, model.ChannelInterfaceVolcengineArkAgentPlanImage:
@@ -88,7 +88,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		image.Resolution = ImageResolutionConfig{Supported: true, Values: []string{"1k", "2k"}, Default: "2k"}
 		image.Quality = ImageQualityConfig{Supported: false, Default: "auto"}
 		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
-		image.ResponseFormat = ParameterSupport{Supported: true}
+		image.ResponseFormat = ParameterSupport{Supported: true, Default: "auto"}
 		image.OutputFormat = ParameterSupport{Supported: false}
 		image.MaxOutputs = 1
 	}
@@ -218,6 +218,17 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Ratios = []string{"16:9", "9:16", "1:1"}
 		video.Resolutions = []string{"1080p"}
 		video.DefaultResolution = "1080p"
+	case "yuxibox-seedance-video":
+		// yuxibox 中转 seedance2.5：固定 720P（不暴露分辨率选择），统一 ratio 单字段，
+		// 时长 4–30 默认 30；audio_to_video 依据上游 audios 独立数组开放，
+		// 纯音频+文本若被上游拒绝再收紧（见设计文档风险表）。
+		video.Operations = append(video.Operations, "reference_to_video", "audio_to_video")
+		video.References.PromptMaxChars = 16000
+		video.References.MaxImages, video.References.MaxVideos, video.References.MaxAudios = 30, 10, 10
+		video.Duration = VideoDurationConfig{Selection: "range", Min: 4, Max: 30, Step: 1, Default: 30}
+		video.Ratios = []string{"adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"}
+		video.DefaultRatio = "16:9"
+		video.Resolutions, video.DefaultResolution = []string{"720p"}, "720p"
 	case model.ChannelInterfaceMiniMaxVideo, model.ChannelInterfaceType("metaso-h3"):
 		video.Operations = append(video.Operations, "reference_to_video")
 		video.References.MaxImages = 9
@@ -236,6 +247,16 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Watermark = VideoBooleanConfig{Supported: true, Default: false}
 	case model.ChannelInterfaceAgnesVideo:
 		video = applyModelSpecificVideoCapability(video, protocol, modelName)
+	case model.ChannelInterfaceType(VolcengineMediaKitEnhanceVideoProtocol):
+		// 画质增强：只接收一个源视频，时长由服务端按源资源测得，帧率默认保持原片。
+		video.References = VideoReferenceConfig{PromptMaxChars: DefaultVideoPromptMaxChars, MaxVideos: 1, MaxVideoDuration: DefaultVideoProcessingMaxSourceSeconds}
+		video.Duration = VideoDurationConfig{Selection: "range", Min: 1, Max: DefaultVideoProcessingMaxSourceSeconds, Step: 1, Default: 5}
+		video.Ratios, video.DefaultRatio = []string{}, ""
+		video.Resolutions, video.DefaultResolution = []string{"720p", "1080p", "2k", "4k"}, "1080p"
+		video.GenerateAudio = VideoBooleanConfig{}
+		video.Watermark = VideoBooleanConfig{}
+		video.Operations, video.DefaultOperation = []string{VideoProcessingOperationEnhance}, VideoProcessingOperationEnhance
+		video.Processing = &VideoProcessingConfig{FPSPolicy: VideoProcessingFPSKeepSource, MaxSourceSeconds: DefaultVideoProcessingMaxSourceSeconds}
 	}
 	return &ModelCapabilityConfig{Version: 1, Text: text, Image: DefaultImageCapabilityConfig(protocol, modelName), Video: video}
 }

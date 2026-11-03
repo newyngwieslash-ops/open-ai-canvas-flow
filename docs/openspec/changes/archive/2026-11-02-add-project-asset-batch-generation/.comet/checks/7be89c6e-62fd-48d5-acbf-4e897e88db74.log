@@ -1,0 +1,12 @@
+bun test v1.3.6 (d530ed99)
+
+test\project-asset-batch.test.tsx:
+(pass) project-asset-batch domain helpers > buildDefaultBatchDraftItems selects cross-category visual assets, default reference source, and operation
+(pass) project-asset-batch domain helpers > validateBatchDraftItems rejects empty list, duplicate assetId, missing version, or >50 items [15.00ms]
+(pass) project-asset-batch domain helpers > formatBatchPreflightCostSummary formats known microcredits and warns on priceUnknownCount
+(pass) project-asset-batch domain helpers > summarizeBatchExecution distinguishes stop unsubmitted vs cancel active vs retry vs reconcile_required [94.00ms]
+
+ 4 pass
+ 0 fail
+ 28 expect() calls
+Ran 4 tests across 1 file. [1.95s]

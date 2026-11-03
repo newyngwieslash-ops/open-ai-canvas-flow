@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"yingce/backend/internal/model"
@@ -119,6 +121,16 @@ func createTaskWithStorageQuotaRepository(repo *repository.Repository, task *mod
 
 // 任务完成会同时扩张任务历史和画布操作数据，必须在同一临界区核算并原子写入。
 func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJSON []byte, opsJSON []byte, hasCanvasOps bool) error {
+	if task.Operation == profileAnalysisOperation {
+		candidate := *task
+		candidate.ResultJSON = string(resultJSON)
+		validated, err := validatedProfileResult(candidate)
+		if err != nil { return err }
+		if validated.Adoption != nil { return profileError(422, "invalid_result") }
+		resultJSON, err = json.Marshal(map[string]any{"mode":"text", "assetProfileAnalysis":validated})
+		if err != nil { return err }
+		opsJSON, hasCanvasOps = nil, false
+	}
 	policy, err := s.RuntimePolicy()
 	if err != nil {
 		return err
@@ -157,17 +169,73 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 	completed.InputJSON = publicInputJSON
 	completed.CompletedAt = ptr(time.Now())
 	var register func(*repository.Repository) error
-	if task.MediaRecoveryJSON != "" {
+	visualImage := strings.Contains(task.InputJSON, "project_asset_image") || strings.Contains(task.InputJSON, "character_turnaround")
+	if task.MediaRecoveryJSON != "" || visualImage {
 		completed.MediaStage = "completed"
 		register = func(repo *repository.Repository) error {
 			writer := &Service{repo: repo, dataDir: s.dataDir}
+			if visualImage {
+				var result map[string]interface{}
+				if err := json.Unmarshal(resultJSON, &result); err != nil {
+					return err
+				}
+				if _, err := writer.finalizeProjectAssetImageTask(*task, result); err != nil {
+					return err
+				}
+				if _, err := writer.finalizeCharacterTurnaroundTask(*task, result); err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(result)
+				if err != nil {
+					return err
+				}
+				if err := validateTaskDataGrowthQuotaWithPolicy(usage, taskDelta+int64(len(encoded)-len(resultJSON)), policy.Resource); err != nil {
+					return err
+				}
+				completed.ResultJSON = string(encoded)
+			}
+			if task.MediaRecoveryJSON == "" {
+				return nil
+			}
 			if err := writer.RegisterTaskOutputFromTask(completed); err != nil {
 				return err
 			}
 			return writer.registerRecoveredMediaAssets(completed)
 		}
 	}
-	if err := s.repo.SaveTaskCompletionWithRegistration(&completed, expectedStatus, results, register); err != nil {
+	initialCompletion := completed
+	complete := func(repo *repository.Repository) error {
+		// Registration mutates the result; a rolled-back attempt must not feed
+		// its candidate/binding state into the next full transaction attempt.
+		completed = initialCompletion
+		return repo.SaveTaskCompletionWithRegistration(&completed, expectedStatus, results, register)
+	}
+	if visualImage {
+		raw, err := s.decryptTaskInputJSON(task.InputJSON)
+		if err != nil {
+			return err
+		}
+		metadata, err := parseProjectImageMetadata(raw)
+		if err != nil {
+			return err
+		}
+		if metadata.supported() {
+			// Owner discovery/coordination must precede the lifecycle and task
+			// locks taken by terminal success and its real registration callback.
+			err = s.repo.WithStoryboardAssetWrite(task.ProjectID, metadata.targetID(), complete)
+		} else if task.MediaRecoveryJSON != "" {
+			err = s.repo.WithStoryboardUserAssetsWrite(task.UserID, complete)
+		} else {
+			err = complete(s.repo)
+		}
+		if err != nil {
+			return err
+		}
+	} else if task.MediaRecoveryJSON != "" {
+		if err := s.repo.WithStoryboardUserAssetsWrite(task.UserID, complete); err != nil {
+			return err
+		}
+	} else if err := complete(s.repo); err != nil {
 		return err
 	}
 	*task = completed

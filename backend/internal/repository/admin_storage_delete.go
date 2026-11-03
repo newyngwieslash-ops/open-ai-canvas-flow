@@ -4,9 +4,6 @@ import (
 	"errors"
 
 	"yingce/backend/internal/model"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var ErrAdminResourceDeleteChanged = errors.New("待删除的资源已变化，请刷新后重试")
@@ -44,65 +41,22 @@ func (r *Repository) DeleteAdminResources(resources []model.Resource, deletionJo
 	if len(audits) != len(resources) {
 		return ErrAdminResourceAuditMismatch
 	}
-	resourceIDs := make([]string, 0, len(resources))
+	ids := make([]string, 0, len(resources))
 	for _, resource := range resources {
-		resourceIDs = append(resourceIDs, resource.ID)
+		ids = append(ids, resource.ID)
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := New(tx).RequireNoCanvasHistoryReferences(resourceIDs); err != nil {
-			return err
-		}
-		var current []model.Resource
-		query := tx.Where("id IN ?", resourceIDs)
-		if r.Dialect() == "postgres" {
-			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
-		}
-		if err := query.Find(&current).Error; err != nil {
-			return err
-		}
-		if len(current) != len(resources) {
-			return ErrAdminResourceDeleteChanged
-		}
-		for _, check := range []struct {
-			model any
-			query string
-		}{
-			{&model.Announcement{}, "image_resource_id IN ?"},
-			{&model.AssetRepresentation{}, "resource_id IN ?"},
-			{&model.VoiceProfile{}, "sample_resource_id IN ?"},
-			{&model.ShotArtifact{}, "resource_id IN ?"},
-		} {
-			var count int64
-			if err := tx.Model(check.model).Where(check.query, resourceIDs).Count(&count).Error; err != nil {
-				return err
+	return r.withStoryboardResourceWrite(nil, ids, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(tx *Repository) error {
+			byUser := map[string][]string{}
+			for _, resource := range resources {
+				byUser[resource.UserID] = append(byUser[resource.UserID], resource.ID)
 			}
-			if count > 0 {
-				return ErrAdminResourceStillReferenced
+			for userID, ids := range byUser {
+				if err := tx.stageResourceDeletion(userID, nil, ids); err != nil {
+					return err
+				}
 			}
-		}
-		if err := tx.Where("resource_id IN ?", resourceIDs).Delete(&model.ArkPrivateAssetBinding{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("resource_id IN ?", resourceIDs).Delete(&model.AnnouncementImageDraft{}).Error; err != nil {
-			return err
-		}
-		if len(deletionJobs) > 0 {
-			if err := tx.Create(&deletionJobs).Error; err != nil {
-				return err
-			}
-		}
-		deleted := tx.Where("id IN ?", resourceIDs).Delete(&model.Resource{})
-		if deleted.Error != nil {
-			return deleted.Error
-		}
-		if deleted.RowsAffected != int64(len(resourceIDs)) {
-			return ErrAdminResourceDeleteChanged
-		}
-		if len(audits) > 0 {
-			if err := tx.Create(&audits).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+			return tx.db.Create(&audits).Error
+		})
 	})
 }

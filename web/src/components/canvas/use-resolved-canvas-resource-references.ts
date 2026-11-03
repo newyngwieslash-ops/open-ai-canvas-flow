@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { loadCanvasDrawingPreview } from "@/lib/canvas/canvas-drawing-storage";
+import { getActiveUserScope } from "@/lib/user-scope";
 import { resolveImageUrl } from "@/services/image-storage";
 
 type ResolvedPreview = {
@@ -11,14 +12,23 @@ type ResolvedPreview = {
 
 const previewPromiseCache = new Map<string, Promise<string>>();
 
-export function useResolvedCanvasResourceReferences(references: CanvasResourceReference[], options?: { projectId?: string }) {
+export function canvasReferencePreviewRequested(id: string, requestedIds?: ReadonlySet<string>) {
+    return requestedIds === undefined || requestedIds.has(id);
+}
+
+export function useResolvedCanvasResourceReferences(
+    references: CanvasResourceReference[],
+    options?: { projectId?: string; requestedIds?: ReadonlySet<string> },
+) {
     const projectId = options?.projectId;
+    const requestedIds = options?.requestedIds;
     const requests = useMemo(
         () => references.flatMap((reference) => {
+            if (!canvasReferencePreviewRequested(reference.id, requestedIds)) return [];
             const identity = previewIdentity(reference, projectId);
             return identity ? [{ reference, identity }] : [];
         }),
-        [projectId, references],
+        [projectId, references, requestedIds],
     );
     const [resolvedById, setResolvedById] = useState<Record<string, ResolvedPreview>>({});
 
@@ -71,27 +81,26 @@ function previewIdentity(reference: CanvasResourceReference, projectId?: string)
 }
 
 function resolveReferencePreview(reference: CanvasResourceReference, identity: string, projectId?: string) {
-    const cached = previewPromiseCache.get(identity);
+    const scopeKey = `${getActiveUserScope()}:${identity}`;
+    const cached = previewPromiseCache.get(scopeKey);
     if (cached) return cached;
     if (reference.drawingId && projectId) {
         const pending = loadCanvasDrawingPreview(projectId, reference.drawingId)
             .then((preview) => preview ? blobToDataUrl(preview) : reference.previewUrl || "")
             .catch(() => reference.previewUrl || "")
-            .then((url) => {
-                if (!url) previewPromiseCache.delete(identity);
-                return url;
+            .finally(() => {
+                if (previewPromiseCache.get(scopeKey) === pending) previewPromiseCache.delete(scopeKey);
             });
-        previewPromiseCache.set(identity, pending);
+        previewPromiseCache.set(scopeKey, pending);
         return pending;
     }
     const storageKey = reference.kind === "video" ? reference.previewStorageKey : reference.storageKey;
     const pending = resolveImageUrl(storageKey, reference.previewUrl || "", { cacheMiss: true })
         .catch(() => reference.previewUrl || "")
-        .then((url) => {
-            if (!url) previewPromiseCache.delete(identity);
-            return url;
+        .finally(() => {
+            if (previewPromiseCache.get(scopeKey) === pending) previewPromiseCache.delete(scopeKey);
         });
-    previewPromiseCache.set(identity, pending);
+    previewPromiseCache.set(scopeKey, pending);
     return pending;
 }
 

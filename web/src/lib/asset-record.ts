@@ -2,7 +2,7 @@ import type { Asset, AssetKind, AssetStatus, AudioAsset, EntityAsset, ImageAsset
 import { parseAssetCategory } from "@/lib/asset-category";
 
 const ASSET_KINDS: readonly AssetKind[] = ["text", "image", "video", "audio", "model", "entity"];
-const ASSET_STATUSES: readonly AssetStatus[] = ["draft", "review", "confirmed", "archived"];
+const ASSET_STATUSES: readonly AssetStatus[] = ["draft", "review", "confirmed", "archived", "deleting"];
 
 /**
  * 素材持久化合同的运行时边界。它只接受能被后续业务安全消费的完整记录，绝不通过空 URL、通配 MIME 或零尺寸伪造默认值。

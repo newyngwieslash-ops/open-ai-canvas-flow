@@ -18,6 +18,19 @@ function card(selected: boolean, selectionMode: boolean) {
 }
 
 describe("素材库分页多选", () => {
+    test("deleting cards expose status and disable selection and all mutations", () => {
+        const deleting = { ...asset, status: "deleting" as const };
+        const onSelect = mock(() => {});
+        const element = AssetCard({ asset: deleting, selected: false, selectionMode: true, onSelect, onOpen: () => {}, onEdit: () => {}, onCopy: () => {}, onDownload: () => {}, onDelete: () => {}, folderOptions: [], onMoveToFolder: () => {} });
+        const [cover, body] = element.props.children;
+        body.props.onClick(click());
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(cover.props.menuItems).toEqual([]);
+        const html = renderToStaticMarkup(element);
+        expect(html).toContain("删除中，失败将自动重试");
+        expect(html).toMatch(/type="checkbox"[^>]*disabled=""/);
+        expect(html).not.toContain("重试删除");
+    });
     test("跨页选择合并去重，取消只影响指定素材", () => {
         let ids = selectAssetIds([], ["page-1"], "page-1", true);
         ids = selectAssetIds(ids, ["page-2-a", "page-2-b"], "page-2-a", true);

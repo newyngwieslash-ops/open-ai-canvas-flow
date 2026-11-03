@@ -146,12 +146,24 @@ func (r *Repository) SystemSettingOptional(key string) (*model.SystemSetting, er
 }
 
 func (r *Repository) SaveSystemSetting(setting *model.SystemSetting) error {
-	return r.db.Save(setting).Error
+	return r.SaveSystemSettings(setting)
 }
 
 func (r *Repository) SaveSystemSettings(settings ...*model.SystemSetting) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
 		for _, setting := range settings {
+			ids := []string{}
+			if setting.Key == "appearance" {
+				var err error
+				ids, err = AppearanceResourceIDs(setting.ValueJSON)
+				if err != nil {
+					return err
+				}
+			}
+			if err := repo.requireReferenceResources("", true, ids, setting.ValueJSON); err != nil {
+				return err
+			}
 			if err := tx.Save(setting).Error; err != nil {
 				return err
 			}
@@ -172,18 +184,25 @@ func (r *Repository) ArkPrivateAssetBinding(resourceID string, projectName strin
 // and Ark Project. Other workers can wait for that binding instead of
 // importing the same image repeatedly.
 func (r *Repository) CreateArkPrivateAssetBinding(binding *model.ArkPrivateAssetBinding) (bool, error) {
-	result := r.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "resource_id"}, {Name: "project_name"}},
-		DoNothing: true,
-	}).Create(binding)
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected == 1, nil
+	created := false
+	err := r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(binding.UserID, false, []string{binding.ResourceID}); err != nil {
+			return err
+		}
+		result := repo.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "resource_id"}, {Name: "project_name"}}, DoNothing: true}).Create(binding)
+		created = result.RowsAffected == 1
+		return result.Error
+	})
+	return created && err == nil, err
 }
 
 func (r *Repository) SaveArkPrivateAssetBinding(binding *model.ArkPrivateAssetBinding) error {
-	return r.db.Save(binding).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(binding.UserID, false, []string{binding.ResourceID}); err != nil {
+			return err
+		}
+		return repo.db.Save(binding).Error
+	})
 }
 
 func (r *Repository) DeleteSystemSetting(key string) error {

@@ -9,7 +9,7 @@ import (
 
 func TestAgentRouteReplacementCannotExpandApprovedCharge(t *testing.T) {
 	repo, db := newRefundedBillingRecoveryRepository(t)
-	if err := db.AutoMigrate(&model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Resource{}, &model.Task{}); err != nil {
 		t.Fatal(err)
 	}
 	task := model.Task{ID: "generation-task", UserID: "user", AgentRunID: "run", GenerationID: "generation", Status: model.TaskStatusRunning, RouteID: "original", BillingOrderID: "order", AuthorizedChargeMicrocredits: 100}

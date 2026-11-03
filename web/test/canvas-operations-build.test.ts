@@ -22,6 +22,74 @@ function canvas(patch: Partial<CanvasProject> = {}): CanvasProject {
 }
 
 describe("画布 operations 生成", () => {
+    test("生成任务时间戳更新携带taskId身份前置条件", () => {
+        const before = canvas({ nodes: [{ id: "video", type: "video", metadata: { taskId: "task-1", taskUpdatedAt: "2026-04-01T00:00:00Z" } }] as CanvasProject["nodes"] });
+        const after = canvas({ nodes: [{ id: "video", type: "video", metadata: { taskId: "task-1", taskUpdatedAt: "2026-04-01T00:00:01Z" } }] as CanvasProject["nodes"] });
+        expect(buildCanvasOperations(before, after)).toEqual([
+            {
+                type: "patch_node",
+                id: "video",
+                patch: { "metadata.taskUpdatedAt": "2026-04-01T00:00:01Z" },
+                before: { "metadata.taskUpdatedAt": "2026-04-01T00:00:00Z", "metadata.taskId": "task-1" },
+            },
+        ]);
+    });
+
+    test("任务换绑和首次绑定保留真实旧任务基线", () => {
+        const taskNode = (taskId: string | undefined, taskUpdatedAt: string | undefined) => ({ id: "video", type: "video", metadata: { taskId, taskUpdatedAt } }) as CanvasProject["nodes"][number];
+        for (const [previousId, nextId] of [
+            ["task-a", "task-b"],
+            [undefined, "task-b"],
+            ["task-a", undefined],
+        ] as const) {
+            const before = canvas({ nodes: [taskNode(previousId, "2026-04-01T00:00:00Z")] });
+            const after = canvas({ nodes: [taskNode(nextId, nextId ? "2026-04-01T00:00:01Z" : undefined)] });
+            const [operation] = buildCanvasOperations(before, after);
+            expect(operation?.type).toBe("patch_node");
+            if (operation?.type !== "patch_node") throw new Error("missing patch");
+            expect(operation.before?.["metadata.taskId"]).toBe(previousId ?? null);
+        }
+    });
+
+    test("同任务清空更新时间不新增人工任务fence", () => {
+        const before = canvas({ nodes: [{ id: "video", type: "video", metadata: { taskId: "task-a", taskUpdatedAt: "2026-04-01T00:00:00Z" } }] as CanvasProject["nodes"] });
+        const after = canvas({ nodes: [{ ...before.nodes[0]!, metadata: { taskId: "task-a" } }] });
+        // 清空时间戳不携带 taskId：时间戳删除是显式业务操作，不走观察者收敛。
+        expect(buildCanvasOperations(before, after)).toEqual([{ type: "patch_node", id: "video", patch: { "metadata.taskUpdatedAt": null }, before: { "metadata.taskUpdatedAt": "2026-04-01T00:00:00Z" } }]);
+    });
+
+    test("同任务终态变化（无时间戳）也携带taskId身份栅栏", () => {
+        // 失败路径的任务观察者不产 taskUpdatedAt，只有 taskStatus 变化；
+        // 不带任务身份时服务端无法对"另一个观察者已写入相同终态"做同值收敛，
+        // 用户编辑会以 409 永久阻塞 Agent 提交前的强制保存。
+        const before = canvas({ nodes: [{ id: "img", type: "image", title: "旧标题", metadata: { taskId: "task-1", taskStatus: "running" } }] as CanvasProject["nodes"] });
+        const after = canvas({ nodes: [{ id: "img", type: "image", title: "新标题", metadata: { taskId: "task-1", taskStatus: "failed", errorDetails: "模型服务暂时不可用（HTTP 503）" } }] as CanvasProject["nodes"] });
+        expect(buildCanvasOperations(before, after)).toEqual([
+            {
+                type: "patch_node",
+                id: "img",
+                patch: { title: "新标题", "metadata.taskStatus": "failed", "metadata.errorDetails": "模型服务暂时不可用（HTTP 503）" },
+                before: { title: "旧标题", "metadata.taskStatus": "running", "metadata.errorDetails": null, "metadata.taskId": "task-1" },
+            },
+        ]);
+    });
+
+    test("用户编辑携带旧任务观察基线时补入当前任务身份", () => {
+        // 基线快照仍是旧观察值（running），本地已看到终态（failed）：
+        // before 的 taskStatus 与服务端当前值都会不匹配，必须注入 taskId
+        // 让服务端走同任务同值收敛（patch 目标值 = 服务端当前值）。
+        const before = canvas({ nodes: [{ id: "img", type: "image", title: "旧标题", metadata: { taskId: "task-1", taskStatus: "running" } }] as CanvasProject["nodes"] });
+        const after = canvas({ nodes: [{ id: "img", type: "image", title: "新标题", metadata: { taskId: "task-1", taskStatus: "failed" } }] as CanvasProject["nodes"] });
+        const [operation] = buildCanvasOperations(before, after) as Extract<ReturnType<typeof buildCanvasOperations>[number], { type: "patch_node" }>[];
+        expect(operation?.before?.["metadata.taskId"]).toBe("task-1");
+    });
+
+    test("没有taskId的普通metadata更新不增加任务前置条件", () => {
+        const before = canvas({ nodes: [{ id: "video", type: "video", metadata: { prompt: "old" } }] as CanvasProject["nodes"] });
+        const after = canvas({ nodes: [{ id: "video", type: "video", metadata: { prompt: "new" } }] as CanvasProject["nodes"] });
+        expect(buildCanvasOperations(before, after)).toEqual([{ type: "patch_node", id: "video", patch: { "metadata.prompt": "new" }, before: { "metadata.prompt": "old" } }]);
+    });
+
     test("节点可选字段的 undefined 在 JSON 请求中保留为 null 基线和删除值", () => {
         const node = { id: "node", metadata: { title: undefined } } as unknown as CanvasProject["nodes"][number];
         const changed = { ...node, metadata: { title: "新标题" } };

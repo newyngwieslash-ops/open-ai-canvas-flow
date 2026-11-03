@@ -311,6 +311,8 @@ export function filterModelsByCapability(models: string[], capability?: ModelCap
         const channel = decoded ? channels?.find((item) => item.id === decoded.channelId) : undefined;
         const modelName = decoded?.model || modelOptionName(model);
         const costEntry = channel?.modelCosts?.find((item) => item.model === modelName);
+        // 视频处理模型（画质增强等）只出现在画布处理工具里，不进入普通生成下拉。
+        if (costEntry?.capabilityConfig?.video?.processing) return false;
         // 协议层优先级最高：协议决定 API 端点，明确属于其他能力时直接排除，
         // 防止用户将 video/image/audio 协议的模型误标为 text 后混入文本下拉。
         const protocolCapability = modelProtocolCapability(costEntry?.protocol);
@@ -528,6 +530,10 @@ export function createMetasoChannel(): ModelChannel {
     return createModelChannel({ name: "密塔 H3", baseUrl: "https://metaso.cn/api/minimax", apiKey: "", models: ["MiniMax-H3"], modelCosts: [{ model: "MiniMax-H3", displayName: "MiniMax-H3 (Metaso)", capability: "video", protocol: "metaso-minimax-video", billingMode: "per_second", unitPriceMicrocredits: 0, capabilityConfig: defaultModelCapabilityConfig("metaso-minimax-video", "MiniMax-H3"), description: "密塔（metaso.cn）MiniMax V2 中转：480P/768P/1080P/2K，4–15 秒，六档固定比例；价格以密塔控制台为准，待确认后补充。" }] });
 }
 
+export function createYuxiboxChannel(): ModelChannel {
+    return createModelChannel({ name: "yuxibox Seedance", baseUrl: "https://yuxibox.cn", apiKey: "", models: ["seedance2.5-yx-count"], modelCosts: [{ model: "seedance2.5-yx-count", displayName: "Seedance 2.5 (yuxibox)", capability: "video", protocol: "yuxibox-seedance-video", billingMode: "fixed_request", unitPriceMicrocredits: 0, capabilityConfig: defaultModelCapabilityConfig("yuxibox-seedance-video", "seedance2.5-yx-count"), description: "yuxibox seedance2.5：4–30 秒（默认 30）、固定 720P、七档比例；按条计费基础价 4.5 元/条，实际以 yuxibox 控制台与令牌分组倍率为准。" }] });
+}
+
 export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
@@ -612,6 +618,7 @@ export function defaultBaseUrlForChannelInterface(interfaceType?: ChannelInterfa
     if (interfaceType === "volcengine-jimeng-image" || interfaceType === "volcengine-jimeng-video") return "https://visual.volcengineapi.com";
     if (interfaceType === "fisher-h3-video") return "https://api.work-fisher.com";
     if (interfaceType === "metaso-minimax-video") return "https://metaso.cn/api/minimax";
+    if (interfaceType === "yuxibox-seedance-video") return "https://yuxibox.cn";
     if (interfaceType === "minimax-video") return "https://api.minimaxi.com";
     if (interfaceType === "grok-image" || interfaceType === "newapi" || interfaceType === "newapi-channel-1" || interfaceType === "newapi-channel-2" || interfaceType === "xai-video") return "";
     return OPENAI_BASE_URL;

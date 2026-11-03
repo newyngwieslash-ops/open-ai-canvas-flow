@@ -25,7 +25,7 @@ import { generationMetadata } from "@/services/api/generation-task";
 import type { CanvasNodeMetadata } from "@/types/canvas";
 import { useCreationPreferencesStore } from "@/stores/use-creation-preferences-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
-import { loadAssetsForUse } from "@/services/user-data-sync";
+import { loadAssetsForUse, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
 import { cn } from "@/lib/utils";
 import { useUserStore } from "@/stores/use-user-store";
@@ -867,6 +867,7 @@ export default function CreatePage() {
             const referenceKeys = new Set(source.messages.flatMap((item) => (item.attachments || []).map((attachment) => attachment.storageKey).filter(Boolean)));
             const referenceAssetIds = assets.filter((asset) => (asset.kind === "image" || asset.kind === "video") && asset.data.storageKey && referenceKeys.has(asset.data.storageKey)).map((asset) => asset.id);
             const assetIds = [...generatedAssetIds, ...referenceAssetIds];
+            if (assetIds.length) await saveRemoteUserDataNow([]);
             const result = await continueCreationConversationOnCanvas(source);
             if (scope !== getActiveUserScope()) return;
             const next = updateCreationConversationSnapshot(conversationsRef.current, source.id, (item) => ({ ...item, canvasId: result.id }));

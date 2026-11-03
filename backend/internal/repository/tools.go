@@ -18,7 +18,13 @@ func (r *Repository) UpsertBuiltinTools(tools []model.Tool) error {
 	if len(tools) == 0 {
 		return nil
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
+		for i := range tools {
+			if err := repo.requireToolResources(&tools[i], true); err != nil {
+				return err
+			}
+		}
 		ids := make([]int64, 0, len(tools))
 		for _, tool := range tools {
 			ids = append(ids, tool.ID)
@@ -174,7 +180,12 @@ func (r *Repository) RemoveToolFavorite(userID string, toolID int64) error {
 
 // CreateTool 创建用户自定义工具。
 func (r *Repository) CreateTool(tool *model.Tool) (*model.Tool, error) {
-	if err := r.db.Create(tool).Error; err != nil {
+	if err := r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireToolResources(tool, false); err != nil {
+			return err
+		}
+		return repo.db.Create(tool).Error
+	}); err != nil {
 		return nil, err
 	}
 	return tool, nil

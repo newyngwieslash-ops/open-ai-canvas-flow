@@ -8,7 +8,8 @@ import { ASSET_CATEGORY_LABELS, type AssetCategory } from "@/lib/asset-category"
 import { resourceStorageLabel } from "@/lib/canvas/resource-storage-status";
 import { loadAssetLibraryPage } from "@/services/user-data-sync";
 import { useUserStore } from "@/stores/use-user-store";
-import type { Asset } from "@/stores/use-asset-store";
+import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { isAssetAvailableForReference } from "@/lib/asset-availability";
 import { assetPickerItemsToInsertPayloads, type InsertAssetPayload } from "./asset-picker-modal";
 import { Select } from "@/components/ui/base/select";
 
@@ -33,7 +34,8 @@ export function CanvasWorkspaceAssetPanel({ onInsert, onManage, onProjectAssets 
         getNextPageParam: (page, pages) => (pages.reduce((count, item) => count + item.assets.length, 0) < page.total ? pages.length + 1 : undefined),
         enabled: Boolean(userId) && hydrated,
     });
-    const assets = query.data?.pages.flatMap((page) => page.assets) ?? [];
+    const localAssets = useAssetStore((state) => state.assets);
+    const assets = (query.data?.pages.flatMap((page) => page.assets) ?? []).filter((asset) => isAssetAvailableForReference(asset) && !localAssets.some((local) => local.id === asset.id && !isAssetAvailableForReference(local)));
     const insert = async (asset: Asset) => {
         if (inserting) return;
         setInserting(asset.id);

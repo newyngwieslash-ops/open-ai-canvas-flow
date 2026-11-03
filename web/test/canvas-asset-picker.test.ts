@@ -3,11 +3,38 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
-import { assetPickerItemsToInsertPayloads } from "@/components/canvas/asset-picker-modal";
-import { pickerItemMediaKind, type AssetLibraryPickerItem } from "@/components/assets/asset-library-picker-modal";
+import { assetPickerSelectionToInsertPayloads, assetPickerItemsToInsertPayloads } from "@/components/canvas/asset-picker-modal";
+import { remoteAssetToPickerItem, pickerItemMediaKind, type AssetLibraryPickerItem } from "@/components/assets/asset-library-picker-modal";
 import type { ImageAsset, TextAsset } from "@/stores/use-asset-store";
 
+import { useAssetStore, withAssetStorePersistenceSuppressed } from "@/stores/use-asset-store";
+import { toInsertPayload, projectCharacterToInsertPayload } from "@/components/canvas/canvas-project-asset-modal";
+import type { ProjectAsset } from "@/services/api/projects";
+
 const timestamp = "2026-08-28T00:00:00.000Z";
+
+test("deleting media and characters cannot become canvas references", async () => {
+    const asset: TextAsset = { id: "deleting", kind: "text", title: "pending", coverUrl: "", tags: [], status: "deleting", createdAt: timestamp, updatedAt: timestamp, data: { content: "text" } };
+    const item = { id: asset.id, title: asset.title, category: "other", kindLabel: "文本", asset };
+    expect(() => assetPickerItemsToInsertPayloads([asset.id], [item])).toThrow("删除中");
+    expect(() => toInsertPayload({ id: asset.id, category: "other", media: asset })).toThrow("删除中");
+    const character = { id: "character", status: "deleting", character: { definition: {}, representations: [] } } as unknown as ProjectAsset;
+    expect(() => projectCharacterToInsertPayload(character)).toThrow("删除中");
+    const entity = { ...asset, kind: "entity", category: "character", data: { definition: {} } } as const;
+    await expect(assetPickerSelectionToInsertPayloads([entity.id], [{ ...item, asset: entity }])).rejects.toThrow("删除中");
+    expect(remoteAssetToPickerItem(asset, { ...item, asset: { ...asset, status: "confirmed" } }, true).disabledReason).toContain("删除中");
+});
+
+test("selection made before local status update is rejected at insertion", () => {
+    const stale: TextAsset = { id: "stale-pick", kind: "text", title: "pending", coverUrl: "", tags: [], createdAt: timestamp, updatedAt: timestamp, data: { content: "text" } };
+    const before = useAssetStore.getState().assets;
+    try {
+        withAssetStorePersistenceSuppressed(() => useAssetStore.setState({ assets: [{ ...stale, status: "deleting" }] }));
+        expect(() => assetPickerItemsToInsertPayloads([stale.id], [{ id: stale.id, title: stale.title, category: "other", kindLabel: "文本", asset: stale }])).toThrow("删除中");
+    } finally {
+        withAssetStorePersistenceSuppressed(() => useAssetStore.setState({ assets: before }));
+    }
+});
 
 describe("canvas asset picker", () => {
     test("maps multiple local and external selections in the requested order", () => {

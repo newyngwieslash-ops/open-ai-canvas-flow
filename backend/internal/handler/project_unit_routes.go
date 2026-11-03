@@ -11,6 +11,62 @@ import (
 )
 
 func registerProjectUnitRoutes(r *gin.RouterGroup, svc *service.Service) {
+	r.POST("/projects/:id/units/:unitId/shot-asset-bindings/resolve-generated", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil { failService(c,err); return }
+		c.Request.Body=http.MaxBytesReader(c.Writer,c.Request.Body,64<<10)
+		var req service.GeneratedBindingRequest
+		if err:=c.ShouldBindJSON(&req);err!=nil{fail(c,http.StatusBadRequest,err);return}
+		result,err:=svc.ResolveGeneratedProjectUnitShotAssetBindings(c.Request.Context(),user.ID,c.Param("id"),c.Param("unitId"),req)
+		if err!=nil{failService(c,err);return}
+		ok(c,result)
+	})
+	r.POST("/projects/:id/units/:unitId/shot-asset-bindings/preview", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+		var req service.BindingPreviewRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		result, err := svc.PreviewProjectUnitShotAssetBindings(c.Request.Context(), user.ID, c.Param("id"), c.Param("unitId"), req)
+		if err != nil {
+			if service.IsProjectNotFound(err) {
+				fail(c, http.StatusNotFound, err)
+				return
+			}
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
+	r.POST("/projects/:id/units/:unitId/shot-asset-bindings/append", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 512<<10)
+		var req service.BindingAppendRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			failService(c, service.StoryboardAssetBindingInvalidRequest("绑定请求格式不合法"))
+			return
+		}
+		result, err := svc.AppendProjectUnitShotAssetBindings(c.Request.Context(), user.ID, c.Param("id"), c.Param("unitId"), req)
+		if err != nil {
+			if service.IsProjectNotFound(err) {
+				fail(c, http.StatusNotFound, err)
+				return
+			}
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	r.POST("/projects/:id/units", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { sameCanvasContent } from "@/lib/canvas/canvas-content";
-import { canvasAppearanceForTheme, DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, readCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
+import { canvasAppearanceForPreset, DEFAULT_CANVAS_BACKGROUND_MODE, NEW_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, readCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { parseCanvasStorageDocument, rebaseCanvasProjects, serializeCanvasStorageDocument, type CanvasStorageDocument } from "@/lib/canvas/canvas-storage-revision";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
 import { getActiveUserScope } from "@/lib/user-scope";
@@ -13,6 +13,7 @@ import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, Viewport
 import type { PrevisScene } from "@/types/previs";
 import type { TimelineProject } from "@/types/timeline";
 import { useSyncProgressStore, type SyncProjectProgress } from "@/stores/use-sync-progress-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
 
 export type CanvasProject = {
@@ -168,8 +169,22 @@ function setCanvasLocalPersistenceProgress(projects: CanvasProject[], patch: Par
     const progress = useSyncProgressStore.getState();
     for (const project of projects) {
         const current = progress.syncingProjects[project.id];
-        progress.setProjectProgress(project.id, { projectId: project.id, ...(current ? {} : { phase: "local" as const }), ...patch });
+        const nextPatch: Partial<SyncProjectProgress> = { projectId: project.id, ...(current ? {} : { phase: "local" as const }), ...patch };
+        if (current && (Object.keys(nextPatch) as Array<keyof SyncProjectProgress>).every((key) => current[key] === nextPatch[key])) continue;
+        progress.setProjectProgress(project.id, nextPatch);
     }
+}
+
+function changedProjectsForLocalPersistence(baseProjects: CanvasProject[], targetProjects: CanvasProject[]) {
+    if (!baseProjects.length) return targetProjects;
+    const baseById = new Map(baseProjects.map((project) => [project.id, project]));
+    const syncing = useSyncProgressStore.getState().syncingProjects;
+    const changed = targetProjects.filter((project) => {
+        if (baseById.get(project.id) !== project) return true;
+        const current = syncing[project.id];
+        return current?.localPhase === "pending" || current?.localPhase === "error";
+    });
+    return changed.length ? changed : targetProjects;
 }
 
 function markCanvasLocalPersistencePending(projects: CanvasProject[], error?: string) {
@@ -182,7 +197,12 @@ function markCanvasLocalPersistencePending(projects: CanvasProject[], error?: st
 }
 
 function markCanvasLocalPersistenceSaved(projects: CanvasProject[], savedAt: string) {
-    setCanvasLocalPersistenceProgress(projects, { localPhase: "saved", localSavedAt: savedAt, localError: undefined, errorKind: undefined, pendingWrites: 0 });
+    const syncing = useSyncProgressStore.getState().syncingProjects;
+    const targets = projects.filter((project) => {
+        const current = syncing[project.id];
+        return !current || current.localPhase !== "saved" || Boolean(current.localError) || Boolean(current.errorKind) || (current.pendingWrites ?? 0) !== 0;
+    });
+    setCanvasLocalPersistenceProgress(targets, { localPhase: "saved", localSavedAt: savedAt, localError: undefined, errorKind: undefined, pendingWrites: 0 });
 }
 
 function recordCanvasNodePersistenceCounts(before: CanvasProject[], after: CanvasProject[]) {
@@ -283,7 +303,7 @@ export function recordCanvasStorageDocument(scope: string, document: CanvasStora
     const queued = queuedCanvasPersists.get(scope);
     if (queued || failedCanvasJournalRecoveries.has(scope)) {
         if (failedCanvasJournalRecoveries.has(scope)) return;
-        markCanvasLocalPersistencePending(queued!.state.projects);
+        markCanvasLocalPersistencePending(changedProjectsForLocalPersistence(queued!.baseProjects, queued!.state.projects));
     } else {
         markCanvasLocalPersistenceSaved(document.state.projects, savedAt);
     }
@@ -331,7 +351,7 @@ async function writeQueuedCanvasPersist(scope: string, _token: number) {
         await withCanvasStorePersistenceLock(scope, () => commitPendingCanvasStorePersistenceLocked(scope));
     } catch (error) {
         const queued = queuedCanvasPersists.get(scope);
-        if (queued) markCanvasLocalPersistencePending(queued.state.projects, error instanceof Error ? error.message : "本地画布保存失败");
+        if (queued) markCanvasLocalPersistencePending(changedProjectsForLocalPersistence(queued.baseProjects, queued.state.projects), error instanceof Error ? error.message : "本地画布保存失败");
         throw error;
     }
 }
@@ -636,7 +656,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
             token,
             journal: journalWritten ? journal || undefined : undefined,
         });
-        markCanvasLocalPersistencePending(nextState.projects, journal && !journalWritten ? "本地快速恢复记录写入失败，正在等待完整画布保存" : undefined);
+        markCanvasLocalPersistencePending(
+            changedProjectsForLocalPersistence(baseProjects, nextState.projects),
+            journal && !journalWritten ? "本地快速恢复记录写入失败，正在等待完整画布保存" : undefined,
+        );
         clearCanvasSaveTimer(scope);
         const timer = setTimeout(() => {
             if (canvasSaveTimers.get(scope) === timer) canvasSaveTimers.delete(scope);
@@ -683,8 +706,8 @@ export const useCanvasStore = create<CanvasStore>()(
                     connections: [],
                     chatSessions: [],
                     activeChatId: null,
-                    appearance: appearanceDefault?.appearance ?? canvasAppearanceForTheme(DEFAULT_CANVAS_COLOR_THEME),
-                    backgroundMode: appearanceDefault?.backgroundMode || DEFAULT_CANVAS_BACKGROUND_MODE,
+                    appearance: appearanceDefault?.appearance ?? canvasAppearanceForPreset(useThemeStore.getState().theme),
+                    backgroundMode: appearanceDefault?.backgroundMode || NEW_CANVAS_BACKGROUND_MODE,
                     showImageInfo: false,
                     viewport: initialViewport,
                     previsScenes: [],

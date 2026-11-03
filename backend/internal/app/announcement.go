@@ -453,9 +453,6 @@ func (s *Service) deleteFreshAnnouncementImageResource(resource *model.Resource)
 	if resource == nil {
 		return nil
 	}
-	if err := s.deleteStoredResourceObject(resource.UserID, resource); err != nil {
-		return err
-	}
 	return s.repo.DeleteResource(resource.UserID, resource.ID)
 }
 

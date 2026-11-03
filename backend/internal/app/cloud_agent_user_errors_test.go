@@ -25,6 +25,17 @@ func TestUserFacingTaskErrorMatchesCanvasNodeClassification(t *testing.T) {
 		{"large image hint", `模型服务拒绝请求；上游：image file too large: 25MB`, "模型服务拒绝请求；参考图片超过模型支持的大小限制，请压缩图片后重试。"},
 		{"moderation", "sensitive_words_detected", taskErrorModerationMessage},
 		{"storage", "参考图片上传失败：bucket denied", "参考素材上传到对象存储失败，请检查对象存储配置后重试。"},
+		{"storage save", "作品已生成，但保存未完成：上传 OSS 失败", "参考素材上传到对象存储失败，请检查对象存储配置后重试。"},
+		{
+			"storage read is not an upload failure",
+			`读取任务参考资源失败：七牛云 Kodo 读取失败：Get "https://yingce-dev.s3.cn-south-1.qiniucs.com/a.png": 404 Not Found`,
+			"读取参考素材失败，请检查对象存储读取配置与网络后重试。",
+		},
+		{
+			"outbound block is not a storage config problem",
+			`读取任务参考资源失败：七牛云 Kodo 读取失败：Get "https://yingce-dev.s3.cn-south-1.qiniucs.com/a.png": 不允许访问本机、内网或链路本地地址`,
+			"读取参考素材失败：后端出站连接被安全策略拦截（域名被解析到内网地址）。请联系管理员检查代理与 DNS，或按域名放行对象存储主机。",
+		},
 		{"readable chinese", "模型服务拒绝了请求，请检查模型和参数", "模型服务拒绝了请求，请检查模型和参数"},
 		{"empty", "", taskErrorDefaultMessage},
 	} {

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { assertAssetAvailableForReference, isAssetAvailableForReference } from "@/lib/asset-availability";
 
 import { AssetLibraryPickerModal, type AssetLibraryPickerItem, type AssetPickerMediaKind } from "@/components/assets/asset-library-picker-modal";
 import { useExternalAssetSources } from "@/hooks/use-external-asset-sources";
@@ -35,14 +36,14 @@ export function CanvasProjectAssetModal({
     const items = useMemo<ProjectPickerItem[]>(() => {
         const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
         const projectItems = (detail?.assets || []).flatMap((asset): ProjectPickerItem[] => {
-            if (asset.category === "character" && asset.character) return [{ id: asset.id, category: "character", folderId: asset.folderId, project: asset, character: asset }];
             const media = mediaById.get(asset.id);
-            if (media?.status === "archived") return [];
+            if (!isAssetAvailableForReference(asset) || (media && !isAssetAvailableForReference(media))) return [];
+            if (asset.category === "character" && asset.character) return [{ id: asset.id, category: "character", folderId: asset.folderId, project: asset, character: asset }];
             return asset.mediaType === "model" || asset.mediaType === "entity" ? [] : [{ id: asset.id, category: normalizeAssetCategory(asset.category || media?.category), folderId: asset.folderId, project: asset, media }];
         });
         if (detail) return projectItems;
         // 自由画布未关联项目时回退到个人素材库。
-        return mediaAssets.filter((asset) => asset.kind !== "model" && asset.kind !== "entity" && asset.status !== "archived").map((media): ProjectPickerItem => ({ id: media.id, category: normalizeAssetCategory(media.category), media }));
+        return mediaAssets.filter((asset) => asset.kind !== "model" && asset.kind !== "entity" && isAssetAvailableForReference(asset)).map((media): ProjectPickerItem => ({ id: media.id, category: normalizeAssetCategory(media.category), media }));
     }, [detail?.assets, mediaAssets]);
     const localPickerItems = useMemo<AssetLibraryPickerItem[]>(
         () =>
@@ -108,7 +109,7 @@ export function CanvasProjectAssetModal({
                         if (external) return externalAssetToInsertPayload(external);
                         const item = items.find((candidate) => candidate.id === id);
                         if (!item) throw new Error("所选资产已不存在，请重新选择");
-                        if (item.media || item.character || !item.project) return toInsertPayload(item);
+                        if (!item.project?.visual && (item.media || item.character || !item.project)) return toInsertPayload(item);
                         const { asset } = await getRemoteAsset(item.project.id);
                         return toInsertPayload({ ...item, media: asset });
                     }),
@@ -125,19 +126,40 @@ function pickerMediaKind(value?: string): AssetPickerMediaKind {
     return value === "video" || value === "audio" || value === "text" ? value : "image";
 }
 
-function toInsertPayload(item: ProjectPickerItem): InsertAssetPayload {
+export function toInsertPayload(item: ProjectPickerItem): InsertAssetPayload {
+    const latest = useAssetStore.getState().assets.find((asset) => asset.id === item.id);
+    for (const asset of [item.media, item.project, item.character, latest]) {
+        if (asset) assertAssetAvailableForReference(asset, latest);
+    }
     if (item.character?.character) {
         return projectCharacterToInsertPayload(item.character);
     }
     const asset = item.media;
     const project = item.project;
-    if (!asset && project) {
+    if (project && (!asset || project.storageKey)) {
         const resourceId = resourceIdFromStorageKey(project.storageKey);
         const remoteUrl = resourceId ? resourceFileUrl(resourceId) : "";
         if (project.mediaType === "text" && project.previewText) return { kind: "text", content: project.previewText, title: project.title, assetId: project.id };
-        if (project.mediaType === "video" && remoteUrl) return { kind: "video", url: remoteUrl, storageKey: project.storageKey, title: project.title, assetId: project.id };
-        if (project.mediaType === "audio" && remoteUrl) return { kind: "audio", url: remoteUrl, storageKey: project.storageKey, title: project.title, assetId: project.id };
-        if (project.mediaType === "image" && remoteUrl) return { kind: "image", dataUrl: remoteUrl, storageKey: project.storageKey, title: project.title, assetId: project.id };
+        if (project.mediaType === "video" && remoteUrl)
+            return {
+                ...(asset?.kind === "video" && asset.data.storageKey === project.storageKey ? asset.data : { durationMs: project.durationMs }),
+                kind: "video",
+                url: remoteUrl,
+                storageKey: project.storageKey,
+                title: project.title,
+                assetId: project.id,
+            };
+        if (project.mediaType === "audio" && remoteUrl)
+            return {
+                ...(asset?.kind === "audio" && asset.data.storageKey === project.storageKey ? asset.data : { durationMs: project.durationMs }),
+                kind: "audio",
+                url: remoteUrl,
+                storageKey: project.storageKey,
+                title: project.title,
+                assetId: project.id,
+            };
+        if (project.mediaType === "image" && remoteUrl)
+            return { ...(asset?.kind === "image" && asset.data.storageKey === project.storageKey ? asset.data : {}), kind: "image", dataUrl: remoteUrl, storageKey: project.storageKey, title: project.title, assetId: project.id };
         throw new Error(`“${project.title}”缺少可读取的内容`);
     }
     if (!asset) throw new Error("项目资产不可用");
@@ -176,6 +198,7 @@ function projectAssetMediaUrl(storageKey?: string, fallback = "") {
 }
 
 export function projectCharacterToInsertPayload(asset: ProjectAsset): InsertAssetPayload {
+    assertAssetAvailableForReference(asset, useAssetStore.getState().assets.find((current) => current.id === asset.id));
     if (!asset.character) throw new Error("项目角色信息不完整");
     const card = asset.character;
     const definition = card.definition;

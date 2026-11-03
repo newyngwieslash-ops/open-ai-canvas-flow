@@ -116,7 +116,17 @@ func (r *Repository) CreditLedgerReferenceExists(referenceKey string) (bool, err
 }
 
 func (r *Repository) CreateTaskWithCreditReservation(task *model.Task, order *model.BillingOrder, activeTaskLimit int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
+		if err := repo.RequireProfileSource(task, true); err != nil {
+			return err
+		}
+		if err := repo.requireLiveDocumentResources(task.UserID, task.InputJSON); err != nil {
+			return err
+		}
+		if err := New(tx).requireExclusiveCanvasAgent(task); err != nil {
+			return err
+		}
 		if err := r.requireActiveLogicalModelForTask(tx, task); err != nil {
 			return err
 		}
@@ -126,26 +136,52 @@ func (r *Repository) CreateTaskWithCreditReservation(task *model.Task, order *mo
 		if err := reserveBillingOrder(tx, order); err != nil {
 			return err
 		}
-		return tx.Create(task).Error
+		if err := tx.Create(task).Error; err != nil {
+			return err
+		}
+		if task.Operation == "cloud_agent" && task.ProjectID != "" {
+			repo.canvasChanged(task.UserID, task.ProjectID)
+		}
+		return nil
 	})
 }
 
 func (r *Repository) CreateTaskWithActiveLimit(task *model.Task, activeTaskLimit int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
+		if err := repo.RequireProfileSource(task, true); err != nil {
+			return err
+		}
+		if err := repo.requireLiveDocumentResources(task.UserID, task.InputJSON); err != nil {
+			return err
+		}
+		if err := New(tx).requireExclusiveCanvasAgent(task); err != nil {
+			return err
+		}
 		if err := r.requireActiveLogicalModelForTask(tx, task); err != nil {
 			return err
 		}
 		if err := enforceActiveTaskLimit(tx, task.UserID, activeTaskLimit); err != nil {
 			return err
 		}
-		return tx.Create(task).Error
+		if err := tx.Create(task).Error; err != nil {
+			return err
+		}
+		if task.Operation == "cloud_agent" && task.ProjectID != "" {
+			repo.canvasChanged(task.UserID, task.ProjectID)
+		}
+		return nil
 	})
 }
 
 func (r *Repository) RetryTaskWithBilling(userID string, prepared *model.Task, order *model.BillingOrder, activeTaskLimit int) (*model.Task, error) {
 	var task model.Task
 	taskID := prepared.ID
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireLiveDocumentResources(userID, prepared.InputJSON); err != nil {
+			return err
+		}
+		tx := repo.db
 		if err := enforceActiveTaskLimit(tx, userID, activeTaskLimit); err != nil {
 			return err
 		}

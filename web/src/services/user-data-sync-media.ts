@@ -5,6 +5,7 @@
 import { getResourceBlob, isResourceUrl, resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey, uploadResourceFile } from "@/services/api/resources";
 import { getImageBlob } from "@/services/image-storage";
 import { getMediaBlob } from "@/services/file-storage";
+import { rebaseCanvasBatchInputSignatures } from "@/lib/canvas/canvas-batch-input-signature";
 
 export function numberValue(value: unknown) {
     const number = Number(value);
@@ -71,43 +72,70 @@ async function readRemoteTextResource(storageKey: string) {
 }
 
 export async function ensureRemoteResourceReferences<T>(value: T, uploaded = new Map<string, string>(), onUploaded?: () => void, preserveTextContent = false): Promise<T> {
+    const prepared = await ensureRemoteResourceReferencesValue(value, uploaded, onUploaded, preserveTextContent);
+    return rebaseCanvasBatchInputSignatures(value, prepared, uploaded);
+}
+
+async function ensureRemoteResourceReferencesValue<T>(value: T, uploaded: Map<string, string>, onUploaded?: () => void, preserveTextContent = false): Promise<T> {
     if (!value || typeof value !== "object") return value;
     // 文本节点也会携带 file 资源的 storageKey。这个 key 用于素材归属和
     // Agent 读取文件，不能因此把节点正文替换成 /api/resources/.../file。
     const currentPreserveTextContent = preserveTextContent || (typeof (value as { type?: unknown }).type === "string" && (value as unknown as { type: string }).type === "text");
     if (Array.isArray(value)) {
-        const result: unknown[] = [];
-        for (const item of value) result.push(await ensureRemoteResourceReferences(item, uploaded, onUploaded, currentPreserveTextContent));
-        return result as T;
+        let result: unknown[] | undefined;
+        for (let index = 0; index < value.length; index += 1) {
+            const current = value[index];
+            const prepared = await ensureRemoteResourceReferencesValue(current, uploaded, onUploaded, currentPreserveTextContent);
+            if (result) result[index] = prepared;
+            else if (prepared !== current) {
+                result = value.slice();
+                result[index] = prepared;
+            }
+        }
+        return (result || value) as T;
     }
 
-    const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-        next[key] = await ensureRemoteResourceReferences(child, uploaded, onUploaded, currentPreserveTextContent);
+    const original = value as Record<string, unknown>;
+    let changed: Record<string, unknown> | undefined;
+    for (const [key, child] of Object.entries(original)) {
+        const prepared = await ensureRemoteResourceReferencesValue(child, uploaded, onUploaded, currentPreserveTextContent);
+        if (prepared !== child) {
+            changed ||= { ...original };
+            changed[key] = prepared;
+        }
     }
+    const next = changed || original;
 
     const storageKey = typeof next.storageKey === "string" ? next.storageKey : "";
     const remoteResourceId = resourceIdFromStorageKey(storageKey);
-    if (remoteResourceId) return applyResourceReference(next, storageKey, currentPreserveTextContent) as T;
+    if (remoteResourceId) return preparedResourceReference(next, storageKey, currentPreserveTextContent) as T;
 
     if (!isLocalStorageKey(storageKey)) {
         const inline = inlineMediaDataUrl(next);
         if (!inline) return next as T;
         const identity = await inlineMediaUploadIdentity(inline);
         const cached = uploaded.get(identity);
-        if (cached) return applyResourceReference(next, cached, currentPreserveTextContent) as T;
+        if (cached) return preparedResourceReference(next, cached, currentPreserveTextContent) as T;
         const resourceStorage = await uploadInlineDataUrl(inline, identity);
         uploaded.set(identity, resourceStorage);
         onUploaded?.();
-        return applyResourceReference(next, resourceStorage, currentPreserveTextContent) as T;
+        return preparedResourceReference(next, resourceStorage, currentPreserveTextContent) as T;
     }
 
     const cached = uploaded.get(storageKey);
-    if (cached) return applyResourceReference(next, cached, currentPreserveTextContent) as T;
+    if (cached) return preparedResourceReference(next, cached, currentPreserveTextContent) as T;
     const resourceStorage = await uploadLocalStorageKey(storageKey, next);
     uploaded.set(storageKey, resourceStorage);
     onUploaded?.();
-    return applyResourceReference(next, resourceStorage, currentPreserveTextContent) as T;
+    return preparedResourceReference(next, resourceStorage, currentPreserveTextContent) as T;
+}
+
+function preparedResourceReference(payload: Record<string, unknown>, storageKey: string, preserveTextContent: boolean) {
+    const rewritten = applyResourceReference({ ...payload }, storageKey, preserveTextContent);
+    const unchanged =
+        Object.keys(rewritten).length === Object.keys(payload).length &&
+        Object.entries(rewritten).every(([key, child]) => child === payload[key]);
+    return unchanged ? payload : rewritten;
 }
 
 export function applyResourceReference(payload: Record<string, unknown>, storageKey: string, preserveTextContent = false) {

@@ -46,6 +46,15 @@ func (r *Repository) CreationRuns(userID string) ([]model.CreationRun, error) {
 	return items, err
 }
 func (r *Repository) CreateCreationRun(run *model.CreationRun) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(run.UserID, false, nil, run.StateJSON, run.ApprovedOperationsJSON, run.ApprovedCanvasJSON); err != nil {
+			return err
+		}
+		return repo.createCreationRun(run)
+	})
+}
+
+func (r *Repository) createCreationRun(run *model.CreationRun) error {
 	var old model.CreationRun
 	if err := r.db.First(&old, "user_id = ? AND client_key = ?", run.UserID, run.ClientKey).Error; err == nil {
 		if old.CreateHash != run.CreateHash {
@@ -69,7 +78,8 @@ func (r *Repository) CreateCreationRun(run *model.CreationRun) error {
 // A conditional write obtains the run row's write lock in both SQLite and PostgreSQL.
 // All submission consumption and task reservation use the returned transaction repository.
 func (r *Repository) MutateCreationRun(userID, id string, fn func(*model.CreationRun, *Repository) error) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		tx := repo.db
 		result := tx.Model(&model.CreationRun{}).Where("id = ? AND user_id = ?", id, userID).UpdateColumn("revision", gorm.Expr("revision"))
 		if result.Error != nil {
 			return result.Error
@@ -83,6 +93,9 @@ func (r *Repository) MutateCreationRun(userID, id string, fn func(*model.Creatio
 			return err
 		}
 		if err := fn(run, scoped); err != nil {
+			return err
+		}
+		if err := scoped.requireReferenceResources(userID, false, nil, run.StateJSON, run.ApprovedOperationsJSON, run.ApprovedCanvasJSON); err != nil {
 			return err
 		}
 		return tx.Save(run).Error
@@ -99,7 +112,12 @@ func (r *Repository) CreationSubmission(userID, runID, id string) (*model.Creati
 	return &item, err
 }
 func (r *Repository) SaveCreationSubmission(item *model.CreationSubmission) error {
-	return r.db.Save(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources(item.UserID, false, nil, item.RequestJSON); err != nil {
+			return err
+		}
+		return repo.db.Save(item).Error
+	})
 }
 func (r *Repository) RevokeCreationSubmissions(runID string) error {
 	return r.db.Model(&model.CreationSubmission{}).Where("run_id = ? AND task_id IS NULL AND revoked_at IS NULL", runID).Update("revoked_at", time.Now()).Error

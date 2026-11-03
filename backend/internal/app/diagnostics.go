@@ -364,6 +364,7 @@ func sanitizeDiagnosticTaskLog(taskLog model.TaskLog) diagnosticTaskLogRecord {
 }
 
 func sanitizeDiagnosticAPICall(log model.ApiCallLog) diagnosticAPICallRecord {
+	sanitizeProfileAPICall(&log)
 	return diagnosticAPICallRecord{
 		ID: log.ID, TraceID: sanitizeDiagnosticIdentifier(log.TraceID), RequestID: sanitizeDiagnosticIdentifier(log.RequestID), ChannelID: sanitizeDiagnosticIdentifier(log.ChannelID), TaskID: sanitizeDiagnosticIdentifier(log.TaskID),
 		Source: redactDiagnosticText(log.Source, 80), Capability: redactDiagnosticText(log.Capability, 48), Operation: redactDiagnosticText(log.Operation, 120), RequestKind: redactDiagnosticText(log.RequestKind, 48), APIFormat: redactDiagnosticText(log.APIFormat, 48),

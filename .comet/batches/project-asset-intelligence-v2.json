@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "batchId": "project-asset-intelligence-v2",
+  "originalGoal": "项目资产智能能力二期：参考图档案分析、有序多参考生成、多个资产各一张的批量生成、已有角色三视图拆分。用户已确认四项独立拆分与批量语义，已确认四份提案内容，按顺序先识图档案进入详细设计。",
+  "createdAt": "2026-10-22T12:08:16.734665+00:00",
+  "updatedAt": "2026-10-22T13:07:01.282646+00:00",
+  "orderedNames": [
+    "add-asset-image-profile-analysis",
+    "add-asset-multi-reference-generation",
+    "add-project-asset-batch-generation",
+    "add-character-turnaround-splitting"
+  ],
+  "confirmation": {
+    "splitConfirmed": true,
+    "batchSemantics": "多个资产各单任务单候选",
+    "artifactContentConfirmed": true,
+    "referenceLimit": 16,
+    "batchLimit": 50,
+    "batchStorageTables": 2,
+    "splittingFormats": [
+      "PNG",
+      "JPEG"
+    ],
+    "productionMigrationAuthorized": false,
+    "paidTestingAuthorized": false
+  },
+  "items": [
+    {
+      "name": "add-asset-image-profile-analysis",
+      "goal": "从项目参考图分析可见档案字段，生成可逐字段采用的草稿",
+      "scope": [
+        "角色 appearance/physique/clothing/props",
+        "场景与道具 description/prompt",
+        "任务、服务端白名单、CAS及幂等采用"
+      ],
+      "nonGoals": [
+        "不猜姓名性格关系声音",
+        "不从一图创建多个资产",
+        "不自动覆盖、不依赖Agent"
+      ],
+      "acceptance": [
+        "逐字段采用且保留参考和声音",
+        "非法字段/来源/基准/归属拒绝",
+        "取消失败可追踪、CAS冲突及重放无重复版本"
+      ],
+      "status": "open-complete",
+      "artifactsReady": true,
+      "created": true,
+      "taskCount": 10,
+      "evidence": {
+        "strictValidate": "passed",
+        "requiredClosure": "ready",
+        "applyRequires": [
+          "tasks"
+        ],
+        "artifactStatuses": {
+          "proposal": "done",
+          "specs": "done",
+          "design": "done",
+          "tasks": "done"
+        },
+        "phase": "design",
+        "openCheck": "passed (3/3)",
+        "contentApproval": "confirmed",
+        "validatedAt": "2026-10-22T13:07:01.282646+00:00",
+        "openGuard": "passed (8/8)",
+        "designCheck": "passed (9/9)",
+        "openComplete": true
+      },
+      "changeRoot": "E:/AI_Vedio_Things/new-toonflow/open-ai-canvas-flow/docs/openspec/changes/add-asset-image-profile-analysis",
+      "artifactPaths": [
+        "docs/openspec/changes/add-asset-image-profile-analysis/proposal.md",
+        "docs/openspec/changes/add-asset-image-profile-analysis/design.md",
+        "docs/openspec/changes/add-asset-image-profile-analysis/tasks.md",
+        "docs/openspec/changes/add-asset-image-profile-analysis/specs/asset-image-profile-analysis/spec.md"
+      ],
+      "selected": true
+    },
+    {
+      "name": "add-asset-multi-reference-generation",
+      "goal": "同一资产持久化多个有序参考，生成单候选并手动采用",
+      "scope": [
+        "definition/API/版本保护",
+        "模型张数准入、参考排序",
+        "历史引用删除保护和单图迁移"
+      ],
+      "nonGoals": [
+        "不同资产融合、不多候选",
+        "不静默丢图或能力fallback",
+        "不长期双字段存储"
+      ],
+      "acceptance": [
+        "有序多参考全部进入模型且只产一候选",
+        "超上限/未知能力入队前拒绝",
+        "迁移后首版数据可见、历史引用受保护"
+      ],
+      "status": "open-complete",
+      "artifactsReady": true,
+      "created": true,
+      "taskCount": 10,
+      "evidence": {
+        "strictValidate": "passed",
+        "requiredClosure": "ready",
+        "applyRequires": [
+          "tasks"
+        ],
+        "artifactStatuses": {
+          "proposal": "done",
+          "specs": "done",
+          "design": "done",
+          "tasks": "done"
+        },
+        "phase": "design",
+        "openCheck": "passed (3/3)",
+        "contentApproval": "confirmed",
+        "validatedAt": "2026-10-22T13:07:01.282646+00:00",
+        "openGuard": "passed (8/8)",
+        "designCheck": "passed (9/9)",
+        "openComplete": true
+      },
+      "changeRoot": "E:/AI_Vedio_Things/new-toonflow/open-ai-canvas-flow/docs/openspec/changes/add-asset-multi-reference-generation",
+      "artifactPaths": [
+        "docs/openspec/changes/add-asset-multi-reference-generation/proposal.md",
+        "docs/openspec/changes/add-asset-multi-reference-generation/design.md",
+        "docs/openspec/changes/add-asset-multi-reference-generation/tasks.md",
+        "docs/openspec/changes/add-asset-multi-reference-generation/specs/asset-multi-reference-generation/spec.md"
+      ],
+      "selected": false
+    },
+    {
+      "name": "add-project-asset-batch-generation",
+      "goal": "多个资产各生成一个任务和单个候选，提供持久批次与恢复",
+      "scope": [
+        "选择清单预检、费用说明",
+        "服务端幂等批次、逐项状态、部分失败恢复",
+        "区分停止未提交与取消已提交"
+      ],
+      "nonGoals": [
+        "不做同资产多方案",
+        "不自动采用",
+        "不盲目重发费用不确定项"
+      ],
+      "acceptance": [
+        "N资产各一任务单候选，部分失败独立恢复",
+        "重复提交与重启不重复收费",
+        "停止/取消分离且费用不确定禁止自动重发"
+      ],
+      "status": "open-complete",
+      "artifactsReady": true,
+      "created": true,
+      "taskCount": 11,
+      "changeRoot": "E:/AI_Vedio_Things/new-toonflow/open-ai-canvas-flow/docs/openspec/changes/add-project-asset-batch-generation",
+      "artifactPaths": [
+        "docs/openspec/changes/add-project-asset-batch-generation/proposal.md",
+        "docs/openspec/changes/add-project-asset-batch-generation/design.md",
+        "docs/openspec/changes/add-project-asset-batch-generation/tasks.md",
+        "docs/openspec/changes/add-project-asset-batch-generation/specs/project-asset-batch-generation/spec.md"
+      ],
+      "evidence": {
+        "strictValidate": "passed",
+        "requiredClosure": "ready",
+        "applyRequires": [
+          "tasks"
+        ],
+        "artifactStatuses": {
+          "proposal": "done",
+          "specs": "done",
+          "design": "done",
+          "tasks": "done"
+        },
+        "phase": "design",
+        "openCheck": "passed (3/3)",
+        "contentApproval": "confirmed",
+        "validatedAt": "2026-10-22T13:07:01.282646+00:00",
+        "openGuard": "passed (8/8)",
+        "designCheck": "passed (9/9)",
+        "openComplete": true
+      },
+      "selected": false
+    },
+    {
+      "name": "add-character-turnaround-splitting",
+      "goal": "从已有同角色正侧背整图建议裁框，经确认原像素裁切为三视图",
+      "scope": [
+        "识别框与标签草稿、人工调整",
+        "owned ready资源的服务端裁切",
+        "原整图/声音/定义/已有表现保留及版本原子提交"
+      ],
+      "nonGoals": [
+        "不生成缺失视角或背景补画",
+        "不修改全局默认引用策略",
+        "不覆盖原图或其他角色表现"
+      ],
+      "acceptance": [
+        "用户确认裁框后front/side/back保存且原像素无生成",
+        "缺视角/多人/重叠转人工，不伪造置信度",
+        "CAS/重放/资源清理安全且默认下游不自动三图"
+      ],
+      "status": "open-complete",
+      "artifactsReady": true,
+      "created": true,
+      "taskCount": 10,
+      "changeRoot": "E:/AI_Vedio_Things/new-toonflow/open-ai-canvas-flow/docs/openspec/changes/add-character-turnaround-splitting",
+      "artifactPaths": [
+        "docs/openspec/changes/add-character-turnaround-splitting/proposal.md",
+        "docs/openspec/changes/add-character-turnaround-splitting/design.md",
+        "docs/openspec/changes/add-character-turnaround-splitting/tasks.md",
+        "docs/openspec/changes/add-character-turnaround-splitting/specs/character-turnaround-splitting/spec.md"
+      ],
+      "evidence": {
+        "strictValidate": "passed",
+        "requiredClosure": "ready",
+        "applyRequires": [
+          "tasks"
+        ],
+        "artifactStatuses": {
+          "proposal": "done",
+          "specs": "done",
+          "design": "done",
+          "tasks": "done"
+        },
+        "phase": "design",
+        "openCheck": "passed (3/3)",
+        "contentApproval": "confirmed",
+        "validatedAt": "2026-10-22T13:07:01.282646+00:00",
+        "openGuard": "passed (8/8)",
+        "designCheck": "passed (9/9)",
+        "openComplete": true
+      },
+      "selected": false
+    }
+  ],
+  "note": "用户已确认四份提案及16参考/50批次/两表/PNG JPEG建议。四项经正常select、guard open --apply、OpenSpec status及design check全部通过，均open-complete；首项selected并先进入详细设计。未授权生产迁移或收费测试；未修改产品或首版变更。",
+  "selectedName": "add-asset-image-profile-analysis"
+}

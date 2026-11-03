@@ -1,0 +1,543 @@
+# yuxibox Seedance 接口字段
+
+## 协议身份
+
+- 插件 ID：`yuxibox-seedance-video`。
+- Provider ID：`yuxibox-seedance-video`。
+- 能力：`video`。
+- 默认 Base URL：`https://yuxibox.cn`。
+- 鉴权驱动：`bearer`。
+- 创建：`POST /v1/videos`。
+- 查询：`GET /v1/videos/{{taskId}}`。
+
+## 配置字段
+
+| 字段 | 类型 | 必填 | 含义 |
+| --- | --- | --- | --- |
+| `apiKey` | secret | 是 | API Key |
+
+## 统一字段映射
+
+| 统一字段 | 类型 | 必填 | 上游映射 | 说明 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | `model` | 视频模型 ID。 |
+| `prompt` | string | 是 | `prompt/content/input` | 视频提示词。 |
+| `images` | media[] | 否 | `first/last/reference image` | 显式 role 图片输入。 |
+| `videos` | media[] | 否 | `reference video` | 参考视频。 |
+| `audios` | media[] | 否 | `reference audio/voice` | 参考音频或音色。 |
+| `duration` | integer | 是 | `duration/seconds` | 时长秒数。 |
+| `aspectRatio` | string | 否 | `ratio/aspect_ratio/size` | 画幅比例或尺寸。 |
+| `providerOptions` | object | 否 | `provider-specific fields` | 插件命名空间内的厂商扩展字段。 |
+
+## 上游请求模板逐字段清单
+
+下表由插件请求模板生成，覆盖 body、query、headers 和 multipart 文件声明中的每个字段。
+
+| 上游位置 | 值或转换表达式 |
+| --- | --- |
+| `create.method` | `"POST"` |
+| `create.path` | `"/v1/videos"` |
+| `create.contentType` | `"application/json"` |
+| `create.body.model` | `{"$ref":"request.model"}` |
+| `create.body.prompt` | `{"$ref":"request.prompt"}` |
+| `create.body.seconds` | `{"$toString":{"$ref":"request.duration"}}` |
+| `create.body.ratio` | `{"$coalesce":[{"$ref":"request.aspectRatio"},"16:9"]}` |
+| `create.body.reference_images` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","in":{"$ref":"media.value"}}}}` |
+| `create.body.videos` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.videos"}},"as":"media","in":{"$ref":"media.value"}}}}` |
+| `create.body.audios` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.audios"}},"as":"media","in":{"$ref":"media.value"}}}}` |
+| `poll.method` | `"GET"` |
+| `poll.path` | `"/v1/videos/{{taskId}}"` |
+| `poll.contentType` | `"application/json"` |
+| `result.method` | `"GET"` |
+| `result.path` | `"/v1/videos/{{taskId}}/content"` |
+| `result.contentType` | `"application/json"` |
+| `result.headers.Accept` | `"video/mp4"` |
+
+## Provider 扩展键
+
+- 无额外扩展键。
+
+动态模型或工作流允许使用文档声明的完整 `parameters/input/extra_body` 对象；该对象是协议本身的开放 schema，不会被宿主裁剪。
+
+## 响应映射逐字段清单
+
+| 映射位置 | 上游路径或转换表达式 |
+| --- | --- |
+| `response.taskId` | `{"$coalesce":[{"$ref":"response.id"},{"$ref":"response.task_id"},{"$ref":"response.taskId"},{"$ref":"response.data.id"},{"$ref":"taskId"}]}` |
+| `response.status` | `{"$coalesce":[{"$ref":"response.status"},{"$ref":"response.state"},{"$ref":"response.data.status"},"pending"]}` |
+| `response.message` | `{"$coalesce":[{"$ref":"response.error.message"},{"$ref":"response.message"},{"$ref":"response.fail_reason"}]}` |
+| `response.videos` | `{"$coalesce":[{"$ref":"response.video_url"},{"$ref":"response.download_url"},{"$ref":"response.downloadUrl"},{"$ref":"response.videoUrl"},{"$ref":"response.result_url"},{"$ref":"response.url"},{"$ref":"response.data.video_url"},{"$ref":"response.output.url"}]}` |
+| `response.errorPaths[0]` | `"error.code"` |
+| `response.resultEphemeral` | `true` |
+
+## 响应与错误
+
+插件把上游 task/status/text/media/usage 映射为统一结果。临时媒体 URL 标记为 ephemeral，由宿主立即下载持久化。HTTP 错误、业务 code 和 error object 保持失败语义，不包装成成功。
+
+## 兼容边界
+
+yuxibox（yuxibox.cn）Seedance 家族：OpenAI Videos 风格异步合同，创建 POST /v1/videos JSON、查询 GET /v1/videos/{task_id}。该端点按请求体 model 路由到上游不同计费模型（seedance2.5-yx-count、seedance-2.5（YX）、seedance-2.5（YX）-按次、seedance-2.0（YX）等），协议形状一致，因此插件不锁定单一模型名，模型可用性由上游 /v1/models 与渠道分组决定。时长上限 30 秒整数、输出固定 720P、七档比例（adaptive/16:9/9:16/1:1/4:3/3:4/21:9）统一走 ratio 单字段（不发 size）；各模型的实际时长档位（2.0（YX）为 5/10/15 秒、2.5（YX）为 5–30 秒、按次固定 30 秒、yx-count 为 10–30 秒）由渠道模型的 capabilityConfig 与上游校验共同决定。参考素材 JSON 数组上限：reference_images 30、videos 10、audios 10，须为公网 HTTPS 或 data URL；不发 multipart input_reference。seconds 以字符串发送（上游示例 "seconds": "30"）。计费按上游模型广场公布的按秒或按条价格与令牌分组倍率结算，以 yuxibox 控制台为准。同一视频不重复提交：宿主恢复合同保证已有任务 ID 只查询不重建；创建响应缺失任务 ID 按“结果不确定”失败上抛。上游未提供取消接口。
+
+<!-- YINGCE_MANIFEST_CONTRACT_START -->
+## Manifest 完整接口定义
+
+以下 JSON 与插件包内实际 `manifest.json` 逐字段一致，覆盖插件身份、权限、配置、鉴权、参数、校验、创建、Agent、查询、取消、结果下载、响应和 Agent 响应映射。`documentation` 字段的值就是当前完整文档；为避免文档在自身内部无限递归，JSON 中仅用等义占位文本表示正文。
+
+```json
+{
+  "apiVersion": "yingce.plugin/v2",
+  "id": "yuxibox-seedance-video",
+  "name": "yuxibox Seedance",
+  "version": "2.0.0",
+  "author": "源铭振跃团队",
+  "description": "yuxibox Seedance 独立请求协议插件。",
+  "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
+  "permissions": [
+    "generation.run",
+    "media.read"
+  ],
+  "configuration": {
+    "fields": [
+      {
+        "name": "apiKey",
+        "type": "secret",
+        "label": "API Key",
+        "required": true
+      }
+    ]
+  },
+  "contributes": {
+    "workflows": [
+      {
+        "id": "yuxibox-seedance-video",
+        "label": "yuxibox Seedance",
+        "providerId": "yuxibox-seedance-video",
+        "capability": "video",
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "视频模型 ID。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt/content/input",
+            "description": "视频提示词。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "first/last/reference image",
+            "description": "显式 role 图片输入。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "reference video",
+            "description": "参考视频。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "reference audio/voice",
+            "description": "参考音频或音色。"
+          },
+          {
+            "name": "duration",
+            "type": "integer",
+            "required": true,
+            "mapping": "duration/seconds",
+            "description": "时长秒数。"
+          },
+          {
+            "name": "aspectRatio",
+            "type": "string",
+            "required": false,
+            "mapping": "ratio/aspect_ratio/size",
+            "description": "画幅比例或尺寸。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "插件命名空间内的厂商扩展字段。"
+          }
+        ],
+        "defaults": {
+          "model": "seedance2.5-yx-count",
+          "duration": 30,
+          "aspectRatio": "16:9"
+        }
+      }
+    ],
+    "providers": [
+      {
+        "id": "yuxibox-seedance-video",
+        "label": "yuxibox Seedance",
+        "capabilities": [
+          "video"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://yuxibox.cn",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "视频模型 ID。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt/content/input",
+            "description": "视频提示词。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "first/last/reference image",
+            "description": "显式 role 图片输入。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "reference video",
+            "description": "参考视频。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "reference audio/voice",
+            "description": "参考音频或音色。"
+          },
+          {
+            "name": "duration",
+            "type": "integer",
+            "required": true,
+            "mapping": "duration/seconds",
+            "description": "时长秒数。"
+          },
+          {
+            "name": "aspectRatio",
+            "type": "string",
+            "required": false,
+            "mapping": "ratio/aspect_ratio/size",
+            "description": "画幅比例或尺寸。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "插件命名空间内的厂商扩展字段。"
+          }
+        ],
+        "validations": [
+          {
+            "assert": {
+              "$and": [
+                {
+                  "$gt": [
+                    {
+                      "$len": {
+                        "$trim": {
+                          "$ref": "request.prompt"
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                {
+                  "$lte": [
+                    {
+                      "$len": {
+                        "$ref": "request.prompt"
+                      }
+                    },
+                    16000
+                  ]
+                }
+              ]
+            },
+            "message": "yuxibox 提示词不能为空且最多 16000 字符。"
+          },
+          {
+            "assert": {
+              "$and": [
+                {
+                  "$gte": [
+                    {
+                      "$ref": "request.duration"
+                    },
+                    4
+                  ]
+                },
+                {
+                  "$lte": [
+                    {
+                      "$ref": "request.duration"
+                    },
+                    30
+                  ]
+                }
+              ]
+            },
+            "message": "yuxibox 时长为 4–30 秒整数，默认 30。"
+          },
+          {
+            "assert": {
+              "$in": [
+                {
+                  "$coalesce": [
+                    {
+                      "$ref": "request.aspectRatio"
+                    },
+                    "16:9"
+                  ]
+                },
+                [
+                  "adaptive",
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "21:9"
+                ]
+              ]
+            },
+            "message": "yuxibox 比例仅支持 adaptive、16:9、9:16、1:1、4:3、3:4、21:9。"
+          },
+          {
+            "assert": {
+              "$lte": [
+                {
+                  "$len": {
+                    "$ref": "request.images"
+                  }
+                },
+                30
+              ]
+            },
+            "message": "yuxibox 参考图最多 30 张。"
+          },
+          {
+            "assert": {
+              "$lte": [
+                {
+                  "$len": {
+                    "$ref": "request.videos"
+                  }
+                },
+                10
+              ]
+            },
+            "message": "yuxibox 参考视频最多 10 条。"
+          },
+          {
+            "assert": {
+              "$lte": [
+                {
+                  "$len": {
+                    "$ref": "request.audios"
+                  }
+                },
+                10
+              ]
+            },
+            "message": "yuxibox 参考音频最多 10 条。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/v1/videos",
+          "contentType": "application/json",
+          "body": {
+            "model": {
+              "$ref": "request.model"
+            },
+            "prompt": {
+              "$ref": "request.prompt"
+            },
+            "seconds": {
+              "$toString": {
+                "$ref": "request.duration"
+              }
+            },
+            "ratio": {
+              "$coalesce": [
+                {
+                  "$ref": "request.aspectRatio"
+                },
+                "16:9"
+              ]
+            },
+            "reference_images": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.images"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "$ref": "media.value"
+                  }
+                }
+              }
+            },
+            "videos": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.videos"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "$ref": "media.value"
+                  }
+                }
+              }
+            },
+            "audios": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.audios"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "$ref": "media.value"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/v1/videos/{{taskId}}"
+        },
+        "result": {
+          "method": "GET",
+          "path": "/v1/videos/{{taskId}}/content",
+          "headers": {
+            "Accept": "video/mp4"
+          }
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "response.task_id"
+              },
+              {
+                "$ref": "response.taskId"
+              },
+              {
+                "$ref": "response.data.id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$coalesce": [
+              {
+                "$ref": "response.status"
+              },
+              {
+                "$ref": "response.state"
+              },
+              {
+                "$ref": "response.data.status"
+              },
+              "pending"
+            ]
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.message"
+              },
+              {
+                "$ref": "response.fail_reason"
+              }
+            ]
+          },
+          "videos": {
+            "$coalesce": [
+              {
+                "$ref": "response.video_url"
+              },
+              {
+                "$ref": "response.download_url"
+              },
+              {
+                "$ref": "response.downloadUrl"
+              },
+              {
+                "$ref": "response.videoUrl"
+              },
+              {
+                "$ref": "response.result_url"
+              },
+              {
+                "$ref": "response.url"
+              },
+              {
+                "$ref": "response.data.video_url"
+              },
+              {
+                "$ref": "response.output.url"
+              }
+            ]
+          },
+          "errorPaths": [
+            "error.code"
+          ],
+          "resultEphemeral": true
+        }
+      }
+    ]
+  }
+}
+```
+<!-- YINGCE_MANIFEST_CONTRACT_END -->

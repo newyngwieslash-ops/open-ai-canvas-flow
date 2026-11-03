@@ -121,7 +121,8 @@ func validateCloudAgentRuntime(run *model.CloudAgentExecution, state *cloudAgent
 		// execution identity. Durable rows are always validated below.
 		return nil
 	}
-	if state.Request.CanvasID == "" || state.Request.Prompt == "" || state.Request.PermissionMode == "" {
+	// CanvasID 可为空（平台级对话），由 validateCloudAgentRequest 保证无画布时不带画布上下文。
+	if state.Request.Prompt == "" || state.Request.PermissionMode == "" {
 		return errors.New("Agent runtime request is incomplete")
 	}
 	if err := validateCloudAgentRequest(&state.Request); err != nil {

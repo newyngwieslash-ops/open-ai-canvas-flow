@@ -1,7 +1,11 @@
 import type { StoryboardRow } from "@/types/canvas";
 import { formatShotOrdinal } from "@/lib/shot-label";
-import type { ProjectDetail, ShotRevisionInput } from "@/services/api/projects";
+import { ApiError } from "@/services/api/request";
+import { replaceProjectUnitShots, resolveGeneratedProjectUnitShotAssetBindings, type BindingIssue, type GeneratedBindingBaseline, type GeneratedBindingResolution, type ProjectDetail, type ShotRevisionInput } from "@/services/api/projects";
 import { ensureShotAssetMentionPrompt } from "./workflow-shot-references";
+import { getActiveUserScope } from "@/lib/user-scope";
+import { useUserStore } from "@/stores/use-user-store";
+import { batchHasUnsettledItems, resolveBatchStorage, withBatchChapterLock } from "./workflow-batch-storage";
 
 export type ChapterStoryboardAsset = {
     id: string;
@@ -37,6 +41,116 @@ export type ChapterStoryboardReplaceImpact = {
     candidateCount: number;
 };
 
+export type PendingGeneratedStoryboardSave = {
+    shots: ProjectShotReplacementInput[];
+    expectedShotIds: string[];
+    generatedBinding: {
+        taskId: string;
+        baseline: GeneratedBindingBaseline;
+        rowIndices: number[];
+    };
+    issues: Array<BindingIssue & { rowIndex: number }>;
+};
+
+const pendingGeneratedStoryboardSaves = new Map<string, PendingGeneratedStoryboardSave>();
+
+function pendingGeneratedStoryboardKey(projectId: string, unitId: string, taskId: string) {
+    return `${projectId}::${unitId}::${taskId}`;
+}
+
+function isTerminalGeneratedSaveError(error: unknown): boolean {
+    if (!(error instanceof ApiError)) return false;
+    const status = error.status ?? error.code;
+    return status === 400 || status === 404 || status === 409 || status === 422;
+}
+
+export function clearPendingGeneratedStoryboardSave(projectId?: string, unitId?: string, taskId?: string) {
+    if (!projectId) {
+        pendingGeneratedStoryboardSaves.clear();
+        return;
+    }
+    if (unitId && taskId) {
+        pendingGeneratedStoryboardSaves.delete(pendingGeneratedStoryboardKey(projectId, unitId, taskId));
+        return;
+    }
+    const prefix = unitId ? `${projectId}::${unitId}::` : `${projectId}::`;
+    for (const key of pendingGeneratedStoryboardSaves.keys()) {
+        if (key.startsWith(prefix)) pendingGeneratedStoryboardSaves.delete(key);
+    }
+}
+
+export async function saveGeneratedChapterStoryboard(detail: ProjectDetail, unitId: string, result: { taskId: string; rows: StoryboardRow[] }, confirmIssues?: (issues: Array<BindingIssue & { rowIndex: number }>, resolution: GeneratedBindingResolution) => Promise<boolean | string[][]>, beforeReplace?: () => void) {
+    const pendingKey = pendingGeneratedStoryboardKey(detail.project.id, unitId, result.taskId);
+    let pending = pendingGeneratedStoryboardSaves.get(pendingKey);
+    if (!pending) {
+        const resolution = await resolveGeneratedProjectUnitShotAssetBindings(detail.project.id, unitId, { taskId: result.taskId });
+        if (resolution.taskId !== result.taskId || resolution.rows.length !== result.rows.length || resolution.rows.some((row, index) => row.rowIndex !== index)) throw new Error("生成任务行与解析结果不一致，请重新载入任务");
+        const issues = resolution.rows.flatMap((row) => row.issues.map((issue) => ({ ...issue, rowIndex: row.rowIndex })));
+        const overCapacity = resolution.rows.some((row) => new Set(row.assetVersionIds).size > 6);
+        const selection = (issues.length || overCapacity) && confirmIssues ? await confirmIssues(issues, resolution) : true;
+        if (!selection) throw new DOMException("已保留原分镜", "AbortError");
+        if (overCapacity && !Array.isArray(selection)) throw new Error("请为超限镜头明确选择最多 6 个版本");
+        if (Array.isArray(selection)) {
+            if (selection.length !== resolution.rows.length || selection.some((ids, index) => new Set(ids).size > 6 || ids.some((id) => !resolution.rows[index].assetVersionIds.includes(id)))) throw new Error("分镜资产选择无效");
+            resolution.rows = resolution.rows.map((row, index) => ({ ...row, assetVersionIds: Array.from(new Set(selection[index])) }));
+        }
+        if (issues.some((issue) => issue.kind !== "missing_image") && !confirmIssues) throw new Error(issues.map((issue) => `镜头 ${issue.rowIndex + 1}：${issue.message}`).join("\n"));
+        const shots = storyboardRowsToProjectShots(result.rows, detail, resolution);
+        const expectedShotIds = detail.shots.filter((shot) => shot.unitId === unitId).map((shot) => shot.id);
+        pending = {
+            shots,
+            expectedShotIds,
+            generatedBinding: {
+                taskId: result.taskId,
+                baseline: resolution.baseline,
+                rowIndices: resolution.rows.map((row) => row.rowIndex),
+            },
+            issues,
+        };
+        pendingGeneratedStoryboardSaves.set(pendingKey, pending);
+    }
+    try {
+        beforeReplace?.();
+        await replaceProjectUnitShots(detail.project.id, unitId, pending.shots, pending.expectedShotIds, pending.generatedBinding);
+        pendingGeneratedStoryboardSaves.delete(pendingKey);
+        return { shotCount: pending.shots.length, issues: pending.issues };
+    } catch (error) {
+        if (isTerminalGeneratedSaveError(error)) {
+            pendingGeneratedStoryboardSaves.delete(pendingKey);
+        }
+        throw error;
+    }
+}
+
+// Browser entry for every chapter replacement, including automatic recovery on the chapters page.
+export async function saveGeneratedChapterStoryboardWithBatchGuard(
+    detail: ProjectDetail,
+    unitId: string,
+    result: Parameters<typeof saveGeneratedChapterStoryboard>[2],
+    confirmIssues?: Parameters<typeof saveGeneratedChapterStoryboard>[3],
+    assertCallerCurrent?: () => void,
+) {
+    const ownerScope = getActiveUserScope();
+    const assertCurrent = () => {
+        const session = useUserStore.getState();
+        if (!session.hydrated || !session.user?.id || session.user.id !== ownerScope || getActiveUserScope() !== ownerScope) {
+            throw new DOMException("Aborted", "AbortError");
+        }
+        assertCallerCurrent?.();
+    };
+    assertCurrent();
+    const identity = { ownerScope, projectId: detail.project.id, unitId };
+    const execute = async () => {
+        const log = await resolveBatchStorage(identity).read();
+        assertCurrent();
+        if (batchHasUnsettledItems(log)) throw new Error("当前章节正在参与批量任务，请先完成核对或停止剩余提交后再替换");
+        return saveGeneratedChapterStoryboard(detail, unitId, result, confirmIssues, assertCurrent);
+    };
+    return typeof navigator !== "undefined" && typeof navigator.locks?.request === "function"
+        ? withBatchChapterLock(identity, execute)
+        : execute();
+}
+
 export function chapterStoryboardCharacters(detail: ProjectDetail, unitId?: string): ChapterStoryboardCharacter[] {
     const confirmed = detail.assets.flatMap((asset): ChapterStoryboardCharacter[] => {
         const card = asset.character;
@@ -56,25 +170,24 @@ export function chapterStoryboardCharacters(detail: ProjectDetail, unitId?: stri
     return [...confirmed, ...pending];
 }
 
-export function chapterStoryboardAssets(detail: ProjectDetail): ChapterStoryboardAsset[] {
+export function chapterStoryboardAssets(detail: Pick<ProjectDetail, "assets">): ChapterStoryboardAsset[] {
     return detail.assets.flatMap((asset): ChapterStoryboardAsset[] => {
         const type = storyboardAssetType(asset.mediaType, asset.category);
-        if (!type || (type !== "character" && !asset.primaryVersionId)) return [];
+        if (!type) return [];
         const characterVersionId = asset.character?.versionId;
-        if (type === "character" && !characterVersionId) return [];
         return [{
             id: asset.id,
             title: asset.title,
             type,
             category: asset.category || undefined,
             tags: [],
-            prompt: assetPrompt(asset.previewText, asset.character?.definition, asset.title),
+            prompt: assetPrompt(asset.previewText, asset.character?.definition || asset.visual?.definition, asset.title),
             ...(type === "character" ? { characterAssetId: asset.id, characterVersionId } : {}),
         }];
-    }).slice(0, 60);
+    });
 }
 
-export function storyboardRowsToProjectShots(rows: StoryboardRow[], detail?: ProjectDetail): ProjectShotReplacementInput[] {
+export function storyboardRowsToProjectShots(rows: StoryboardRow[], detail?: ProjectDetail, resolution?: GeneratedBindingResolution): ProjectShotReplacementInput[] {
     const versionByAssetId = new Map((detail?.assets || []).flatMap((asset) => asset.primaryVersionId ? [[asset.id, asset.primaryVersionId] as const] : []));
     const mentionReferenceByAssetId = new Map((detail?.assets || []).map((asset) => [asset.id, {
         assetId: asset.id,
@@ -86,7 +199,8 @@ export function storyboardRowsToProjectShots(rows: StoryboardRow[], detail?: Pro
         const shotNumber = index + 1;
         const description = row.plotDescription.trim() || `镜头 ${shotNumber}`;
         const durationMs = Math.max(1000, Math.round((Number(row.durationSeconds) || 1) * 1000));
-        const mentionReferences = storyboardRowAssetIds(row).flatMap((assetId) => {
+        const resolvedRow = resolution?.rows.find((item) => item.rowIndex === index);
+        const mentionReferences = resolvedRow ? resolvedRow.candidates.filter((candidate) => !candidate.missingImage && candidate.assetVersionId && resolvedRow.assetVersionIds.includes(candidate.assetVersionId)).map((candidate) => ({ assetId: candidate.assetId, kind: candidate.category === "character" ? "character" as const : "image" as const, label: candidate.name, title: candidate.name })) : storyboardRowAssetIds(row).flatMap((assetId) => {
             const reference = mentionReferenceByAssetId.get(assetId);
             return reference ? [reference] : [];
         });
@@ -94,7 +208,7 @@ export function storyboardRowsToProjectShots(rows: StoryboardRow[], detail?: Pro
             title: formatShotOrdinal(index),
             description,
             durationMs,
-            assetVersionIds: storyboardRowAssetVersionIds(row, versionByAssetId),
+            assetVersionIds: resolution ? (resolvedRow?.assetVersionIds || []) : storyboardRowAssetVersionIds(row, versionByAssetId),
             revision: {
                 plotDescription: description,
                 action: joinStoryboardAction(row),
@@ -142,6 +256,7 @@ function storyboardRowAssetIds(row: StoryboardRow) {
 function storyboardAssetType(mediaType: string, category: string): ChapterStoryboardAsset["type"] | null {
     if (category === "character") return "character";
     if (mediaType === "image" || mediaType === "video" || mediaType === "audio") return mediaType;
+    if (category === "environment" || category === "prop") return "image";
     return null;
 }
 

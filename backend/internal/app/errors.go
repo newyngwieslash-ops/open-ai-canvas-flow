@@ -40,6 +40,26 @@ func Forbidden(message string) *AuthError {
 	return kernel.Forbidden(message)
 }
 
+func StoryboardAssetBindingInvalidRequest(message string) *AppError {
+	return kernel.StoryboardAssetBindingInvalidRequest(message)
+}
+
+func StoryboardAssetBindingInvalidReference(message string) *AppError {
+	return kernel.StoryboardAssetBindingInvalidReference(message)
+}
+
+func StoryboardAssetBindingCapacityExceeded(message string) *AppError {
+	return kernel.StoryboardAssetBindingCapacityExceeded(message)
+}
+
+func StoryboardAssetBindingConflict(message string) *AppError {
+	return kernel.StoryboardAssetBindingConflict(message)
+}
+
+func StoryboardAssetBindingBusy(message string) *AppError {
+	return kernel.StoryboardAssetBindingBusy(message)
+}
+
 // ModelErrorCode 定义模型相关的错误码
 type ModelErrorCode string
 

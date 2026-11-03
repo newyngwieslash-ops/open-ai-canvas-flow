@@ -253,20 +253,43 @@ func TestApplyCanvasOperationsAcceptsConvergedNodeFields(t *testing.T) {
 		{"asset", "assetId", `null`, `"asset-1"`},
 		{"height", "naturalHeight", `null`, `941`},
 		{"status", "taskStatus", `"running"`, `"succeeded"`},
+		// errorDetails 的收敛场景是"观察者已把错误清空"（写入 null 删除）：
+		// 任务已成功，服务端当前值已是 null，本地要写的也是 null。
 		{"removed error", "errorDetails", `"old error"`, `null`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			payload := map[string]json.RawMessage{"nodes": json.RawMessage(`[{"id":"ep1-shot01-board9","metadata":{"` + tc.field + `":` + tc.after + `}}]`), "connections": json.RawMessage(`[]`)}
+			// 服务端当前值已是观察者写入后的结果（after 值已存在）。
+			serverCurrent := tc.after
+			if tc.name == "removed error" {
+				serverCurrent = ``
+			}
+			payload := map[string]json.RawMessage{"nodes": json.RawMessage(`[{"id":"ep1-shot01-board9","metadata":{"taskId":"task-1","taskStatus":"succeeded"` + (func() string {
+				if tc.name == "removed error" {
+					return ``
+				}
+				return `,"` + tc.field + `":` + tc.after
+			})() + `}}]`), "connections": json.RawMessage(`[]`)}
+			_ = serverCurrent
 			path := "metadata." + tc.field
+			// 上游任务时间栅栏语义：同值收敛仅在请求携带可合并的任务时间戳时生效。
+			// Before 中未回写的任务字段须与服务端实际值一致（浏览器订阅已看到最新任务状态）。
 			op := CanvasOperation{Type: "patch_node", ID: "ep1-shot01-board9",
-				Patch:  map[string]json.RawMessage{path: json.RawMessage(tc.after), "title": json.RawMessage(`"local edit"`)},
-				Before: map[string]json.RawMessage{path: json.RawMessage(tc.before), "title": json.RawMessage(`null`)},
+				Patch:  map[string]json.RawMessage{path: json.RawMessage(tc.after), "title": json.RawMessage(`"local edit"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`)},
+				Before: map[string]json.RawMessage{path: json.RawMessage(tc.before), "title": json.RawMessage(`null`), "metadata.taskId": json.RawMessage(`"task-1"`), "metadata.taskStatus": json.RawMessage(`"succeeded"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`)},
 			}
 			if err := applyCanvasOperations(payload, []CanvasOperation{op}); err != nil {
 				t.Fatalf("identical task result blocked local edit: %v", err)
 			}
 			node := orderedCanvasObjects(rawJSON(payload["nodes"]))[0]
-			if node["title"] != "local edit" || !canvasExpectedValueMatches(node["metadata"].(map[string]any)[tc.field], tc.after != "null", json.RawMessage(tc.after)) {
+			metadata := node["metadata"].(map[string]any)
+			if node["title"] != "local edit" {
+				t.Fatalf("local edit lost: %s", payload["nodes"])
+			}
+			if tc.after == "null" {
+				if _, exists := metadata[tc.field]; exists {
+					t.Fatalf("null deletion not applied: %s", payload["nodes"])
+				}
+			} else if !canvasExpectedValueMatches(metadata[tc.field], true, json.RawMessage(tc.after)) {
 				t.Fatalf("unexpected merged node: %s", payload["nodes"])
 			}
 			// A condition that is not being written remains a strict guard.
@@ -275,30 +298,6 @@ func TestApplyCanvasOperationsAcceptsConvergedNodeFields(t *testing.T) {
 				t.Fatalf("task binding guard was bypassed: %v", err)
 			}
 		})
-	}
-}
-
-func TestApplyCanvasOperationsConvergedRequestKeepsReceiptIdentity(t *testing.T) {
-	svc := newCanvasOperationTestService(t)
-	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskStatus":"succeeded"}}],"connections":[]}`}); err != nil {
-		t.Fatal(err)
-	}
-	request := CanvasOperationsRequest{MutationID: "browser-task-result", Operations: []CanvasOperation{{
-		Type: "patch_node", ID: "node",
-		Patch:  map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"succeeded"`)},
-		Before: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"running"`)},
-	}}}
-	first, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
-	if err != nil || replay.Revision != first.Revision {
-		t.Fatalf("replay = %#v, error = %v; want revision %d", replay, err, first.Revision)
-	}
-	request.Operations[0].Patch["metadata.taskStatus"] = json.RawMessage(`"failed"`)
-	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err == nil {
-		t.Fatal("changed payload reused the successful mutation ID")
 	}
 }
 
@@ -323,6 +322,353 @@ func TestApplyCanvasOperationsIgnoresNodeUpdatedAtBase(t *testing.T) {
 	}, Before: map[string]json.RawMessage{"updatedAt": json.RawMessage(`"client-new"`), "metadata.title": json.RawMessage(`"旧"`)}}}}
 	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", stale); err == nil {
 		t.Fatal("stale business field accepted")
+	}
+}
+
+func TestApplyCanvasOperationsMergesSameTaskTimestampMonotonically(t *testing.T) {
+	t.Run("stale observer cannot roll back newer task time", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskUpdatedAt":"2026-04-01T00:00:02Z","taskStatus":"running","prompt":"original"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		stale := CanvasOperationsRequest{MutationID: "task-timestamp-stale", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`)}, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:00Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", stale); err != nil {
+			t.Fatalf("stale same-task timestamp rejected: %v", err)
+		}
+		project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Nodes []struct {
+				Metadata map[string]any `json:"metadata"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(project.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload.Nodes[0].Metadata["taskUpdatedAt"]; got != "2026-04-01T00:00:02Z" {
+			t.Fatalf("taskUpdatedAt regressed: got %v", got)
+		}
+	})
+
+	t.Run("newer observer advances task time", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskUpdatedAt":"2026-04-01T00:00:02Z"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		request := CanvasOperationsRequest{MutationID: "task-timestamp-newer", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:03Z"`)}, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+			t.Fatalf("newer same-task timestamp rejected: %v", err)
+		}
+		project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Nodes []struct {
+				Metadata map[string]any `json:"metadata"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(project.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload.Nodes[0].Metadata["taskUpdatedAt"]; got != "2026-04-01T00:00:03Z" {
+			t.Fatalf("newer taskUpdatedAt not applied: got %v", got)
+		}
+	})
+}
+
+func TestApplyCanvasOperationsTaskTimestampFenceDoesNotRelaxOtherConflicts(t *testing.T) {
+	t.Run("rebound task rejected", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-2","taskUpdatedAt":"2026-04-01T00:00:02Z"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		request := CanvasOperationsRequest{MutationID: "old-task-update", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:03Z"`)}, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err == nil {
+			t.Fatal("old task timestamp crossed the task identity fence")
+		}
+	})
+
+	t.Run("other stale field still rejected atomically", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskUpdatedAt":"2026-04-01T00:00:02Z","prompt":"new prompt"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		request := CanvasOperationsRequest{
+			MutationID: "mixed-task-update",
+			Operations: []CanvasOperation{{
+				Type: "patch_node",
+				ID:   "node",
+				Patch: map[string]json.RawMessage{
+					"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:03Z"`),
+					"metadata.prompt":        json.RawMessage(`"stale prompt"`),
+				},
+				Before: map[string]json.RawMessage{
+					"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`),
+					"metadata.taskId":        json.RawMessage(`"task-1"`),
+					"metadata.prompt":        json.RawMessage(`"old prompt"`),
+				},
+			}},
+		}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err == nil {
+			t.Fatal("stale prompt conflict was hidden by timestamp merge")
+		}
+		project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Nodes []struct {
+				Metadata map[string]any `json:"metadata"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(project.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload.Nodes[0].Metadata["taskUpdatedAt"]; got != "2026-04-01T00:00:02Z" {
+			t.Fatalf("failed batch partially changed timestamp: got %v", got)
+		}
+	})
+}
+
+// 任务观察者（浏览器任务订阅、Agent 生成回写）与用户编辑并发写同一节点：
+// 观察者先把 taskStatus running→succeeded 落库，用户编辑携带旧基线 running 重放。
+// 同一任务身份下，操作要写的值与服务端当前值一致（同值收敛）时必须放行，
+// 否则 Agent 提交前的强制保存会以 409 永久阻塞用户请求。
+func TestApplyCanvasOperationsAcceptsSameTaskConvergedFieldsWithoutTimestamp(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{
+		ID: "canvas", UserID: "user",
+		PayloadJSON: `{"nodes":[{"id":"img-fig1-ermaduo-v2","title":"旧标题","metadata":{"taskId":"task-1","taskStatus":"succeeded"}}],"connections":[]}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "local-edit-after-observer", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"新标题"`),
+			"metadata.taskStatus": json.RawMessage(`"succeeded"`),
+		},
+		Before: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"旧标题"`),
+			"metadata.taskId":    json.RawMessage(`"task-1"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("converged taskStatus blocked local edit: %v", err)
+	}
+	project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Nodes []struct {
+			Title    string         `json:"title"`
+			Metadata map[string]any `json:"metadata"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(project.PayloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Nodes[0].Title != "新标题" || payload.Nodes[0].Metadata["taskStatus"] != "succeeded" {
+		t.Fatalf("unexpected merged node: %s", project.PayloadJSON)
+	}
+
+	// 收敛只放行"写什么收敛什么"：不写的字段基线不匹配仍是严格拒绝。
+	strictGuard := CanvasOperationsRequest{MutationID: "read-guard-still-strict", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"title": json.RawMessage(`"再改"`)},
+		Before: map[string]json.RawMessage{
+			"title":              json.RawMessage(`"新标题"`),
+			"metadata.taskId":    json.RawMessage(`"task-1"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", strictGuard); err == nil {
+		t.Fatal("unwritten taskStatus baseline bypassed")
+	} else {
+		var appError *kernel.AppError
+		if !errors.As(err, &appError) || appError.Status != http.StatusConflict || appError.Reason != "canvas_field_conflict" {
+			t.Fatalf("unwritten taskStatus baseline error = %v, want canvas_field_conflict", err)
+		}
+	}
+
+	// 任务身份不匹配（节点已绑定别的任务）时，旧任务的观察者写入仍必须拒绝。
+	rebound := CanvasOperationsRequest{MutationID: "rebound-task-converge", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{
+			"title":               json.RawMessage(`"覆盖"`),
+			"metadata.taskStatus": json.RawMessage(`"succeeded"`),
+		},
+		Before: map[string]json.RawMessage{
+			"title":               json.RawMessage(`"新标题"`),
+			"metadata.taskId":     json.RawMessage(`"task-previous"`),
+			"metadata.taskStatus": json.RawMessage(`"running"`),
+		},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", rebound); err == nil {
+		t.Fatal("convergence crossed the task identity fence")
+	} else {
+		var appError *kernel.AppError
+		if !errors.As(err, &appError) || appError.Status != http.StatusConflict || appError.Reason != "canvas_field_conflict" {
+			t.Fatalf("task identity fence error = %v, want canvas_field_conflict", err)
+		}
+	}
+}
+
+func TestApplyCanvasOperationsAcceptsStaleTaskStatusWhenDesiredValueAlreadyApplied(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"img-fig1-ermaduo-v2","title":"旧标题","metadata":{"taskId":"task-1","taskStatus":"failed"}}],"connections":[]}`}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "legacy-task-status", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"title": json.RawMessage(`"新标题"`), "metadata.taskStatus": json.RawMessage(`"failed"`)},
+		Before: map[string]json.RawMessage{"title": json.RawMessage(`"旧标题"`), "metadata.taskStatus": json.RawMessage(`"running"`)},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("already-applied task status blocked local edit: %v", err)
+	}
+	different := CanvasOperationsRequest{MutationID: "different-task-status", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "img-fig1-ermaduo-v2",
+		Patch: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"cancelled"`)},
+		Before: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"running"`)},
+	}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", different); err == nil {
+		t.Fatal("different task status bypassed CAS")
+	}
+}
+
+func TestApplyCanvasOperationsTaskTimestampFenceRequiresMergeablePatch(t *testing.T) {
+	t.Run("same-task null deletion uses strict CAS", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskUpdatedAt":"2026-04-01T00:00:02Z"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		matching := CanvasOperationsRequest{MutationID: "delete-task-time", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`null`)}, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", matching); err != nil {
+			t.Fatalf("matching null deletion rejected: %v", err)
+		}
+		mismatch := CanvasOperationsRequest{MutationID: "delete-task-time-stale", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`null`)}, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+		if _, err := svc.ApplyUserCanvasOperations("user", "canvas", mismatch); err == nil {
+			t.Fatal("mismatched null deletion accepted")
+		}
+	})
+
+	t.Run("task rebind and whole metadata patch stay strict", func(t *testing.T) {
+		svc := newCanvasOperationTestService(t)
+		if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-2","taskUpdatedAt":"2026-04-01T00:00:02Z"}}],"connections":[]}`}); err != nil {
+			t.Fatal(err)
+		}
+		for name, patch := range map[string]map[string]json.RawMessage{
+			"rebind":         {"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:03Z"`), "metadata.taskId": json.RawMessage(`"task-2"`)},
+			"whole metadata": {"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:03Z"`), "metadata": json.RawMessage(`{"taskId":"task-2"}`)},
+		} {
+			t.Run(name, func(t *testing.T) {
+				request := CanvasOperationsRequest{MutationID: "strict-" + name, Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: patch, Before: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`), "metadata.taskId": json.RawMessage(`"task-1"`)}}}}
+				if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err == nil {
+					t.Fatal("strict task patch accepted across rebound identity")
+				}
+			})
+		}
+	})
+}
+
+func TestApplyCanvasOperationsConvergesSameTaskAlreadyAppliedFields(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskStatus":"succeeded","content":"done","taskUpdatedAt":"2026-04-01T00:00:03Z"}}],"connections":[]}`}); err != nil {
+		t.Fatal(err)
+	}
+	request := CanvasOperationsRequest{MutationID: "same-completion", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{
+		"metadata.taskStatus":    json.RawMessage(`"succeeded"`),
+		"metadata.content":       json.RawMessage(`"done"`),
+		"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`),
+	}, Before: map[string]json.RawMessage{
+		"metadata.taskId":        json.RawMessage(`"task-1"`),
+		"metadata.taskStatus":    json.RawMessage(`"queued"`),
+		"metadata.content":       json.RawMessage(`"pending"`),
+		"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`),
+	}}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err != nil {
+		t.Fatalf("same-task repeated completion rejected: %v", err)
+	}
+	project, err := svc.repo.CanvasProjectForUser("user", "canvas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(project.PayloadJSON, `"taskUpdatedAt":"2026-04-01T00:00:03Z"`) {
+		t.Fatalf("server task time regressed: %s", project.PayloadJSON)
+	}
+
+	for name, patch := range map[string]map[string]json.RawMessage{
+		"different content": {"metadata.content": json.RawMessage(`"other"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:04Z"`)},
+		"different prompt":  {"metadata.prompt": json.RawMessage(`"other"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:04Z"`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := request
+			bad.MutationID = "different-" + name
+			bad.Operations = []CanvasOperation{{Type: "patch_node", ID: "node", Patch: patch, Before: request.Operations[0].Before}}
+			if _, err := svc.ApplyUserCanvasOperations("user", "canvas", bad); err == nil {
+				t.Fatal("different desired value was accepted")
+			}
+		})
+	}
+}
+
+func TestApplyCanvasOperationsConvergedRequestKeepsReceiptIdentity(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskStatus":"succeeded","taskUpdatedAt":"2026-04-01T00:00:02Z"}}],"connections":[]}`}); err != nil {
+		t.Fatal(err)
+	}
+	// 上游任务时间栅栏语义：同值收敛请求须携带任务身份与可合并时间戳。
+	request := CanvasOperationsRequest{MutationID: "browser-task-result", Operations: []CanvasOperation{{
+		Type: "patch_node", ID: "node",
+		Patch:  map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"succeeded"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`)},
+		Before: map[string]json.RawMessage{"metadata.taskId": json.RawMessage(`"task-1"`), "metadata.taskStatus": json.RawMessage(`"running"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`)},
+	}}}
+	first, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := svc.ApplyUserCanvasOperations("user", "canvas", request)
+	if err != nil || replay.Revision != first.Revision {
+		t.Fatalf("replay = %#v, error = %v; want revision %d", replay, err, first.Revision)
+	}
+	request.Operations[0].Patch["metadata.taskStatus"] = json.RawMessage(`"failed"`)
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", request); err == nil {
+		t.Fatal("changed payload reused the successful mutation ID")
+	}
+}
+
+func TestApplyCanvasOperationsDoesNotRelaxTaskIdentityOrLegacyNoFence(t *testing.T) {
+	svc := newCanvasOperationTestService(t)
+	if err := svc.repo.Create(&model.CanvasProject{ID: "canvas", UserID: "user", PayloadJSON: `{"nodes":[{"id":"node","metadata":{"taskId":"task-1","taskStatus":"succeeded","content":"done","taskUpdatedAt":"2026-04-01T00:00:03Z"}}],"connections":[]}`}); err != nil {
+		t.Fatal(err)
+	}
+	beforeOnly := CanvasOperationsRequest{MutationID: "before-only-task-id", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`)}, Before: map[string]json.RawMessage{"metadata.taskId": json.RawMessage(`"task-1"`), "metadata.taskStatus": json.RawMessage(`"queued"`)}}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", beforeOnly); err == nil {
+		t.Fatal("before-only task identity patch was accepted")
+	}
+	noFence := CanvasOperationsRequest{MutationID: "legacy-no-fence", Operations: []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"succeeded"`), "metadata.content": json.RawMessage(`"done"`)}, Before: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"queued"`), "metadata.content": json.RawMessage(`"pending"`)}}}}
+	if _, err := svc.ApplyUserCanvasOperations("user", "canvas", noFence); err == nil {
+		t.Fatal("legacy no-fence request was accepted")
+	}
+	if _, err := svc.repo.CanvasMutationReceiptForUser("user", "canvas", "legacy-no-fence"); err == nil {
+		t.Fatal("failed legacy request created a receipt")
+	}
+	fixed := noFence
+	fixed.MutationID = "fixed-with-fence"
+	fixed.Operations = []CanvasOperation{{Type: "patch_node", ID: "node", Patch: map[string]json.RawMessage{"metadata.taskStatus": json.RawMessage(`"succeeded"`), "metadata.content": json.RawMessage(`"done"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:02Z"`)}, Before: map[string]json.RawMessage{"metadata.taskId": json.RawMessage(`"task-1"`), "metadata.taskStatus": json.RawMessage(`"queued"`), "metadata.content": json.RawMessage(`"pending"`), "metadata.taskUpdatedAt": json.RawMessage(`"2026-04-01T00:00:01Z"`)}}}
+	result, err := svc.ApplyUserCanvasOperations("user", "canvas", fixed)
+	if err != nil {
+		t.Fatalf("fenced retry rejected: %v", err)
+	}
+	replayed, err := svc.ApplyUserCanvasOperations("user", "canvas", fixed)
+	if err != nil || replayed.Revision != result.Revision {
+		t.Fatalf("fenced retry replay failed: result=%#v err=%v", replayed, err)
 	}
 }
 
@@ -461,7 +807,7 @@ func newCanvasOperationTestService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.CanvasProject{}, &model.CanvasSnapshot{}, &model.CanvasSnapshotResource{}, &model.CanvasMutationReceipt{}, &model.CanvasShare{}, &model.CanvasUnitLink{}, &model.Task{}, &model.Resource{}, &model.Asset{}); err != nil {
+	if err := db.AutoMigrate(&model.CanvasEditLease{}, &model.CanvasProject{}, &model.CanvasSnapshot{}, &model.CanvasSnapshotResource{}, &model.CanvasMutationReceipt{}, &model.CanvasShare{}, &model.CanvasUnitLink{}, &model.Task{}, &model.CloudAgentExecution{}, &model.Resource{}, &model.Asset{}); err != nil {
 		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()

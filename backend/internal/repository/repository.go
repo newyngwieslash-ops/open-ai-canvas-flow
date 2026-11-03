@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -34,7 +35,10 @@ var ErrProjectUnitShotsChanged = errors.New("镜头已被修改，请刷新后�
 var ErrCanvasRevisionConflict = errors.New("画布已被更新，请刷新后重试")
 
 type Repository struct {
-	db *gorm.DB
+	db                   *gorm.DB
+	canvasEditProofs     []model.CanvasEditProof
+	canvasChangeNotifier func(string, string)
+	canvasChanges        map[canvasChange]struct{}
 }
 
 type UserStorageUsage struct {
@@ -52,15 +56,24 @@ func New(db *gorm.DB) *Repository {
 }
 
 func (r *Repository) WithContext(ctx context.Context) *Repository {
-	return &Repository{db: r.db.WithContext(ctx)}
+	copy := *r
+	copy.db = r.db.WithContext(ctx)
+	return &copy
 }
 
 // Transaction exposes a repository scoped to one database transaction. Domain
 // services use it when a canvas mutation and its receipt must commit together.
 func (r *Repository) Transaction(fn func(*Repository) error) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		return fn(New(tx))
+	changes := make(map[canvasChange]struct{})
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(&Repository{db: tx, canvasEditProofs: r.canvasEditProofs, canvasChangeNotifier: r.canvasChangeNotifier, canvasChanges: changes})
 	})
+	if err == nil {
+		for change := range changes {
+			r.canvasChanged(change.userID, change.canvasID)
+		}
+	}
+	return err
 }
 
 func (r *Repository) Dialect() string {
@@ -125,11 +138,17 @@ func (r *Repository) UserStructuredStorageUsage(userID string) (UserStorageUsage
 
 // Create 是低层兼容入口；业务写路径应优先使用带领域约束的显式方法。
 func (r *Repository) Create(value any) error {
+	if rawReferenceBearing(reflect.ValueOf(value)) {
+		return r.rawReferenceWrite(value, false)
+	}
 	return r.db.Create(value).Error
 }
 
 // Save 是低层兼容入口；涉及状态机或权限边界的写入不得绕过显式事务方法。
 func (r *Repository) Save(value any) error {
+	if rawReferenceBearing(reflect.ValueOf(value)) {
+		return r.rawReferenceWrite(value, true)
+	}
 	return r.db.Save(value).Error
 }
 

@@ -259,7 +259,8 @@ function rewriteCanvasPromptAfterReferenceChange(prompt: string, previousReferen
     return value === prompt ? prompt : compactRemovedCanvasMentionPrompt(value);
 }
 
-export function applyCanvasConnectionPromptSync(previousNodes: CanvasNodeData[], previousConnections: CanvasConnection[], nextNodes: CanvasNodeData[], nextConnections: CanvasConnection[]) {
+export function applyCanvasConnectionPromptSync(previousNodes: CanvasNodeData[], previousConnections: CanvasConnection[], nextNodes: CanvasNodeData[], nextConnections: CanvasConnection[], options: { clearPromptTemplate?: boolean } = {}) {
+    nextNodes = detachRemovedBatchCellConnections(nextNodes, previousConnections, nextConnections);
     const previousMap = buildCanvasNodeMentionReferenceMap(previousNodes, previousConnections, nextNodes);
     const nextMap = buildCanvasNodeMentionReferenceMap(nextNodes, nextConnections, nextNodes);
     let changed = false;
@@ -268,7 +269,7 @@ export function applyCanvasConnectionPromptSync(previousNodes: CanvasNodeData[],
         const nextPrompt = rewriteCanvasPromptAfterReferenceChange(previousPrompt, previousMap.get(node.id) || [], nextMap.get(node.id) || []);
         if (nextPrompt === previousPrompt) return node;
         changed = true;
-        return writeCanvasNodePrompt(node, nextPrompt);
+        return writeCanvasNodePrompt(node, nextPrompt, options);
     });
     return changed ? mapped : nextNodes;
 }
@@ -357,12 +358,28 @@ export function buildAssetMentionReferences(assets: Asset[]): CanvasResourceRefe
     });
 }
 
+export function createCanvasResourceReferenceIndex(nodes: CanvasNodeData[], connections: CanvasConnection[]) {
+    const resolve = buildCanvasResourceInputResolver(nodes, connections);
+    const mentions = new Map<string, CanvasResourceReference[]>();
+    return {
+        mention(nodeId: string) {
+            const cached = mentions.get(nodeId);
+            if (cached) return cached;
+            const references = labelResourceNodes(resolve(nodeId), true);
+            mentions.set(nodeId, references);
+            return references;
+        },
+        resources(contextNodeId?: string | null, targetNodes?: CanvasNodeData[]) {
+            const contextNodes = contextNodeId ? resolve(contextNodeId, true) : [];
+            const sourceNodes = targetNodes ? uniqueCanvasNodes([...targetNodes, ...contextNodes]) : nodes;
+            const activeById = new Map(labelResourceNodes(contextNodes, true).map((ref) => [ref.nodeId, ref]));
+            return labelResourceNodes(sourceNodes.filter(isResourceNode), false).map((ref) => activeById.get(ref.nodeId) || ref);
+        },
+    };
+}
+
 export function buildCanvasResourceReferences(nodes: CanvasNodeData[], connections: CanvasConnection[], contextNodeId?: string | null, targetNodes?: CanvasNodeData[]) {
-    const contextNodes = contextNodeId ? getMentionResourceNodes(contextNodeId, nodes, connections) : [];
-    const sourceNodes = targetNodes ? uniqueCanvasNodes([...targetNodes, ...contextNodes]) : nodes;
-    const globalReferences = labelResourceNodes(sourceNodes.filter(isResourceNode), false);
-    const activeByNodeId = new Map(labelResourceNodes(contextNodes, true).map((reference) => [reference.nodeId, reference]));
-    return globalReferences.map((reference) => activeByNodeId.get(reference.nodeId) || reference);
+    return createCanvasResourceReferenceIndex(nodes, connections).resources(contextNodeId, targetNodes);
 }
 
 /** Agent 的 @ 菜单覆盖整个画布，而不是只覆盖可作为生成输入的资源节点。 */
@@ -409,8 +426,8 @@ export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNo
 }
 
 export function buildCanvasNodeMentionReferenceMap(nodes: CanvasNodeData[], connections: CanvasConnection[], targetNodes: CanvasNodeData[] = nodes) {
-    const resolve = buildCanvasResourceInputResolver(nodes, connections);
-    return new Map(targetNodes.map((node) => [node.id, labelResourceNodes(resolve(node.id), true)]));
+    const index = createCanvasResourceReferenceIndex(nodes, connections);
+    return new Map(targetNodes.map((node) => [node.id, index.mention(node.id)]));
 }
 
 /** 批次关系属于分组，不是媒体输入；展示与提交共用这一份输入顺序解析。 */
@@ -585,3 +602,4 @@ export function buildToolMentionReference(toolId: number, label: string, type: s
         mentionToken: canvasToolMentionToken(toolId, label, type, icon),
     };
 }
+import { detachRemovedBatchCellConnections } from "./canvas-batch-references";

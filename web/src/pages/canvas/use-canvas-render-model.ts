@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isAssetAvailableForReference } from "@/lib/asset-availability";
 
-import { buildNodeGenerationInputs, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
+import { buildNodeGenerationInputs } from "@/components/canvas/canvas-node-generation";
 import { isFrameNode } from "@/lib/canvas/canvas-frame";
 import { sameNodeSemanticData } from "@/lib/canvas/canvas-project-domain";
 import { canvasNodeRenderBudget, canvasNodeRenderPadding, CANVAS_MAX_RENDERED_CONNECTIONS } from "@/lib/canvas/canvas-render-budget";
-import { buildCanvasNodeMentionReferenceMap, buildCanvasResourceReferences, buildToolMentionReference, parseToolMentionTokens } from "@/lib/canvas/canvas-resource-references";
+import { buildToolMentionReference, createCanvasResourceReferenceIndex, parseToolMentionTokens, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { buildSkillMentionReferences } from "@/lib/canvas/canvas-skill-mentions";
 import { buildCanvasConnectionIndex, type CanvasIndexedConnection } from "@/lib/canvas/canvas-connection-index";
 import { retainCanvasLayoutNodes } from "@/lib/canvas/canvas-layout-snapshot";
@@ -255,7 +256,7 @@ export function useCanvasRenderModel({
         renderedNodeIdsRef.current = new Set(visibleNodes.map((node) => node.id));
     }, [visibleNodes]);
 
-    const imageAssets = useMemo(() => assets.filter((asset): asset is ImageAsset => asset.kind === "image" && asset.status !== "archived"), [assets]);
+    const imageAssets = useMemo(() => assets.filter((asset): asset is ImageAsset => asset.kind === "image" && isAssetAvailableForReference(asset)), [assets]);
     const semanticNodesRef = useRef(nodes);
     const semanticNodes = useMemo(() => {
         const previous = semanticNodesRef.current;
@@ -345,22 +346,22 @@ export function useCanvasRenderModel({
     }, [connectionSpatialIndex, dragPreview, nodeById, renderBounds]);
 
     const configInputsById = useMemo(() => {
-        const map = new Map<string, NodeGenerationInput[]>();
-        const configNodeIds = new Set<string>();
-        visibleNodes.forEach((node) => {
-            if (node.type === CanvasNodeType.Config) configNodeIds.add(node.id);
-        });
-        selectedNodeIds.forEach((nodeId) => {
-            if (nodeById.get(nodeId)?.type === CanvasNodeType.Config) configNodeIds.add(nodeId);
-        });
-        if (dialogNodeId && nodeById.get(dialogNodeId)?.type === CanvasNodeType.Config) configNodeIds.add(dialogNodeId);
-        configNodeIds.forEach((nodeId) => map.set(nodeId, buildNodeGenerationInputs(nodeId, semanticNodes, connections)));
-        return map;
-    }, [connections, dialogNodeId, nodeById, selectedNodeIds, semanticNodes, visibleNodes]);
+        const cache = new Map<string, ReturnType<typeof buildNodeGenerationInputs>>();
+        return {
+            get(nodeId: string) {
+                const cached = cache.get(nodeId);
+                if (cached) return cached;
+                const inputs = buildNodeGenerationInputs(nodeId, semanticNodes, connections);
+                cache.set(nodeId, inputs);
+                return inputs;
+            },
+        };
+    }, [semanticNodes, connections]);
     const activePrevisNode = useMemo(() => semanticNodes.find((node) => node.id === previsNodeId) || null, [previsNodeId, semanticNodes]);
     const activeStylePresetId = useMemo(() => semanticNodes.find((node) => node.metadata?.workflowKind === "styleboard")?.metadata?.stylePresetId, [semanticNodes]);
     const activeScriptNode = useMemo(() => semanticNodes.find((node) => node.id === scriptEditorNodeId && node.type === CanvasNodeType.Script) || null, [scriptEditorNodeId, semanticNodes]);
     const activePrevisScene = useMemo(() => previsScenes?.find((scene) => scene.id === activePrevisNode?.metadata?.previsSceneId) || null, [activePrevisNode?.metadata?.previsSceneId, previsScenes]);
+    const referenceIndex = useMemo(() => createCanvasResourceReferenceIndex(semanticNodes, connections), [semanticNodes, connections]);
     const resourceReferenceTargetNodes = useMemo(() => {
         const targetNodes = [...visibleNodes];
         const activeId = dialogNodeId || activeNodeId;
@@ -371,10 +372,21 @@ export function useCanvasRenderModel({
         return targetNodes;
     }, [activeNodeId, dialogNodeId, nodeById, visibleNodes]);
     const canvasResourceReferences = useMemo(
-        () => buildCanvasResourceReferences(semanticNodes, connections, dialogNodeId || activeNodeId, resourceReferenceTargetNodes),
-        [activeNodeId, connections, dialogNodeId, resourceReferenceTargetNodes, semanticNodes],
+        () => referenceIndex.resources(dialogNodeId || activeNodeId, resourceReferenceTargetNodes),
+        [activeNodeId, dialogNodeId, referenceIndex, resourceReferenceTargetNodes],
     );
-    const resourceReferenceByNodeId = useMemo(() => new Map(canvasResourceReferences.map((reference) => [reference.nodeId, reference])), [canvasResourceReferences]);
+    const resourceReferenceCacheRef = useRef(new Map<string, CanvasResourceReference>());
+    const resourceReferenceByNodeId = useMemo(() => {
+        const previous = resourceReferenceCacheRef.current;
+        const result = new Map(canvasResourceReferences.map((reference) => {
+            const old = previous.get(reference.nodeId);
+            const unchanged = old && Object.keys(old).length === Object.keys(reference).length &&
+                Object.entries(reference).every(([key, value]) => old[key as keyof CanvasResourceReference] === value);
+            return [reference.nodeId, unchanged ? old : reference] as const;
+        }));
+        resourceReferenceCacheRef.current = result;
+        return result;
+    }, [canvasResourceReferences]);
     const skillMentionReferences = useMemo(() => buildSkillMentionReferences(addedSkills), [addedSkills]);
     const toolMentionReferencesByNodeId = useMemo(() => {
         const map = new Map<string, ReturnType<typeof buildToolMentionReference>[]>();
@@ -394,15 +406,18 @@ export function useCanvasRenderModel({
         }
         return map;
     }, [semanticNodes]);
-    const mentionReferencesByNodeId = useMemo(() => {
-        const map = buildCanvasNodeMentionReferenceMap(semanticNodes, connections, visibleNodes);
-        if (!skillMentionReferences.length && toolMentionReferencesByNodeId.size === 0) return map;
-        map.forEach((references, nodeId) => {
-            const extras = [...skillMentionReferences, ...(toolMentionReferencesByNodeId.get(nodeId) ?? [])];
-            if (extras.length) map.set(nodeId, [...references, ...extras]);
-        });
-        return map;
-    }, [connections, semanticNodes, skillMentionReferences, toolMentionReferencesByNodeId, visibleNodes]);
+    const getNodeMentionReferences = useMemo(() => {
+        const cache = new Map<string, CanvasResourceReference[]>();
+        return (nodeId: string) => {
+            const previous = cache.get(nodeId);
+            if (previous) return previous;
+            const base = referenceIndex.mention(nodeId);
+            const tools = toolMentionReferencesByNodeId.get(nodeId) || [];
+            const result = skillMentionReferences.length || tools.length ? [...base, ...skillMentionReferences, ...tools] : base;
+            cache.set(nodeId, result);
+            return result;
+        };
+    }, [referenceIndex, skillMentionReferences, toolMentionReferencesByNodeId]);
 
     return {
         activePrevisNode,
@@ -423,11 +438,11 @@ export function useCanvasRenderModel({
         cropNode,
         displayConnections,
         frameChildrenById,
+        getNodeMentionReferences,
         imageAssets,
         infoNode,
         maskEditNode,
         imageEditNode,
-        mentionReferencesByNodeId,
         nodeById,
         nodeRenderLODById,
         previewNode,

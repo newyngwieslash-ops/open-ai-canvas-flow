@@ -176,9 +176,11 @@ func (s *Service) maybeStartPlaybackTranscode(resource *model.Resource) {
 	}
 	// 不可转码场景（无 ffmpeg）落 none：状态为空会被前端当成 processing 无限轮询，
 	// 也会让启动回填每次重试探测。none 表示"无需转码"，按原生播放处理。
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		markPlaybackNone(s, resource)
-		return
+	if _, controlled := s.playbackControl.(controlledPlaybackLauncher); !controlled {
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			markPlaybackNone(s, resource)
+			return
+		}
 	}
 	src := filepath.Join(s.dataDir, "resources", filepath.FromSlash(resource.ObjectKey))
 	switch probeVideoCodec(src) {
@@ -188,12 +190,18 @@ func (s *Service) maybeStartPlaybackTranscode(resource *model.Resource) {
 		// （转码失败会落 failed，前端据此显示终止性错误，不再出现死循环）。
 		// 原子抢占（空/none → processing）：并发上传 + 回填、多实例同抢时
 		// 仅一个能成功置位，其余直接返回，避免重复转码。
-		claimed, err := s.repo.ClaimPlaybackTranscode(resource.ID)
-		if err != nil || !claimed {
+		var operation *model.ResourceProducerOperation
+		var err error
+		if launcher, ok := s.playbackControl.(controlledPlaybackLauncher); ok {
+			operation, err = launcher.claim(resource.ID)
+		} else {
+			operation, err = s.repo.ClaimPlaybackProduction(resource.ID)
+		}
+		if err != nil || operation == nil {
 			return
 		}
 		resource.PlaybackStatus = model.PlaybackStatusProcessing
-		go s.runPlaybackTranscode(resource.UserID, resource.ID, src)
+		go s.runPlaybackTranscode(resource.UserID, resource.ID, src, operation)
 	case videoCodecH264, videoCodecAV1, videoCodecVP9, "":
 		// H.264 浏览器可直接解码；AV1/VP9 现代浏览器可直接解码，均不需转码；
 		// 探针读不出编码（非 mp4 / moov 在尾部 / 加密容器）也无法处理 —— 均标 none，
@@ -215,40 +223,55 @@ func markPlaybackNone(s *Service, resource *model.Resource) {
 }
 
 // runPlaybackTranscode 转码本地原件到 playback/<id>.mp4 并回写状态（幂等按 id 重载）。
-func (s *Service) runPlaybackTranscode(userID string, resourceID string, src string) {
+func (s *Service) runPlaybackTranscode(userID string, resourceID string, src string, operations ...*model.ResourceProducerOperation) {
+	// Legacy processing rows have no transferable authority to start another
+	// writer. Only a newly committed claim supplies this invocation's token.
+	if len(operations) != 1 || operations[0] == nil {
+		return
+	}
+	operation := operations[0]
+	if operation.UserID != userID || operation.ResourceID != resourceID || operation.Variant != "playback" {
+		return
+	}
+	if operation.ControlOwner != "" {
+		launcher, ok := s.playbackControl.(controlledPlaybackLauncher)
+		if !ok {
+			return
+		}
+		err := launcher.run(operation, src, filepath.Join(s.dataDir, playbackDirName, resourceID+".mp4"))
+		if err != nil {
+			log.Printf("controlled playback remains unresolved: %v", err)
+			return
+		}
+		if err := s.completeControlledPlayback(operation); err != nil {
+			log.Printf("controlled playback publication remains unresolved: %v", err)
+		}
+		return
+	}
+	if err := s.repo.StartResourceProduction(operation); err != nil {
+		return
+	}
 	// 转码 goroutine 意外 panic 时把状态落 failed，避免 processing 卡死到下次重启。
 	defer func() {
 		if r := recover(); r != nil {
-			if res, err := s.repo.ResourceForUser(userID, resourceID); err == nil && res != nil {
-				res.PlaybackStatus = model.PlaybackStatusFailed
-				res.PlaybackError = clipText(fmt.Sprintf("转码 panic：%v", r), 1000)
-				_ = persistPlaybackResource(s.repo, res, "panic")
+			if err := s.repo.FinishPlaybackProduction(operation, false, model.PlaybackStatusFailed, clipText(fmt.Sprintf("转码 panic：%v", r), 1000)); err != nil {
+				log.Printf("playback physical outcome remains unresolved: %v", err)
 			}
 		}
 	}()
 	status := model.PlaybackStatusFailed
-	objectKey := ""
 	var errText string
 	dst := filepath.Join(s.dataDir, playbackDirName, resourceID+".mp4")
-	// 副本已存在且为 H.264（上次转码完成但回写随进程崩溃丢失）：直接置 ready 不重转。
-	if probeVideoCodec(dst) == videoCodecH264 {
-		status = model.PlaybackStatusReady
-		objectKey = resourceID + ".mp4"
-	} else if err := runH264Transcode(src, dst); err != nil {
+	physicalSettled, transcodeErr := runH264Transcode(src, dst)
+	if err := transcodeErr; err != nil {
 		errText = clipText(err.Error(), 1000)
 	} else {
 		status = model.PlaybackStatusReady
-		objectKey = resourceID + ".mp4"
 	}
-	res, err := s.repo.ResourceForUser(userID, resourceID)
-	if err != nil || res == nil {
-		log.Printf("playback transcode persist skipped: resource=%s user=%s lookup_error=%v", resourceID, userID, err)
+	if err := s.repo.FinishPlaybackProduction(operation, physicalSettled, status, errText); err != nil {
+		log.Printf("playback physical outcome remains unresolved: %v", err)
 		return
 	}
-	res.PlaybackStatus = status
-	res.PlaybackObjectKey = objectKey
-	res.PlaybackError = errText
-	_ = persistPlaybackResource(s.repo, res, "transcode_complete")
 }
 
 type resourcePersister interface {
@@ -268,16 +291,11 @@ func persistPlaybackResource(saver resourcePersister, resource *model.Resource, 
 }
 
 // runH264Transcode 用 ffmpeg 将任意输入转为 H.264/AAC mp4（faststart、yuv420p、偶数尺寸）。
-func runH264Transcode(src string, dst string) error {
+func runH264Transcode(src string, dst string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-		return err
+		return false, err
 	}
-	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-		"-i", src,
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-		"-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-		"-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
-		dst)
+	cmd := exec.Command("ffmpeg", h264TranscodeArgs(src, dst)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -285,9 +303,18 @@ func runH264Transcode(src string, dst string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("ffmpeg 转码失败：%s", clipText(msg, 800))
+		return true, fmt.Errorf("ffmpeg 转码失败：%s", clipText(msg, 800))
 	}
-	return nil
+	return true, nil
+}
+
+func h264TranscodeArgs(src, dst string) []string {
+	return []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+		"-i", src,
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+		"-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+		"-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+		dst}
 }
 
 func clipText(s string, max int) string {
@@ -327,6 +354,11 @@ func (s *Service) OpenResourcePlaybackRange(userID string, resourceID string) (*
 // 有界重判（见 PlaybackNoneVideos）。幂等：maybeStartPlaybackTranscode 先置
 // processing/none 再入库，重复扫描不会重复转码。
 func (s *Service) BackfillPlaybackTranscodes() {
+	if launcher, ok := s.playbackControl.(controlledPlaybackLauncher); ok {
+		if err := launcher.recover(s); err != nil {
+			log.Printf("controlled playback recovery retained unresolved rows: %v", err)
+		}
+	}
 	// 上次进程可能崩溃在转码中途（状态卡 processing），先重置为待判定。
 	_ = s.repo.ResetStuckPlaybackTranscodes()
 	for {

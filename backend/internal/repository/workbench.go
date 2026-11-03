@@ -29,20 +29,53 @@ func (r *Repository) WorkbenchTool(id string) (*model.WorkbenchTool, error) {
 }
 
 func (r *Repository) CreateWorkbenchTool(item *model.WorkbenchTool) error {
-	return r.db.Create(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireWorkbenchResources(item); err != nil {
+			return err
+		}
+		return repo.db.Create(item).Error
+	})
 }
-func (r *Repository) SaveWorkbenchTool(item *model.WorkbenchTool) error { return r.db.Save(item).Error }
+func (r *Repository) SaveWorkbenchTool(item *model.WorkbenchTool) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireWorkbenchResources(item); err != nil {
+			return err
+		}
+		return repo.db.Save(item).Error
+	})
+}
 
 func (r *Repository) CreateWorkbenchToolIfMissing(item *model.WorkbenchTool) error {
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireWorkbenchResources(item); err != nil {
+			return err
+		}
+		return repo.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+	})
 }
 
 func (r *Repository) CreateWorkbenchPresetIfMissing(item *model.WorkbenchPreset) error {
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources("", true, nil, item.DefaultParamsJSON); err != nil {
+			return err
+		}
+		return repo.db.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error
+	})
 }
 
 func (r *Repository) SaveWorkbenchToolWithPresets(item *model.WorkbenchTool, presets *[]model.WorkbenchPreset, create bool) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireWorkbenchResources(item); err != nil {
+			return err
+		}
+		if presets != nil {
+			for _, preset := range *presets {
+				if err := repo.requireReferenceResources("", true, nil, preset.DefaultParamsJSON); err != nil {
+					return err
+				}
+			}
+		}
+		tx := repo.db
 		var err error
 		if create {
 			err = tx.Create(item).Error
@@ -91,10 +124,20 @@ func (r *Repository) WorkbenchPreset(id string) (*model.WorkbenchPreset, error) 
 }
 
 func (r *Repository) CreateWorkbenchPreset(item *model.WorkbenchPreset) error {
-	return r.db.Create(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources("", true, nil, item.DefaultParamsJSON); err != nil {
+			return err
+		}
+		return repo.db.Create(item).Error
+	})
 }
 func (r *Repository) SaveWorkbenchPreset(item *model.WorkbenchPreset) error {
-	return r.db.Save(item).Error
+	return r.resourceLifecycleTransaction(func(repo *Repository) error {
+		if err := repo.requireReferenceResources("", true, nil, item.DefaultParamsJSON); err != nil {
+			return err
+		}
+		return repo.db.Save(item).Error
+	})
 }
 
 func (r *Repository) WorkbenchToolAndPreset(toolID, presetID string, publishedOnly bool) (*model.WorkbenchTool, *model.WorkbenchPreset, error) {

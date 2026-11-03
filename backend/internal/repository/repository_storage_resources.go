@@ -147,11 +147,50 @@ func (r *Repository) DailyUploadBytes(userID string, day string) (int64, error) 
 }
 
 func (r *Repository) CreateResource(resource *model.Resource) error {
-	return r.db.Create(resource).Error
+	return r.resourceLifecycleTransaction(func(tx *Repository) error {
+		if err := tx.requireResourceIdentityWritable(resource); err != nil {
+			return err
+		}
+		return tx.db.Create(resource).Error
+	})
 }
 
 func (r *Repository) SaveResource(resource *model.Resource) error {
-	return r.db.Save(resource).Error
+	return r.withStoryboardResourceWrite(nil, []string{resource.ID}, func(owned *Repository) error {
+		return owned.resourceLifecycleTransaction(func(tx *Repository) error { return tx.saveLiveResource(resource) })
+	})
+}
+
+func (r *Repository) saveLiveResource(resource *model.Resource) error {
+	if resource.Status == model.ResourceStatusDeleting || resource.Status == model.ResourceStatusDeleted {
+		return ErrResourceDeleting
+	}
+	current, err := r.ResourceForUser(resource.UserID, resource.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.requireResourcePublicationToken(current); err != nil {
+		return err
+	}
+	// Once reserved, playback identity and producer state remain producer-owned
+	// after ready/failed as well. A preclaim snapshot must never erase accounting.
+	if current.PlaybackObjectKey != "" && (resource.PlaybackStatus != current.PlaybackStatus || resource.PlaybackObjectKey != current.PlaybackObjectKey || resource.PlaybackError != current.PlaybackError || deletionIdentity(resource.Provider, resource.Endpoint, resource.Bucket, resource.ObjectKey) != deletionIdentity(current.Provider, current.Endpoint, current.Bucket, current.ObjectKey)) {
+		return ErrResourceDeleting
+	}
+	if current.PlaybackStatus == model.PlaybackStatusProcessing && (resource.PlaybackStatus != current.PlaybackStatus || resource.PlaybackObjectKey != current.PlaybackObjectKey || resource.Status != current.Status || deletionIdentity(resource.Provider, resource.Endpoint, resource.Bucket, resource.ObjectKey) != deletionIdentity(current.Provider, current.Endpoint, current.Bucket, current.ObjectKey)) {
+		return ErrResourceDeleting
+	}
+	if err := r.requireResourceIdentityWritable(resource); err != nil {
+		return err
+	}
+	result := r.db.Model(&model.Resource{}).Where("id = ? AND user_id = ? AND status NOT IN ?", resource.ID, resource.UserID, []model.ResourceStatus{model.ResourceStatusDeleting, model.ResourceStatusDeleted}).Select("*").Updates(resource)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrResourceDeleting
+	}
+	return nil
 }
 
 // UpdateResourceThumbnail only updates a still-ready row and cannot resurrect a deleted resource.
@@ -178,7 +217,7 @@ func (r *Repository) ClaimFailedResourceUpload(userID string, id string) (bool, 
 }
 
 func (r *Repository) DeleteResource(userID string, id string) error {
-	return r.db.Delete(&model.Resource{}, "id = ? AND user_id = ?", id, userID).Error
+	return r.DeleteAssetsAndResources(userID, nil, []string{id}, nil, false)
 }
 
 func (r *Repository) Resource(id string) (*model.Resource, error) {
@@ -236,22 +275,73 @@ func (r *Repository) PlaybackNoneVideos(limit int) ([]model.Resource, error) {
 // 多实例或多 goroutine 并发转同一资源时仅一个能成功置位，其余返回 false 直接放弃，
 // 避免重复转码同一份文件。
 func (r *Repository) ClaimPlaybackTranscode(id string) (bool, error) {
-	res := r.db.Model(&model.Resource{}).
-		Where("id = ? AND (playback_status = ? OR playback_status IS NULL OR playback_status = ?)",
-			id, "", model.PlaybackStatusNone).
-		Updates(map[string]any{"playback_status": model.PlaybackStatusProcessing, "playback_error": ""})
-	if res.Error != nil {
-		return false, res.Error
-	}
-	return res.RowsAffected > 0, nil
+	operation, err := r.ClaimPlaybackProduction(id)
+	return operation != nil, err
+}
+
+func (r *Repository) ClaimPlaybackProduction(id string) (*model.ResourceProducerOperation, error) {
+	var operation *model.ResourceProducerOperation
+	err := r.resourceLifecycleTransaction(func(tx *Repository) error {
+		row, err := tx.Resource(id)
+		if err != nil {
+			return err
+		}
+		if row.Status != model.ResourceStatusReady || (row.PlaybackStatus != "" && row.PlaybackStatus != model.PlaybackStatusNone) {
+			return nil
+		}
+		previousKey := row.PlaybackObjectKey
+		row.PlaybackObjectKey = id + ".mp4"
+		if err := tx.requireResourceIdentityWritable(row); err != nil {
+			return err
+		}
+		var aliases []model.Resource
+		if err := tx.db.Where("id <> ?", id).Find(&aliases).Error; err != nil {
+			return err
+		}
+		for _, alias := range aliases {
+			for _, variant := range []string{"original", "playback"} {
+				other := resourceProducerIdentity(&alias, variant)
+				if other.ObjectKey != "" && other.Identity == ResourcePhysicalIdentity(row, "playback") {
+					return ErrResourceDeleting
+				}
+			}
+		}
+		result := tx.db.Model(&model.Resource{}).Where("id = ? AND status = ? AND (playback_status = ? OR playback_status IS NULL OR playback_status = ?)", id, model.ResourceStatusReady, "", model.PlaybackStatusNone).
+			Updates(map[string]any{"playback_status": model.PlaybackStatusProcessing, "playback_error": "", "playback_object_key": row.PlaybackObjectKey})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		entry := resourceProducerIdentity(row, "playback")
+		count, err := tx.checkResourceProductionAdmission(&entry)
+		if err != nil {
+			return err
+		}
+		if count == 0 && previousKey != "" {
+			legacy := entry
+			legacy.ID, legacy.PhysicalState, legacy.Proof = deletionID(), "unknown", "legacy-untracked"
+			if err := tx.db.Create(&legacy).Error; err != nil {
+				return err
+			}
+		}
+		entry.ID, entry.PhysicalState = deletionID(), "reserved"
+		if err := tx.db.Create(&entry).Error; err != nil {
+			return err
+		}
+		operation = &entry
+		return nil
+	})
+	return operation, err
 }
 
 // ResetStuckPlaybackTranscodes 服务重启时把卡在 processing 的转码记录重置回待判定
 // （进程崩溃后转码 goroutine 随进程消亡，状态永远停在 processing）。
 func (r *Repository) ResetStuckPlaybackTranscodes() error {
-	return r.db.Model(&model.Resource{}).
-		Where("playback_status = ?", model.PlaybackStatusProcessing).
-		Updates(map[string]any{"playback_status": "", "playback_error": ""}).Error
+	// A different process may still be writing. Without an owned producer lease,
+	// startup cannot prove quiescence and must not release this deletion fence.
+	return nil
 }
 
 func (r *Repository) ResourceCleanupCandidates(incompleteBefore time.Time, readyBefore time.Time, limit int) ([]model.Resource, error) {

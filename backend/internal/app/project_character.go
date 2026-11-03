@@ -9,13 +9,18 @@ import (
 	"time"
 
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
 
 type CreateProjectCharacterRequest struct {
-	Name       string         `json:"name"`
-	Definition map[string]any `json:"definition"`
+	Name            string                  `json:"name"`
+	Definition      map[string]any          `json:"definition"`
+	ReferenceImages []ProjectReferenceImage `json:"referenceImages,omitempty"`
+	ImageResourceID string                  `json:"imageResourceId,omitempty"`
+	ImageRole       string                  `json:"imageRole,omitempty"`
+	FolderID        *string                 `json:"folderId,omitempty"`
 }
 
 type CreateCharacterRequest struct {
@@ -33,8 +38,9 @@ type CharacterAssetSummary struct {
 }
 
 type UpdateProjectCharacterRequest struct {
-	Name       string         `json:"name"`
-	Definition map[string]any `json:"definition"`
+	ExpectedVersionID string         `json:"expectedVersionId,omitempty"`
+	Name              string         `json:"name"`
+	Definition        map[string]any `json:"definition"`
 }
 
 type CharacterRepresentationInput struct {
@@ -44,7 +50,8 @@ type CharacterRepresentationInput struct {
 }
 
 type ReplaceCharacterRepresentationsRequest struct {
-	Representations []CharacterRepresentationInput `json:"representations"`
+	ExpectedVersionID string                         `json:"expectedVersionId,omitempty"`
+	Representations   []CharacterRepresentationInput `json:"representations"`
 }
 
 type BindCharacterVoiceRequest struct {
@@ -195,6 +202,11 @@ func (s *Service) CreateCharacter(userID string, req CreateCharacterRequest) (Ch
 	if err != nil {
 		return CharacterAssetSummary{}, err
 	}
+	protectedDefinition, err := preserveReferenceDefinition("{}", string(definition))
+	if err != nil {
+		return CharacterAssetSummary{}, err
+	}
+	definition = json.RawMessage(protectedDefinition)
 	now := time.Now()
 	assetID, versionID := newID(), newID()
 	payload, err := characterAssetPayload(assetID, versionID, name, definition, now, now)
@@ -237,6 +249,9 @@ func (s *Service) UpdateCharacter(userID string, assetID string, req UpdateProje
 	if err != nil {
 		return CharacterAssetSummary{}, err
 	}
+	if req.ExpectedVersionID != "" && req.ExpectedVersionID != asset.PrimaryVersionID {
+		return CharacterAssetSummary{}, projectAssetVersionConflict()
+	}
 	if _, err := s.createNextCharacterVersion("", asset, name, string(definition), nil, nil, false); err != nil {
 		return CharacterAssetSummary{}, err
 	}
@@ -251,6 +266,9 @@ func (s *Service) ReplaceCharacterRepresentations(userID string, assetID string,
 	representations, err := s.characterRepresentationsForInputs(userID, req.Representations, newID(), time.Now())
 	if err != nil {
 		return CharacterAssetSummary{}, err
+	}
+	if req.ExpectedVersionID != "" && req.ExpectedVersionID != asset.PrimaryVersionID {
+		return CharacterAssetSummary{}, projectAssetVersionConflict()
 	}
 	if _, err := s.createNextCharacterVersion("", asset, asset.Title, "", representations, nil, false); err != nil {
 		return CharacterAssetSummary{}, err
@@ -290,39 +308,11 @@ func (s *Service) UnbindCharacterVoice(userID string, assetID string) (Character
 	return s.Character(userID, asset.ID)
 }
 func (s *Service) CreateProjectCharacter(userID string, projectID string, req CreateProjectCharacterRequest) (ProjectCharacterDetail, error) {
-	if _, err := s.repo.ProjectForUser(userID, projectID); err != nil {
-		return ProjectCharacterDetail{}, err
-	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return ProjectCharacterDetail{}, BadAuthRequest("角色名称不能为空")
-	}
-	definition, err := normalizedCharacterDefinition(req.Definition)
+	asset, err := s.createProjectImageEntity(userID, projectID, model.AssetCategoryCharacter, req.Name, req.Definition, req.ReferenceImages, req.ImageResourceID, req.ImageRole, req.FolderID)
 	if err != nil {
 		return ProjectCharacterDetail{}, err
 	}
-	now := time.Now()
-	assetID := newID()
-	versionID := newID()
-	payload, err := characterAssetPayload(assetID, versionID, name, definition, now, now)
-	if err != nil {
-		return ProjectCharacterDetail{}, err
-	}
-	asset := model.Asset{ID: assetID, UserID: userID, Kind: "entity", Category: model.AssetCategoryCharacter, Status: model.AssetVersionStatusConfirmed, PrimaryVersionID: versionID, Title: name, PayloadJSON: payload, CreatedAt: now, UpdatedAt: now}
-	version := model.AssetVersion{ID: versionID, AssetID: assetID, Version: 1, Status: model.AssetVersionStatusConfirmed, DefinitionJSON: string(definition), CreatedAt: now, UpdatedAt: now}
-	folderID, err := s.resolveProjectAssetFolderID(projectID, nil)
-	if err != nil {
-		return ProjectCharacterDetail{}, err
-	}
-	position, err := s.repo.NextProjectAssetPosition(projectID, folderID)
-	if err != nil {
-		return ProjectCharacterDetail{}, err
-	}
-	link := model.ProjectAssetLink{ID: newID(), ProjectID: projectID, AssetID: assetID, FolderID: folderID, Position: position, CreatedAt: now}
-	if err := s.repo.CreateProjectCharacter(projectID, &asset, &version, &link); err != nil {
-		return ProjectCharacterDetail{}, err
-	}
-	return s.projectCharacterDetail(userID, projectID, &asset)
+	return s.projectCharacterDetail(userID, projectID, asset)
 }
 
 func (s *Service) ProjectCharacter(userID string, projectID string, assetID string) (ProjectCharacterDetail, error) {
@@ -348,6 +338,9 @@ func (s *Service) UpdateProjectCharacter(userID string, projectID string, assetI
 	definition, err := normalizedCharacterDefinition(req.Definition)
 	if err != nil {
 		return ProjectCharacterDetail{}, err
+	}
+	if req.ExpectedVersionID != "" && req.ExpectedVersionID != asset.PrimaryVersionID {
+		return ProjectCharacterDetail{}, projectAssetVersionConflict()
 	}
 	if _, err := s.createNextCharacterVersion(projectID, asset, name, string(definition), nil, nil, false); err != nil {
 		return ProjectCharacterDetail{}, err
@@ -386,6 +379,9 @@ func (s *Service) ReplaceProjectCharacterRepresentations(userID string, projectI
 		}
 		representations = append(representations, model.AssetRepresentation{ID: newID(), TaskID: operationID, ResourceID: resourceID, MediaType: "image", Role: role, MetadataJSON: string(metadata), CreatedAt: time.Now()})
 	}
+	if req.ExpectedVersionID != "" && req.ExpectedVersionID != asset.PrimaryVersionID {
+		return ProjectCharacterDetail{}, projectAssetVersionConflict()
+	}
 	if _, err := s.createNextCharacterVersion(projectID, asset, asset.Title, "", representations, nil, false); err != nil {
 		return ProjectCharacterDetail{}, err
 	}
@@ -394,6 +390,9 @@ func (s *Service) ReplaceProjectCharacterRepresentations(userID string, projectI
 
 // 三视图生成是强校验写路径：任务只有在资源已绑定到新角色版本后才能对外显示成功。
 func (s *Service) finalizeCharacterTurnaroundTask(task model.Task, result map[string]interface{}) (bool, error) {
+	if handled, err := s.finalizeManualProjectImageTask(task, result); handled || err != nil {
+		return false, err
+	}
 	if !strings.Contains(task.InputJSON, "character_turnaround") {
 		return false, nil
 	}
@@ -425,17 +424,34 @@ func (s *Service) finalizeCharacterTurnaroundTask(task model.Task, result map[st
 		return false, errors.New("三视图任务没有返回已持久化的图片资源")
 	}
 
-	s.characterTaskMu.Lock()
-	defer s.characterTaskMu.Unlock()
-	bound, err := s.characterTurnaroundTaskBound(task.ID)
-	if err != nil || bound {
-		return false, err
-	}
+	applied := false
+	err = s.repo.WithStoryboardAssetWrite(projectID, assetID, func(owned *repository.Repository) error {
+	return owned.ProfileWriteTransaction(func(repo *repository.Repository) error {
+		applied = false
+		if _, err := repo.LockProfileAsset(task.UserID, assetID); err != nil {
+			return err
+		}
+		writer := &Service{repo: repo, dataDir: s.dataDir}
+		var err error
+		applied, err = writer.registerCharacterTurnaround(task, projectID, assetID, strings.TrimSpace(output.Images[0].ResourceID))
+		return err
+	})
+	})
+	return applied, err
+}
+
+func (s *Service) registerCharacterTurnaround(task model.Task, projectID, assetID, resourceID string) (bool, error) {
 	asset, err := s.repo.ProjectCharacterAsset(task.UserID, projectID, assetID)
 	if err != nil {
 		return false, err
 	}
-	resourceID := strings.TrimSpace(output.Images[0].ResourceID)
+	registered, err := s.repo.RegisteredMediaVersion(assetID, task.ID, resourceID, "", []string{"primary", "turnaround_sheet"})
+	if err != nil {
+		return false, err
+	}
+	if registered != "" {
+		return false, nil
+	}
 	resource, err := s.repo.ResourceForUser(task.UserID, resourceID)
 	if err != nil || resource.Kind != "image" || resource.Status != model.ResourceStatusReady {
 		return false, BadAuthRequest("三视图任务生成的图片资源不可用")
@@ -454,28 +470,9 @@ func (s *Service) finalizeCharacterTurnaroundTask(task model.Task, result map[st
 		{ID: newID(), TaskID: task.ID, ResourceID: resourceID, MediaType: "image", Role: "primary", MetadataJSON: string(primaryMetadata), CreatedAt: now},
 	}
 	if _, err := s.createNextCharacterVersion(projectID, asset, asset.Title, "", representations, nil, false); err != nil {
-		// 多实例同时收尾时，唯一任务视角约束只允许一个事务成功；其余实例按已绑定处理。
-		if bound, checkErr := s.characterTurnaroundTaskBound(task.ID); checkErr == nil && bound {
-			return false, nil
-		}
 		return false, err
 	}
 	return true, nil
-}
-
-func (s *Service) characterTurnaroundTaskBound(taskID string) (bool, error) {
-	representations, err := s.repo.AssetRepresentationsForTask(taskID)
-	if err != nil {
-		return false, err
-	}
-	roles := make(map[string]bool, len(representations))
-	for _, representation := range representations {
-		roles[representation.Role] = true
-	}
-	if len(representations) > 0 && (!roles["turnaround_sheet"] || !roles["primary"]) {
-		return false, fmt.Errorf("三视图任务 %s 的角色表现绑定不完整", taskID)
-	}
-	return roles["turnaround_sheet"] && roles["primary"], nil
 }
 
 // 项目页读取时只修复旧版前端刷新造成的断点；单个异常任务记录告警，不阻断项目展示。
@@ -589,8 +586,13 @@ func (s *Service) createNextCharacterVersion(projectID string, asset *model.Asse
 	if err != nil {
 		return model.AssetVersion{}, err
 	}
-	if err := s.repo.SaveCharacterVersion(projectID, &nextAsset, &next, representations, voice); err != nil {
-		return model.AssetVersion{}, err
+	if projectID != "" {
+		if _, err := s.repo.ProjectForUser(asset.UserID, projectID); err != nil {
+			return model.AssetVersion{}, err
+		}
+	}
+	if err := s.repo.SaveCharacterVersion(projectID, &nextAsset, &next, representations, voice, asset.PrimaryVersionID); err != nil {
+		return model.AssetVersion{}, projectAssetWriteError(err)
 	}
 	*asset = nextAsset
 	return next, nil
@@ -615,8 +617,16 @@ func (s *Service) prepareNextCharacterVersion(asset *model.Asset, name string, d
 	if len(versions) > 0 {
 		nextNumber = versions[0].Version + 1
 	}
+	if current.AssetID != asset.ID {
+		return model.Asset{}, model.AssetVersion{}, nil, nil, BadAuthRequest("资产主版本不属于当前资产")
+	}
 	if strings.TrimSpace(definitionJSON) == "" {
 		definitionJSON = current.DefinitionJSON
+	} else {
+		definitionJSON, err = preserveReferenceDefinition(current.DefinitionJSON, definitionJSON)
+		if err != nil {
+			return model.Asset{}, model.AssetVersion{}, nil, nil, err
+		}
 	}
 	now := time.Now()
 	next := model.AssetVersion{ID: newID(), AssetID: asset.ID, Version: nextNumber, Status: model.AssetVersionStatusConfirmed, DefinitionJSON: definitionJSON, Prompt: current.Prompt, Note: current.Note, CreatedAt: now, UpdatedAt: now}
@@ -626,10 +636,9 @@ func (s *Service) prepareNextCharacterVersion(asset *model.Asset, name string, d
 		if representationErr != nil {
 			return model.Asset{}, model.AssetVersion{}, nil, nil, representationErr
 		}
-		operationID := newID()
 		representations = make([]model.AssetRepresentation, 0, len(currentRepresentations))
 		for _, representation := range currentRepresentations {
-			representations = append(representations, model.AssetRepresentation{ID: newID(), TaskID: operationID, AssetVersionID: next.ID, ResourceID: representation.ResourceID, MediaType: representation.MediaType, Role: representation.Role, MetadataJSON: representation.MetadataJSON, CreatedAt: now})
+			representations = append(representations, model.AssetRepresentation{ID: newID(), TaskID: representation.TaskID, AssetVersionID: next.ID, ResourceID: representation.ResourceID, MediaType: representation.MediaType, Role: representation.Role, MetadataJSON: representation.MetadataJSON, CreatedAt: now})
 		}
 	} else {
 		for index := range representations {
@@ -692,6 +701,7 @@ func (s *Service) characterCardVersion(userID string, version *model.AssetVersio
 	if err := json.Unmarshal([]byte(version.DefinitionJSON), &definition); err != nil {
 		return CharacterCardSummary{}, err
 	}
+	delete(definition, profileAdoptionKey)
 	stored, err := s.repo.AssetRepresentations(version.ID)
 	if err != nil {
 		return CharacterCardSummary{}, err

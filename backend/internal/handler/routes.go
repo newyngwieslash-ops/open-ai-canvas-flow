@@ -47,7 +47,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		req.RequestID = RequestID(c)
 		task, err := svc.CreateTask(user.ID, req)
 		if err != nil {
-			fail(c, http.StatusBadRequest, err)
+			var appErr *service.AppError
+			if errors.As(err, &appErr) && appErr.Reason == service.ReasonTaskActiveLimitExceeded {
+				failService(c, err)
+			} else {
+				fail(c, http.StatusBadRequest, err)
+			}
 			return
 		}
 		ok(c, task)
@@ -110,9 +115,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		tasks, err := svc.TasksWithOptions(user.ID, service.TaskListOptions{
-			Limit:      pageSize,
-			ProjectID:  c.Query("projectId"),
-			ActiveOnly: c.Query("activeOnly") == "true",
+			Limit:                pageSize,
+			ProjectID:            c.Query("projectId"),
+			ActiveOnly:           c.Query("activeOnly") == "true",
+			AssetImageCandidates: c.Query("assetImageCandidates") == "true",
+			AssetID:              c.Query("assetId"),
+			BeforeTaskID:         c.Query("beforeTaskId"),
 		})
 		if err != nil {
 			failService(c, err)
@@ -197,7 +205,12 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		task, err := svc.RetryTask(user.ID, c.Param("id"))
 		if err != nil {
-			fail(c, http.StatusBadRequest, err)
+			var appErr *service.AppError
+			if errors.As(err, &appErr) && appErr.Reason == service.ReasonTaskActiveLimitExceeded {
+				failService(c, err)
+			} else {
+				fail(c, http.StatusBadRequest, err)
+			}
 			return
 		}
 		ok(c, task)

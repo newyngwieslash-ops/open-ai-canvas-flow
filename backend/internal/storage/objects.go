@@ -711,6 +711,9 @@ func DeleteAliyunOSSObject(setting Settings, objectKey string) error {
 		return fmt.Errorf("删除阿里云 OSS 对象失败：%w", err)
 	}
 	defer resp.Body.Close()
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("x-oss-delete-marker")), "true") {
+		return errors.New("阿里云 OSS 仅返回删除标记，尚未确认物理版本全部删除")
+	}
 	if (resp.StatusCode < 200 || resp.StatusCode >= 300) && resp.StatusCode != http.StatusNotFound {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit(setting)))
 		return fmt.Errorf("删除阿里云 OSS 对象失败：%s %s", resp.Status, strings.TrimSpace(string(detail)))
@@ -727,6 +730,9 @@ func DeleteTencentCOSObject(setting Settings, objectKey string) error {
 	resp, err := client.Object.Delete(context.Background(), objectKey)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
+	}
+	if resp != nil && strings.EqualFold(strings.TrimSpace(resp.Header.Get("x-cos-delete-marker")), "true") {
+		return errors.New("腾讯云 COS 仅返回删除标记，尚未确认物理版本全部删除")
 	}
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {

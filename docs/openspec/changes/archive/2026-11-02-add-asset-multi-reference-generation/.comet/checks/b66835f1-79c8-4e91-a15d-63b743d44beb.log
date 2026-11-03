@@ -1,0 +1,44 @@
+bun test v1.3.6 (d530ed99)
+
+test\project-asset-image-modal.test.tsx:
+(pass) 采用409保留候选、刷新最新版本且重复点击只提交一次 [421.00ms]
+(pass) 采用服务端失败不显示已保存、不刷新成品，并可重新打开恢复候选 [297.00ms]
+(pass) 真实弹窗不支持参考图的模型阻止提交且不静默退化文生图 [203.00ms]
+(pass) 真实弹窗切换账号隔离候选和活动缓存，旧账号数据不复用 [250.00ms]
+(pass) 真实角色弹窗text创建不携带无成品的imageRole [188.00ms]
+(pass) 真实角色弹窗reference创建不携带无成品的imageRole [266.00ms]
+(pass) 真实角色弹窗none创建不携带无成品的imageRole [171.00ms]
+(pass) 真实character弹窗metadata-node重开恢复活动任务，轮询完成后刷新成功候选 [2532.00ms]
+(pass) 真实character弹窗metadata-target-only重开恢复活动任务，轮询完成后刷新成功候选 [2468.00ms]
+(pass) 真实character弹窗top-level-node-only重开恢复活动任务，轮询完成后刷新成功候选 [2485.00ms]
+(pass) 真实environment弹窗metadata-node重开恢复活动任务，轮询完成后刷新成功候选 [3125.00ms]
+(pass) 真实environment弹窗metadata-target-only重开恢复活动任务，轮询完成后刷新成功候选 [3031.00ms]
+(pass) 真实environment弹窗top-level-node-only重开恢复活动任务，轮询完成后刷新成功候选 [2516.00ms]
+(pass) 真实弹窗original来源活动查询失败拒绝提交，刷新后重复生成只提交一次 [500.00ms]
+(pass) 真实弹窗current来源活动查询失败拒绝提交，刷新后重复生成只提交一次 [1000.00ms]
+(pass) 真实弹窗none来源活动查询失败拒绝提交，刷新后重复生成只提交一次 [734.00ms]
+(pass) 真实弹窗拒绝空名称，复用单图picker而不提交创建 [109.00ms]
+(pass) 候选由任务查询恢复，已采用/过期不允许再次覆盖，满页可加载更多 [157.00ms]
+(pass) 已有角色直用保存后保留弹窗，支持直接切换包含角色三视图复选框再次保存并同步初始状态 [703.00ms]
+(pass) 真实弹窗支持多参考图排序、单张移除、清空保存、按序生成及模型张数超限拦截不丢图 [640.00ms]
+
+test\project-reference-image-api.test.ts:
+(pass) 项目参考图API合同 > 创建直接成品与有序多原图采用http信封并保留目录和portrait
+(pass) 项目参考图API合同 > 写入有序referenceImages与清空传递expectedVersionId，不吞机器可读冲突
+(pass) 项目参考图API合同 > 活动探测在服务端按目标筛选，不依赖项目最近100条，保留signal
+(pass) 项目参考图API合同 > 候选恢复查询专用筛选、keyset且保留取消signal，不限定activeOnly
+
+test\project-reference-image-assets.test.ts:
+(pass) 项目参考图手动候选 > 本地缓存不是远端上传成功
+(pass) 项目参考图手动候选 > 普通照片只写primary，三视图必须明确声明
+(pass) 项目参考图手动候选 > 有序原图、当前图、无参考相互独立，缺失来源拒绝
+(pass) 项目参考图手动候选 > 未知模型或张数超限拒绝，但无参考文生图不受此限制
+(pass) 项目参考图手动候选 > 活动任务严格按项目、资产和真实请求nodeId隔离
+(pass) 项目参考图手动候选 > 候选满页继续keyset，空页结束
+(pass) 项目参考图手动候选 > 角色manual仍使用三视图操作且携带版本来源
+(pass) 项目参考图手动候选 > manual 请求明确来源和基准版本，不影响缺省自动调用
+
+ 32 pass
+ 0 fail
+ 271 expect() calls
+Ran 32 tests across 3 files. [24.30s]

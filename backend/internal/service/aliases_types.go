@@ -2,12 +2,44 @@ package service
 
 import "yingce/backend/internal/app"
 
+type AgentAvatarBundleManifest = app.AgentAvatarBundleManifest
+type AgentAvatarBundleImport = app.AgentAvatarBundleImport
+
 const (
 	WorkbenchKindImage = app.WorkbenchKindImage
 	WorkbenchKindVideo = app.WorkbenchKindVideo
 )
 
 type (
+	GeneratedBindingRequest = app.GeneratedBindingRequest
+	GeneratedBindingBaseline = app.GeneratedBindingBaseline
+	GeneratedBindingInput = app.GeneratedBindingInput
+	GeneratedBindingRow = app.GeneratedBindingRow
+	GeneratedBindingResolution = app.GeneratedBindingResolution
+	BindingCategory                        = app.BindingCategory
+	BindingEvidence                        = app.BindingEvidence
+	BindingIssue                           = app.BindingIssue
+	BindingCandidate                       = app.BindingCandidate
+	BindingPreviewRequest                  = app.BindingPreviewRequest
+	BindingReference                       = app.BindingReference
+	BindingArtifact                        = app.BindingArtifact
+	BindingShotBaseline                    = app.BindingShotBaseline
+	BindingVersionBaseline                 = app.BindingVersionBaseline
+	BindingCatalogBaseline                 = app.BindingCatalogBaseline
+	BindingBaseline                        = app.BindingBaseline
+	BindingShotPreview                     = app.BindingShotPreview
+	BindingPreview                         = app.BindingPreview
+	BindingSelection                       = app.BindingSelection
+	BindingAppendRequest                   = app.BindingAppendRequest
+	BindingShotAppendResult                = app.BindingShotAppendResult
+	BindingAppendResult                    = app.BindingAppendResult
+	ProjectReferenceImage                  = app.ProjectReferenceImage
+	CreateProjectAssetEntityRequest        = app.CreateProjectAssetEntityRequest
+	SetProjectReferenceImagesRequest       = app.SetProjectReferenceImagesRequest
+	ProjectReferenceMigrationReport        = app.ProjectReferenceMigrationReport
+	AdoptProjectImageCandidateRequest      = app.AdoptProjectImageCandidateRequest
+	AssetImageCandidate                    = app.AssetImageCandidate
+	BindProjectAssetImageRequest           = app.BindProjectAssetImageRequest
 	PaymentOrderQuery                      = app.PaymentOrderQuery
 	PaymentReconciliationQuery             = app.PaymentReconciliationQuery
 	CloudAgentRequest                      = app.CloudAgentRequest
@@ -95,6 +127,7 @@ type (
 	CanvasLibraryPage                      = app.CanvasLibraryPage
 	CanvasLibrarySummary                   = app.CanvasLibrarySummary
 	CanvasOperationsRequest                = app.CanvasOperationsRequest
+	CanvasEditLeaseRequest                 = app.CanvasEditLeaseRequest
 	CanvasHistoryList                      = app.CanvasHistoryList
 	CanvasShareRequest                     = app.CanvasShareRequest
 	CanvasShareStatus                      = app.CanvasShareStatus
@@ -113,6 +146,8 @@ type (
 	ChannelOrderItem                       = app.ChannelOrderItem
 	ChannelOrderRequest                    = app.ChannelOrderRequest
 	ChannelRequest                         = app.ChannelRequest
+	SystemChannelExport                    = app.SystemChannelExport
+	SystemChannelImportResult              = app.SystemChannelImportResult
 	ProviderCatalogVerifyRequest           = app.ProviderCatalogVerifyRequest
 	ProviderCatalogInstallRequest          = app.ProviderCatalogInstallRequest
 	CharacterAssetSummary                  = app.CharacterAssetSummary
@@ -146,6 +181,7 @@ type (
 	CreationRunOutput                      = app.CreationRunOutput
 	CreationSubmissionOutput               = app.CreationSubmissionOutput
 	CreditPolicy                           = app.CreditPolicy
+	BillingAutoRefundSetting               = app.BillingAutoRefundSetting
 	DiagnosticBundle                       = app.DiagnosticBundle
 	DiagnosticClientEvent                  = app.DiagnosticClientEvent
 	DiagnosticExportRequest                = app.DiagnosticExportRequest
@@ -367,6 +403,43 @@ type (
 	VoiceProfileSummary                    = app.VoiceProfileSummary
 	WalletSummary                          = app.WalletSummary
 	WorkflowField                          = app.WorkflowField
+	ProjectAssetBatchItemInput             = app.ProjectAssetBatchItemInput
+	PreflightProjectAssetBatchRequest      = app.PreflightProjectAssetBatchRequest
+	ProjectAssetBatchPreflightItem         = app.ProjectAssetBatchPreflightItem
+	ProjectAssetBatchPreflightResult       = app.ProjectAssetBatchPreflightResult
+	CreateProjectAssetBatchRequest         = app.CreateProjectAssetBatchRequest
+	ProjectAssetBatchAttemptRecord         = app.ProjectAssetBatchAttemptRecord
+	ProjectAssetBatchItemView              = app.ProjectAssetBatchItemView
+	ProjectAssetBatchView                  = app.ProjectAssetBatchView
+	LegacyResourceSnapshotExportRequest    = app.LegacyResourceSnapshotExportRequest
+	LegacyResourceSnapshotItem             = app.LegacyResourceSnapshotItem
+	LegacyResourceEvidenceManifest         = app.LegacyResourceEvidenceManifest
+	LegacyResourceEvidenceEntry            = app.LegacyResourceEvidenceEntry
+	LegacyResourceVariantProof             = app.LegacyResourceVariantProof
+	LegacyResourceWriterProof              = app.LegacyResourceWriterProof
+	LegacyResourceEligibilityStatus        = app.LegacyResourceEligibilityStatus
+	LegacyResourceItemEvaluation           = app.LegacyResourceItemEvaluation
+	LegacyResourceMaintenancePlan          = app.LegacyResourceMaintenancePlan
+	LegacyResourceMaintenanceOperation     = app.LegacyResourceMaintenanceOperation
+	LegacyResourceMaintenanceApproval      = app.LegacyResourceMaintenanceApproval
+	LegacyResourceMaintenanceResult        = app.LegacyResourceMaintenanceResult
+	RemoteStorageEndpointContract          = app.RemoteStorageEndpointContract
+	RemoteWriteAttemptEvidence             = app.RemoteWriteAttemptEvidence
+	RemoteProducerSettlementProof          = app.RemoteProducerSettlementProof
+	RemoteObjectVersionItem                = app.RemoteObjectVersionItem
+	RemotePhysicalExhaustionEvidence       = app.RemotePhysicalExhaustionEvidence
+	RemoteContractDeletionResult           = app.RemoteContractDeletionResult
+	ProducerRecoveryEnvironmentContract    = app.ProducerRecoveryEnvironmentContract
+	ProducerDomainRecoveryProof            = app.ProducerDomainRecoveryProof
+	ProducerDomainRecoveryResult           = app.ProducerDomainRecoveryResult
+	TurnaroundCropRect                     = app.TurnaroundCropRect
+	TurnaroundPlanSuggestedView            = app.TurnaroundPlanSuggestedView
+	TurnaroundSplitPlanDraft               = app.TurnaroundSplitPlanDraft
+	CreateTurnaroundSplitPlanRequest       = app.CreateTurnaroundSplitPlanRequest
+	TurnaroundSplitPlanView                = app.TurnaroundSplitPlanView
+	TurnaroundConfirmedCropBox             = app.TurnaroundConfirmedCropBox
+	ExecuteTurnaroundSplitRequest          = app.ExecuteTurnaroundSplitRequest
+	TurnaroundSplitExecutionResult         = app.TurnaroundSplitExecutionResult
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

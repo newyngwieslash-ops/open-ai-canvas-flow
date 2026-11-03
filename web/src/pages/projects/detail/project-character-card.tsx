@@ -8,9 +8,10 @@ import type { ProjectAsset } from "@/services/api/projects";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
 
 import { projectCharacterCover } from "./project-character-cover";
+import { TURNAROUND_VIEW_LABELS, TURNAROUND_VIEW_ROLES } from "./character-turnaround-split";
 import { textValue } from "./shared";
 
-export function ProjectCharacterCard({ asset, folderItems, generating, removing, onOpen, onEdit, onGenerate, onBindImages, onBindVoice, onMove, onRemove }: {
+export function ProjectCharacterCard({ asset, folderItems, generating, removing, onOpen, onEdit, onGenerate, onAnalyze, onSplitTurnaround, onBindImages, onBindVoice, onMove, onRemove }: {
     asset: ProjectAsset;
     folderItems: Array<{ key: string; label: string }>;
     generating: boolean;
@@ -18,6 +19,8 @@ export function ProjectCharacterCard({ asset, folderItems, generating, removing,
     onOpen: () => void;
     onEdit: () => void;
     onGenerate: () => void;
+    onAnalyze?: () => void;
+    onSplitTurnaround?: () => void;
     onBindImages: () => void;
     onBindVoice: () => void;
     onMove: (folderId: string) => void;
@@ -25,9 +28,10 @@ export function ProjectCharacterCard({ asset, folderItems, generating, removing,
 }) {
     const character = asset.character;
     const cover = projectCharacterCover(character?.representations);
+    const splitViewsReady = TURNAROUND_VIEW_ROLES.every((role) => character?.representations?.some((rep) => rep.role === role));
     const role = textValue(character?.definition.role) || "未填写剧情定位";
     const appearance = textValue(character?.definition.appearance) || textValue(character?.definition.consistencyPrompt) || "角色设定待完善";
-    const imageStatus = character?.visualStatus === "ready" ? "图片已绑定" : character?.visualStatus === "partial" ? "图片待补全" : "图片未绑定";
+    const imageStatus = splitViewsReady ? "三视图已绑定 · 正/侧/背已拆分" : character?.visualStatus === "ready" ? "三视图已绑定" : cover ? "成品已绑定 · 尚无完整三视图" : "图片未绑定";
     const voiceStatus = character?.voiceStatus === "ready" ? `声音已绑定 · ${character.voice?.profile.name}` : character?.voiceStatus === "unavailable" ? "声音需处理" : "声音未绑定";
     const readinessLabel = character?.visualStatus === "ready" ? character.voiceStatus === "ready" ? "可直接用于生成" : "形象已就绪" : "设定进行中";
     return (
@@ -45,9 +49,24 @@ export function ProjectCharacterCard({ asset, folderItems, generating, removing,
                 <div className="flex items-start justify-between gap-3"><button type="button" className="project-character-title-button" onClick={onOpen}><h3 className="truncate text-sm font-semibold">{asset.title}</h3><p className="mt-0.5 truncate text-[var(--fs-label)] text-foreground/48">{role}</p></button><Button type="text" size="small" className="!h-7 !px-1.5" icon={<Pencil className="size-3.5" />} onClick={onEdit} aria-label={`编辑 ${asset.title}`} /></div>
                 <p className="mt-2 line-clamp-2 min-h-9 text-[var(--fs-label)] leading-[18px] text-foreground/55">{appearance}</p>
                 <div className="mt-2 grid gap-1.5">
-                    <StatusLine icon={<ImageIcon className="size-3.5" />} ready={character?.visualStatus === "ready"} label={imageStatus} action={character?.visualStatus === "ready" ? "更换" : "初始化"} onClick={character?.visualStatus === "ready" ? onBindImages : onGenerate} />
+                    <StatusLine icon={<ImageIcon className="size-3.5" />} ready={Boolean(cover)} label={imageStatus} action={cover ? "更换" : "选择成品"} onClick={onBindImages} />
                     <StatusLine icon={<Volume2 className="size-3.5" />} ready={character?.voiceStatus === "ready"} label={voiceStatus} action={character?.voiceStatus === "ready" ? "调整" : "选择"} onClick={onBindVoice} />
                 </div>
+                {splitViewsReady ? (
+                    <div className="mt-2 flex items-center gap-1.5 text-[var(--fs-micro)] text-foreground/60">
+                        {TURNAROUND_VIEW_ROLES.map((viewRole) => (
+                            <span key={viewRole} className="rounded border border-border/60 bg-foreground/[.03] px-1.5 py-0.5">
+                                {TURNAROUND_VIEW_LABELS[viewRole]}
+                            </span>
+                        ))}
+                    </div>
+                ) : null}
+                {onAnalyze || onSplitTurnaround ? (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                        {onAnalyze ? <Button data-agent-launcher-avoid size="small" disabled={removing} onClick={onAnalyze}>分析参考图</Button> : null}
+                        {onSplitTurnaround ? <Button data-agent-launcher-avoid size="small" disabled={removing} onClick={onSplitTurnaround}>{splitViewsReady ? "重拆三视图" : "拆分三视图"}</Button> : null}
+                    </div>
+                ) : null}
                 <div className="mt-3 flex min-w-0 gap-2 border-t border-border/60 pt-2">
                     <Button size="small" className="min-w-0 flex-1" icon={<Sparkles className="size-3.5" />} loading={generating} disabled={removing} onClick={onGenerate}>{character?.visualStatus === "missing" ? "初始化三视图" : "重新生成三视图"}</Button><Dropdown trigger={["click"]} menu={{ selectedKeys: [asset.folderId || ""], items: folderItems, onClick: ({ key }) => onMove(key) }}><Button type="text" size="small" disabled={generating || removing} icon={<MoveRight className="size-3.5" />} aria-label={`移动 ${asset.title}`} /></Dropdown><Popconfirm title="移出项目角色？" description="已有画布或镜头引用时将无法移出。" okText="移出" cancelText="取消" onConfirm={onRemove}><Button type="text" danger size="small" loading={removing} disabled={generating} icon={<Trash2 className="size-3.5" />} aria-label={`移出 ${asset.title}`} /></Popconfirm>
                 </div>

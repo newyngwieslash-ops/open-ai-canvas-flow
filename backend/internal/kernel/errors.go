@@ -59,3 +59,24 @@ func Unauthorized(message string) *AppError {
 func Forbidden(message string) *AppError {
 	return NewAppError(403, message)
 }
+
+func StoryboardAssetBindingInvalidRequest(message string) *AppError {
+	return &AppError{Status: CodeInvalidArgument, Code: CodeInvalidArgument, Reason: ReasonStoryboardAssetBindingInvalidRequest, Message: message}
+}
+
+func StoryboardAssetBindingInvalidReference(message string) *AppError {
+	return &AppError{Status: CodeUnprocessableEntity, Code: CodeStoryboardAssetBindingInvalidReference, Reason: ReasonStoryboardAssetBindingInvalidReference, Message: message}
+}
+
+func StoryboardAssetBindingCapacityExceeded(message string) *AppError {
+	return &AppError{Status: CodeUnprocessableEntity, Code: CodeStoryboardAssetBindingCapacityExceeded, Reason: ReasonStoryboardAssetBindingCapacityExceeded, Message: message}
+}
+
+func StoryboardAssetBindingConflict(message string) *AppError {
+	return &AppError{Status: CodeConflict, Code: CodeConflict, Reason: ReasonStoryboardAssetBindingConflict, Message: message}
+}
+
+func StoryboardAssetBindingBusy(message string) *AppError {
+	return &AppError{Status: CodeUnavailable, Code: CodeUnavailable, Reason: ReasonStoryboardAssetBindingBusy, Message: message, Retryable: true}
+}
+

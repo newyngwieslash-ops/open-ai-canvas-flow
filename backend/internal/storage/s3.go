@@ -178,7 +178,10 @@ func DeleteS3Object(setting Settings, objectKey string) error {
 	if err != nil {
 		return err
 	}
-	_, err = client.DeleteObjectWithContext(context.Background(), &awss3.DeleteObjectInput{Bucket: aws.String(setting.Bucket), Key: aws.String(strings.TrimLeft(objectKey, "/"))})
+	output, err := client.DeleteObjectWithContext(context.Background(), &awss3.DeleteObjectInput{Bucket: aws.String(setting.Bucket), Key: aws.String(strings.TrimLeft(objectKey, "/"))})
+	if output != nil && aws.BoolValue(output.DeleteMarker) {
+		return errors.New("S3 仅返回删除标记，尚未确认物理版本全部删除")
+	}
 	if requestFailure, ok := err.(awserr.RequestFailure); ok && requestFailure.StatusCode() == http.StatusNotFound {
 		return nil
 	}

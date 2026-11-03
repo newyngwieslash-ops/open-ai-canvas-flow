@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 56
+const CurrentSchemaVersion int64 = 62
 
 const baselineSchemaChecksum = "sha256:open-ai-canvas-schema-v1-20260830"
 const schemaMigrationAppliedAtIndexChecksum = "sha256:schema-migrations-applied-at-index-v2-20260830"
@@ -196,6 +196,29 @@ var schemaMigrations = []migration{
 		return nil
 	}},
 	{version: 56, name: "sql_perf_indexes", checksum: "sha256:sql-perf-indexes-v56-20261016", apply: migrateSchemaV56},
+	{version: 57, name: "canvas_multi_session_sync", checksum: "sha256:canvas-multi-session-sync-v57", apply: migrateCanvasCollaboration},
+	{version: 58, name: "asset_media_version_identity", checksum: "sha256:asset-media-version-identity-v58", apply: func(tx *gorm.DB) error {
+		if tx.Migrator().HasIndex(&model.AssetRepresentation{}, "idx_asset_representations_task_role") {
+			// The PostgreSQL migrator emits invalid CURRENT_SCHEMA().index SQL
+			// for search-path schemas; this fixed identifier works on both dialects.
+			if err := tx.Exec(`DROP INDEX IF EXISTS idx_asset_representations_task_role`).Error; err != nil {
+				return err
+			}
+		}
+		return tx.AutoMigrate(&model.AssetRepresentation{})
+	}},
+	{version: 59, name: "resource_deletion_intents", checksum: "sha256:resource-deletion-intents-v59", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.ResourceDeletionIntent{}, &model.ResourceDeletionObject{})
+	}},
+	{version: 60, name: "resource_producer_operations", checksum: "sha256:resource-producer-operations-v60", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.ResourceProducerOperation{})
+	}},
+	{version: 61, name: "resource_producer_control", checksum: "sha256:resource-producer-control-v61", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.ResourceProducerOperation{})
+	}},
+	{version: 62, name: "project_asset_generation_batches", checksum: "sha256:project-asset-generation-batches-v62", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.ProjectAssetGenerationBatch{}, &model.ProjectAssetGenerationBatchItem{})
+	}},
 }
 
 func migratePrefixedIDSequenceReconcile(tx *gorm.DB) error {
