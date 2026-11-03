@@ -20,6 +20,7 @@ export type WelcomeLook = {
     title: string;
     frames: string[];
     screenplay: string[];
+    opening?: { image: string; title: string };
     video?: string;
     credit?: string;
 };
@@ -29,6 +30,7 @@ const reelFrames = (folder: string, names: string[]) => Array.from({ length: 12 
 export const welcomeLooks: WelcomeLook[] = [
     {
         id: "spring", label: "Spring · 奇幻", title: "山谷之春",
+        opening: { image: "/welcome/fantasy-dawn.png", title: "云上远城 · AI 奇幻概念画面" },
         frames: reelFrames("spring", ["1807", "1669", "4336", "3191", "3250"]),
         screenplay: ["外景 · 山谷 · 黎明", "云海漫过山脊。", "她握紧手中的木杖。", "一条小路，通往谷底。", "石壁投下巨大的影子。", "她停下，望向高处。", "风声忽然安静。", "微光落在她的脸上。", "沉睡的山谷开始苏醒。", "她向前迈出一步。", "远处，第一片新叶展开。", "春天，终于来到。"],
         credit: "Spring · Blender 开放电影演示素材",
@@ -54,7 +56,7 @@ export function getWelcomeLook(search = window.location.search) {
 
 export const showcases = [
     { name: "自由画布", image: "/welcome/workbench-canvas.webp", description: "把灵感连成作品。", detail: "整理参考、连接节点、比较结果，沿着自己的思路继续创作。", href: "/canvas" },
-    { name: "即时创作", image: "/welcome/workbench-create.webp", description: "从一句话开始。", detail: "选择模型与参考素材，在对话中逐步完成图片和视频。", href: "/create" },
+    { name: "即时创作", image: "/welcome/workbench-create-branded.jpg", description: "从一句话开始。", detail: "选择模型与参考素材，在对话中逐步完成图片和视频。", href: "/create" },
     { name: "项目工作台", image: "/welcome/workbench-project.webp", description: "让长故事有条理。", detail: "围绕章节、人物与分镜组织制作，随时回到正在推进的故事。", href: "/projects" },
 ] as const;
 
@@ -65,7 +67,7 @@ export function lookStills(look: WelcomeLook) {
 export function getWelcomeExchanges(look: WelcomeLook) {
     const stills = lookStills(look);
     return [
-        { lead: "先写下一句。", call: look.screenplay[0], reply: look.screenplay[9], frame: stills[0] },
+        { lead: "先写下一句。", call: look.screenplay[0], reply: look.screenplay[9], frame: look.opening?.image ?? stills[0] },
         { lead: "再把人叫到场上。", call: look.title, reply: look.screenplay[7], frame: stills[Math.min(2, stills.length - 1)] },
         { lead: "然后把句子拆成镜头。", call: look.screenplay[3], reply: look.screenplay[11], frame: showcases[0].image },
     ];

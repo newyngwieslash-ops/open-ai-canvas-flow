@@ -25,7 +25,7 @@ test("welcome entry loads configured appearance", async () => {
 });
 
 test("welcome effects preserve configured SEO title", () => {
-    const page = source("../src/pages/welcome/index.tsx");
+    const page = source("../src/pages/welcome/index.tsx").split("function FilmDialog")[0];
     // Run the actual mount effects with inert motion/scroll listeners.
     const effects = [...page.matchAll(/useEffect\(\(\) => \{([\s\S]*?)\n    \}, \[([^\]]*)\]\);/g)].filter((match) => match[2] === "");
     assert.ok(effects.length > 0);

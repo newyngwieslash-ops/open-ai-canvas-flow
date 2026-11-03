@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { getWelcomeChapters, getWelcomeLook, showcases, welcomeLooks } from "../src/pages/welcome/story";
+import { getWelcomeChapters, getWelcomeExchanges, getWelcomeLook, showcases, welcomeLooks } from "../src/pages/welcome/story";
 
 const publicFile = (url: string) => resolve(import.meta.dir, "../public", url.replace(/^\//, ""));
 
@@ -35,6 +35,17 @@ describe("welcome story", () => {
         }
         expect(welcomeLooks.filter((look) => look.video).map((look) => look.id)).toEqual(["charge"]);
         for (const showcase of showcases) expect(existsSync(publicFile(showcase.image))).toBe(true);
+    });
+
+    test("the warm opening artwork is separate from film stills and reused in the first exchange", () => {
+        const spring = getWelcomeLook("");
+        expect(spring.opening?.image).toBe("/welcome/fantasy-dawn.png");
+        expect(existsSync(publicFile(spring.opening!.image))).toBe(true);
+        expect(spring.frames).not.toContain(spring.opening!.image);
+        expect(getWelcomeExchanges(spring)[0].frame).toBe(spring.opening!.image);
+        const charge = getWelcomeLook("?look=charge");
+        expect(getWelcomeExchanges(charge)[0].frame).toBe(charge.frames[0]);
+        expect(readFileSync(publicFile("/welcome/credits.html"), "utf8")).toContain('id="concept"');
     });
 
     test("credits cover all looks separately from the code license", () => {
