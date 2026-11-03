@@ -172,3 +172,20 @@ CUA 发现的可用浏览器只有应用内浏览器和 MCP Apps，均无现有�
 开始时分支为 `codex/welcome-ui-hallmark`，索引为空。对 `.local/cache/brand-workspace-before.json` 的 12 个文件逐个检查存在性及 SHA-256：首次全部一致；提交前再次核对，结果记入 Task2 scratch 报告。既有 8 个 tracked 修改、`.taste-skill/`、用户参考图及 3 个欢迎页素材均保留。工具目录存在，但不在这 12 个文件的哈希清单内，未声称逐文件字节校验。
 
 本任务仅追加此盘点文档并提交；scratch 报告位于 `.superpowers/sdd/2026-10-15-product-brand-identity/task-2-report.md`，不提交报告或 `.local/` 快照。RED/GREEN 不适用：没有产品逻辑改动，仅做只读盘点和文档编辑；没有添加镜像测试，没有运行全库测试、构建或品牌扫描器。管理原值、真实邮件、写入/恢复、UI 交互、官方内容实际升级仍未覆盖。
+
+
+## Task11–Task12 文档、脚本与功能边界同步（OpenSpec 4.2 / 4.3）
+
+- 已更新 `README.md`、`CONTEXT.md`、`AGENTS.md`、`CODE_OF_CONDUCT.md`、`CONTRIBUTING.md`、`.github/workflows/publish-images.yml`、`restart.bat`、`scripts/*.ps1`、`scripts/install-server.sh`、`scripts/install-host-updater.sh`、`scripts/provider-catalog/*`、`backend/internal/app/appearance.go`（恢复默认审计文案）、`backend/builtin/豆包音频提示词/SKILL.md`、`web/src/components/audio-settings-panel.tsx`、UI 组件注释与原型图中的产品可见品牌文案。
+- 已同步 `docs/index.md`、`docs/content/docs/overview/features.mdx`、`docs/content/docs/progress/pending-test.mdx`、`docs/content/docs/backend/{backend-database,local-development,storage-configuration}.mdx`、`docs/content/docs/plugins/{payment-plugin-runtime,plugin-system}.mdx` 与 `docs/design/{admin-ui-design-standard.md,cloud-agent-architecture-optimization.md,site-appearance-and-skins.mdx,story-creation-homepage.mdx,user-diagnostic-bundle.mdx,workspace-shell-design.mdx}`。
+- 保留边界：`brandSlug: open-ai-canvas`、Go module `yingce/backend`、容器与服务标识 `yingce-agent` / `yingce-backend` / `open-ai-canvas-*`、环境变量 `YINGCE_*` / `CANVAS_*`、本地缓存键 `yingce:*` / `open_ai_canvas:*`、插件协议 `yingce.plugin/v1|v2|package-v1`、`yingce.payment/v1`、`yingce.sms/v1`、扩展名 `.yingce-plugin`、稳定技能 ID `yingce-system` / `yingce-short-drama-workflow` / `yingce-image-*`、真实上游仓库与演示域名（`github.com/ddcat-ai/open-ai-canvas`、`yingce.tv`、`ai.yingce.tv`）以及第三方原作者与许可证声明均保持不变。
+
+## Task13–Task14 综合验证、残留终审与回滚边界（OpenSpec 5.1 / 5.2）
+
+- 终审扫描：`python scripts/audit-product-brand.py --self-test` 通过（退出 0）；`python scripts/audit-product-brand.py --root . --json` 退出 0，`product` 类别为 `0` 条，105/105 个 `.yingce-plugin` 归档全部覆盖且无产品品牌残留。
+- 残留分类汇总：
+  1. **旧默认值识别与无损规范化入口（源码精确行例外）**：`web/src/lib/brand-display.ts`、`web/src/stores/use-appearance-store.ts`、`backend/internal/app/appearance.go`、`backend/internal/app/appearance_canvas.go`、`backend/internal/auth/registration.go`、`backend/internal/auth/email.go` 中用于识别历史精确旧默认值的判断条件。
+  2. **旧配置迁移与自定义品牌保留回归测试（测试精确行例外）**：`web/test/{brand-display,appearance-bootstrap,appearance-refresh,canvas-agent-appearance,workspace-route-loading,workspace-sidebar-checkin}.test.ts`、`web/test/fixtures/commands.golden.json`、`backend/internal/app/{appearance_test,cloud_agent_identity_test,protocol_plugins_brand_test,protocol_runtime_test,wavespeed_image_edit_test}.go`、`backend/internal/auth/{registration_agreement_test,password_reset_test}.go`、`backend/internal/skills/skills_seed_test.go`、`backend/internal/hostupdate/manager_ops_test.go` 及 `scripts/{repack-branded-plugins,test_repack_branded_plugins}.py`。
+  3. **稳定技术合同与真实上游地址（技术 token 例外）**：`brandSlug: open-ai-canvas`、`open_ai_canvas` 数据库与 Cookie 标识、`yingce/backend`、`yingce-agent`、`@yingce/pi-agent-runtime`、`yingce.plugin/v1|v2|package-v1`、`yingce.payment/v1`、`.yingce-plugin`、`yingce:*` / `open_ai_canvas:*` 本地存储键、`yingce-system` / `yingce-short-drama-workflow` / `yingce-image-*` 稳定 ID、真实 GitHub 仓库与 `ai.yingce.tv` 目录地址。
+  4. **上游版权与历史归档/研究文档（精确行例外）**：`LICENSE`、`NOTICE`、`README.md` 版权归属行，`CHANGELOG.md` 历史版本记录，`docs/adr/`、`docs/plans/`、`docs/handoffs/`、`docs/openspec/changes/archive/`、`docs/superpowers/` 以及 `docs/design/` 下的历史调研与变更日志。
+- 回滚方案：仅使用 `git revert <commit-range>` 回退本变更在 `codex/welcome-ui-hallmark` 分支上的提交；如在隔离调试实例写过系统设置，仅按 `.local/cache/` 中的备份恢复对应设置记录。严禁使用 `git reset --hard`、删除数据库/存储目录或覆盖 `.local/cache/brand-protected-inputs/` 中已保护的欢迎页 UI 成果与用户参考素材。

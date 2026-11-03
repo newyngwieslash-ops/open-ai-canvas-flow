@@ -192,7 +192,7 @@ func TestLive2DAppearanceImportPublishAndDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Public.Canvas.AgentName != "小鱼" || saved.Public.BrandName != "影策" || saved.Public.Canvas.Live2DEntry != imported.Entry {
+	if saved.Public.Canvas.AgentName != "小鱼" || saved.Public.BrandName != defaultAppearanceBrandName || saved.Public.Canvas.Live2DEntry != imported.Entry {
 		t.Fatalf("bad public setting: %+v", saved.Public)
 	}
 	if _, _, err := svc.Live2DAsset(nil, imported.ResourceID, "avatar/texture.png"); err != nil {

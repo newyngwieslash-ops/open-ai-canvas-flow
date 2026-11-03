@@ -27,7 +27,7 @@
         "url": "https://relay.example.com/register?aff=yingce",
         "steps": ["注册并完成实名", "控制台 → 令牌 → 新建令牌", "复制 sk- 开头的密钥"],
         "keyPattern": "^sk-[A-Za-z0-9]{20,}$",
-        "promo": "通过影策注册首充送 10 元"
+        "promo": "通过源铭振跃注册首充送 10 元"
       },
       "models": [
         {

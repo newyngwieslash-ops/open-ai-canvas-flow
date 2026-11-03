@@ -1,4 +1,4 @@
-﻿# 影策本地二次开发重启。
+# 源铭振跃本地二次开发重启。
 # 前端默认 5178（受限时改用 15178），后端 8178。
 # 数据目录、Go 缓存、Vite 代理约定见 docs/content/docs/backend/local-development.mdx
 
@@ -67,7 +67,7 @@ function Write-RestartLog {
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
 }
 
-Set-Content -LiteralPath $logFile -Value ("# 影策 restart  {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding UTF8
+Set-Content -LiteralPath $logFile -Value ("# 源铭振跃 restart  {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding UTF8
 
 function ConvertTo-PowerShellLiteral([string]$Value) {
     return "'" + $Value.Replace("'", "''") + "'"
@@ -355,7 +355,7 @@ Set-Location -LiteralPath $backendDirLiteral
 `$env:CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS = 'localhost,127.0.0.1'
 `$env:GOCACHE = $goBuildLiteral
 `$env:GOMODCACHE = $goModLiteral
-Write-Host '影策后端: http://$backendAddr' -ForegroundColor Cyan
+Write-Host '源铭振跃后端: http://$backendAddr' -ForegroundColor Cyan
 Write-Host '已放行本机模型上游: localhost, 127.0.0.1' -ForegroundColor DarkGray
 go run ./cmd/server
 "@
@@ -364,7 +364,7 @@ $webCommand = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = '$proxyTarget'
-Write-Host '影策前端: http://localhost:$WebPort' -ForegroundColor Cyan
+Write-Host '源铭振跃前端: http://localhost:$WebPort' -ForegroundColor Cyan
 bun run vite --host 0.0.0.0 --port $WebPort --strictPort
 "@
 

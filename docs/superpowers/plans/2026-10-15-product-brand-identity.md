@@ -259,7 +259,7 @@ go test ./internal/protocol -count=1
 
 ### Task 10：产品截图、SVG 与视频（4.1）
 
-- [ ] Task 10：产品截图、SVG 与视频（4.1） <!-- comet-task:71296572-1364-44b3-b9c0-b9c566382fb1 -->
+- [x] Task 10：产品截图、SVG 与视频（4.1） <!-- comet-task:71296572-1364-44b3-b9c0-b9c566382fb1 -->
 
 **Files:** 重截 `assets/login.png`、`assets/create.png`、`assets/tldraw-license-key-settings.png`；处理原 `web/public/welcome/workbench-create.webp`，保持现有 welcome 已引用的新截图有效；更新素材核查表及实际引用。
 
@@ -270,7 +270,7 @@ go test ./internal/protocol -count=1
 
 ### Task 11：文档、脚本及可见文件名（4.2）
 
-- [ ] Task 11：文档、脚本及可见文件名（4.2） <!-- comet-task:e56c104b-34eb-4940-86c0-1b6758c857e6 -->
+- [x] Task 11：文档、脚本及可见文件名（4.2） <!-- comet-task:e56c104b-34eb-4940-86c0-1b6758c857e6 -->
 
 **Files:** 按扫描精确更新 `README.md`、`CONTEXT.md`、`AGENTS.md`、`CHANGELOG.md` 当前产品展示、维护文档/注释、`scripts/` 和 `.github/` 展示文本，以及 `backend/internal/app/appearance.go` 的恢复默认审计文案（仅显示文字，不动旧值识别或业务逻辑）。历史研究稿与用户参考按明确例外记录，不将其旧限制当作本次授权边界。
 
@@ -285,7 +285,7 @@ git diff --check
 
 ### Task 12：功能、待测与边界说明（4.3）
 
-- [ ] Task 12：功能、待测与边界说明（4.3） <!-- comet-task:ff22c9e7-ba2c-48a3-9047-797d5020cd5f -->
+- [x] Task 12：功能、待测与边界说明（4.3） <!-- comet-task:ff22c9e7-ba2c-48a3-9047-797d5020cd5f -->
 
 **Files:** 更新 `docs/content/docs/overview/features.mdx`、`docs/content/docs/progress/pending-test.mdx`、受影响专题及 `brand-inventory.md`。
 
@@ -295,7 +295,7 @@ git diff --check
 
 ### Task 13：综合验证（5.1）
 
-- [ ] Task 13：综合验证（5.1） <!-- comet-task:9c2353ef-2e85-4812-9c94-b3ea8846d10c -->
+- [x] Task 13：综合验证（5.1） <!-- comet-task:9c2353ef-2e85-4812-9c94-b3ea8846d10c -->
 
 **Files:** change 下新增 `verification-report.md`；只记录实际执行的命令和浏览器证据，不提交构建产物和账号数据。
 
@@ -318,7 +318,7 @@ go test ./internal/app ./internal/auth ./internal/skills ./internal/repository .
 
 ### Task 14：残留终审与交付（5.2）
 
-- [ ] Task 14：残留终审与交付（5.2） <!-- comet-task:69764c96-cc9c-4d98-b233-819195c505c7 -->
+- [x] Task 14：残留终审与交付（5.2） <!-- comet-task:69764c96-cc9c-4d98-b233-819195c505c7 -->
 
 **Files:** 更新审计、验证报告及 tasks.md；保留所有必要迁移输入与回归例外的具体位置和用途。
 

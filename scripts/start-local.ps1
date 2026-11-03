@@ -74,7 +74,7 @@ Set-Location -LiteralPath $backendDirLiteral
 `$env:CANVAS_BACKEND_DATA_DIR = $dataDirLiteral
 `$env:GOCACHE = $(ConvertTo-PowerShellLiteral $goBuildCache)
 `$env:GOMODCACHE = $(ConvertTo-PowerShellLiteral $goModuleCache)
-Write-Host '影策后端：http://127.0.0.1:8080' -ForegroundColor Cyan
+Write-Host '源铭振跃后端：http://127.0.0.1:8080' -ForegroundColor Cyan
 go run ./cmd/server
 "@
 
@@ -82,7 +82,7 @@ $webCommand = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = 'http://127.0.0.1:8080'
-Write-Host '影策前端：http://localhost:3000' -ForegroundColor Cyan
+Write-Host '源铭振跃前端：http://localhost:3000' -ForegroundColor Cyan
 bun run dev
 "@
 

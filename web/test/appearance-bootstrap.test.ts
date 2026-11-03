@@ -320,7 +320,7 @@ test("the welcome page consumes the displayed brand for title, opening chapter a
 
     expect(pageSource).toContain("displayBrandName(appearance.brandName)");
     expect(pageSource).toContain("getWelcomeChapters(brandName)");
-    expect(pageSource).toContain("document.title = `${brandName} · 让一个故事从文字走向银幕`");
+    expect(pageSource).toContain("displayBrandTitle(appearance.seoTitle, appearance.brandName)");
     expect(pageSource).toContain("aria-label={`${brandName}创作之旅`}");
     expect(pageSource).not.toContain("影策 · 让一个故事");
     expect(storySource).not.toContain('title: "影策"');

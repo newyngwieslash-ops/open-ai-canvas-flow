@@ -87,7 +87,7 @@ install_service() {
     temporary_service="$(mktemp)"
     printf '%s\n' \
         '[Unit]' \
-        'Description=Open AI Canvas Host Updater' \
+        'Description=源铭振跃 Host Updater' \
         'After=docker.service network-online.target' \
         'Requires=docker.service' \
         'Wants=network-online.target' \
