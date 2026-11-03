@@ -432,6 +432,14 @@ type (
 	ProducerRecoveryEnvironmentContract    = app.ProducerRecoveryEnvironmentContract
 	ProducerDomainRecoveryProof            = app.ProducerDomainRecoveryProof
 	ProducerDomainRecoveryResult           = app.ProducerDomainRecoveryResult
+	TurnaroundCropRect                     = app.TurnaroundCropRect
+	TurnaroundPlanSuggestedView            = app.TurnaroundPlanSuggestedView
+	TurnaroundSplitPlanDraft               = app.TurnaroundSplitPlanDraft
+	CreateTurnaroundSplitPlanRequest       = app.CreateTurnaroundSplitPlanRequest
+	TurnaroundSplitPlanView                = app.TurnaroundSplitPlanView
+	TurnaroundConfirmedCropBox             = app.TurnaroundConfirmedCropBox
+	ExecuteTurnaroundSplitRequest          = app.ExecuteTurnaroundSplitRequest
+	TurnaroundSplitExecutionResult         = app.TurnaroundSplitExecutionResult
 )
 
 func CloudAgentCapabilitySetInfo() CloudAgentCapabilitySet {

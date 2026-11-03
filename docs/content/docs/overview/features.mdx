@@ -632,3 +632,10 @@ SEO 标题、描述、可选关键词会投影到浏览器 metadata、Open Graph
 
 - **独占环境门禁与原代际证明**：仅在绑定具名独占主机、镜像 SHA-256、持续保管证明、`no_new_privileges` 与最小隔离命名空间后允许启动恢复；严格校验控制域代际（`ControllerDomainID` 与 `ExecutionNonce`），拒绝重建同名空域、借用旧句柄或跨操作系统平台外推证明；Windows 在 `attempted` / `closed` 阶段发生全原句柄丢失时严格保持 `unknown` 阻断，不盲目放行删除。
 - **并发操作隔离与回执丢失防误发**：每个 `ResourceProducerOperation` 独立持有自身身份与物理锁，恢复单个操作不影响并发在途操作；当物理停止证明完备但编码器成功回执丢失时，即使磁盘存在可解码输出文件也只完成物理 `settled` 与业务 `failed` 登记，绝不把未获回执的产物发布为 `ready`，并在结算后解除删除阻塞。
+
+## 角色三视图拆图与视角打标
+
+当项目角色卡已绑定包含正面、侧面、背面的三视图整图（`turnaround_sheet`）时，支持在角色卡或角色预览弹窗打开「拆分三视图」审阅界面，经人工确认或可选视觉模型辅助定位后，由后端执行基于原图像素的无损 PNG 裁切并保存为该角色新版本的 `front`（正面）、`side`（侧面）、`back`（背面）三个视角表现（`AssetRepresentation`）：
+
+- **严格准入与人工逐框确认门禁**：仅允许当前版本 `turnaround_sheet` 表现作为拆分源，普通单人肖像（`primary`）不触发三视图拆分；视觉识图草稿（`POST /api/projects/:id/characters/:assetId/turnaround-split-plans`）严格拒绝未知字段与伪造置信度，缺视角或边界歧义标记 `requiresManualReview = true`，且所有建议裁框默认 `confirmed = false`，必须经用户逐框确认正/侧/背三个互不重叠的整数像素裁框后才允许提交保存。
+- **服务端原像素无损裁切与完整表现合并**：后端 `POST /api/projects/:id/characters/:assetId/turnaround-splits` 读取自有 `ready` 源图、校验 PNG/JPEG 头部与像素预算、归一化 JPEG EXIF 方向后直接按原像素无损裁切 PNG，不重绘补画；通过 `idempotencyKey` 与 `expectedVersionId` CAS 原子创建新角色版本，完整保留原 `turnaround_sheet`、`primary`、`expression_sheet`、声音绑定与角色设定，且默认参考图优先级保持 `turnaround_sheet -> primary -> front` 不变。

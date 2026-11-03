@@ -276,6 +276,42 @@ func registerProjectAssetRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, character)
 	})
+	r.POST("/projects/:id/characters/:assetId/turnaround-split-plans", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var req service.CreateTurnaroundSplitPlanRequest
+		if err := bindProfileRequest(c, 16<<10, &req); err != nil {
+			failService(c, err)
+			return
+		}
+		plan, err := svc.CreateCharacterTurnaroundSplitPlan(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"plan": plan})
+	})
+	r.POST("/projects/:id/characters/:assetId/turnaround-splits", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var req service.ExecuteTurnaroundSplitRequest
+		if err := bindProfileRequest(c, 32<<10, &req); err != nil {
+			failService(c, err)
+			return
+		}
+		result, err := svc.ExecuteCharacterTurnaroundSplit(user.ID, c.Param("id"), c.Param("assetId"), req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	r.PUT("/projects/:id/characters/:assetId/voice", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

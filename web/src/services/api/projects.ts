@@ -940,3 +940,93 @@ export function cancelProjectAssetBatchTasks(projectId: string, batchId: string)
 export function retryProjectAssetBatchItem(projectId: string, batchId: string, itemId: string) {
     return http.post<{ batch: ProjectAssetBatchView }>(`/projects/${encodeURIComponent(projectId)}/asset-generation-batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}/retry`, {});
 }
+
+export type TurnaroundViewRole = "front" | "side" | "back";
+
+export type TurnaroundCropRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
+export type TurnaroundPlanSuggestedView = {
+    role: TurnaroundViewRole;
+    box?: TurnaroundCropRect;
+    note?: string;
+};
+
+export type TurnaroundSplitPlanDraft = {
+    views: TurnaroundPlanSuggestedView[];
+    manualReason?: string;
+    requiresManualReview: boolean;
+};
+
+export type TurnaroundSplitPlanView = {
+    taskId: string;
+    projectId: string;
+    assetId: string;
+    baseVersionId: string;
+    sourceResourceId: string;
+    sourceWidth: number;
+    sourceHeight: number;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    stage: string;
+    draft?: TurnaroundSplitPlanDraft;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type TurnaroundConfirmedCropBox = {
+    role: TurnaroundViewRole;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    confirmed: boolean;
+};
+
+export type ExecuteTurnaroundSplitRequest = {
+    idempotencyKey: string;
+    expectedVersionId: string;
+    sourceResourceId: string;
+    sourceWidth: number;
+    sourceHeight: number;
+    boxes: TurnaroundConfirmedCropBox[];
+};
+
+export type TurnaroundSplitExecutionResult = {
+    taskId: string;
+    projectId: string;
+    assetId: string;
+    baseVersionId: string;
+    adoptedVersionId: string;
+    sourceResourceId: string;
+    createdResources: Record<TurnaroundViewRole, string>;
+    replayed: boolean;
+    requestDigest: string;
+    character: ProjectCharacterDetail;
+};
+
+export function createCharacterTurnaroundSplitPlan(
+    projectId: string,
+    assetId: string,
+    input: { expectedVersionId: string; sourceResourceId: string; modelSelection: ProfileAnalysisModelSelection },
+) {
+    return http.post<{ plan: TurnaroundSplitPlanView }>(
+        `/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/turnaround-split-plans`,
+        input,
+    );
+}
+
+export function executeCharacterTurnaroundSplit(
+    projectId: string,
+    assetId: string,
+    input: ExecuteTurnaroundSplitRequest,
+) {
+    return http.post<TurnaroundSplitExecutionResult>(
+        `/projects/${encodeURIComponent(projectId)}/characters/${encodeURIComponent(assetId)}/turnaround-splits`,
+        input,
+    );
+}
+

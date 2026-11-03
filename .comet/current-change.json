@@ -1,6 +1,6 @@
 {
   "schema": "comet.selection.v2",
   "workflow": "classic",
-  "change": "add-resource-producer-full-recovery",
+  "change": "add-character-turnaround-splitting",
   "branch": "sync/upstream-1.6.3"
 }

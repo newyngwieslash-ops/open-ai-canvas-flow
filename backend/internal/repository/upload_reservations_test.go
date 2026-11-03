@@ -20,7 +20,7 @@ func uploadReservationTestDB(t *testing.T) (*gorm.DB, *Repository, *Repository) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.UploadReservation{}, &model.UserDailyUploadUsage{}, &model.Resource{}, &model.ResourceDeletionObject{}); err != nil {
+	if err := db.AutoMigrate(&model.UploadReservation{}, &model.UserDailyUploadUsage{}, &model.Resource{}, &model.ResourceDeletionObject{}, &model.ResourceProducerOperation{}); err != nil {
 		t.Fatal(err)
 	}
 	peer, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})

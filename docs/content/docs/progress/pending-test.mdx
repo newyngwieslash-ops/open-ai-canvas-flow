@@ -5,6 +5,16 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 角色三视图拆图与视角打标（2026-11-03）
+
+- 已完成角色三视图整图（`turnaround_sheet`）识图定位建议、人工逐框确认、服务端 PNG/JPEG + EXIF 原像素无损裁切、幂等 CAS 完整表现合并及前端裁框审阅弹窗实现：
+  - **后端实现**：`backend/internal/app/character_turnaround_split.go`、`backend/internal/repository/character_turnaround_split.go`、`backend/internal/handler/project_asset_routes.go`（`POST /api/projects/:id/characters/:assetId/turnaround-split-plans` 与 `POST /api/projects/:id/characters/:assetId/turnaround-splits`）。
+  - **前端实现**：`web/src/pages/projects/detail/character-turnaround-split.ts`、`character-turnaround-split-modal.tsx`、`project-character-card.tsx`、`assets.tsx`。
+- 自动化验证：
+  - 后端：`go -C backend test ./internal/app -run TestCharacterTurnaroundSplit -v -count=1`（`2 pass, 0 fail`）与 `go -C backend test ./internal/repository -run TestUploadReservation -v -count=1` 全部通过。
+  - 前端：`bun test --cwd web test/character-turnaround-split.test.tsx`（`6 pass, 0 fail, 26 expect() calls`）、`bun run --cwd web typecheck`、`bun run --cwd web lint` 全部通过。
+- [ ] 真实浏览器路由 `/projects/:projectId/assets`：对已绑定三视图整图的角色卡点击「拆分三视图」，验证三分均分初值、方向键微调（1px / Shift 10px）、视角标签互换、逐框勾选确认后点击「确认拆分为三视图并生成新版本」，确认角色卡与预览弹窗展示正/侧/背三视角且不覆盖原三视图整图封面与既有声音绑定。
+
 ## 项目多个资产单候选批量生成（2026-11-02）
 
 - 已完成项目资产跨分类（角色、场景、道具）单候选批量生成的全链路实现与自动化验证：
