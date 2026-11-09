@@ -171,7 +171,7 @@ func (r *Repository) CreateUserWithEmailVerification(user *model.User, verificat
 func (r *Repository) ResetUserPasswordWithEmailVerification(userID string, email string, purpose string, verificationCodeID string, passwordHash string, usedAt time.Time) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		codeResult := tx.Model(&model.EmailVerificationCode{}).
-			Where("id = ? AND email = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?", verificationCodeID, email, purpose, usedAt).
+			Where("id = ? AND email = ? AND purpose = ? AND used_at IS NULL AND expires_at > ? AND attempts <= 5", verificationCodeID, email, purpose, usedAt).
 			Update("used_at", usedAt)
 		if codeResult.Error != nil {
 			return codeResult.Error

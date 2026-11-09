@@ -111,7 +111,103 @@ async function flushMicrotasks(ticks = 25) {
 }
 
 describe("workflow-batch-runner", () => {
-    test("submits strictly one active task at a time and saves submitting before submit and submitted+taskId immediately after", async () => {
+    test("fills available slots and replaces a completed task without waiting for the first task", async () => {
+        const submitted: string[] = [];
+        const gates = new Map(["shot-1", "shot-2", "shot-3"].map(id => [id, createDeferred<ReturnType<typeof makeRunnerTask>>()] as const));
+        const runner = createWorkflowBatchRunner(makeRunnerLog(), {
+            maxConcurrentTasks: 2,
+            save: async () => {}, preflight: async () => {},
+            submit: async (item, _signal, beforePost) => {
+                beforePost();
+                submitted.push(item.shotId);
+                return makeRunnerTask(item.shotId, "queued");
+            },
+            query: taskId => gates.get(taskId.replace("task-", ""))!.promise,
+            hasReadyArtifact: async () => true, isOwnerCurrent: () => true,
+            sleep: async () => {}, now: () => "2026-10-29T00:01:00Z", onChange: () => {},
+        });
+        const running = runner.start(new AbortController().signal);
+        try {
+            await flushMicrotasks(100);
+            expect(submitted).toEqual(["shot-1", "shot-2"]);
+            expect(runner.snapshot().items.map(i => i.state)).toEqual(["submitted", "submitted", "pending"]);
+            expect(runner.start(new AbortController().signal)).toBe(running);
+            gates.get("shot-2")!.resolve(makeRunnerTask("shot-2"));
+            await flushMicrotasks(100);
+            expect(submitted).toEqual(["shot-1", "shot-2", "shot-3"]);
+            expect(runner.snapshot().items[0]!.state).toBe("submitted");
+        } finally {
+            for (const [id, gate] of gates) gate.resolve(makeRunnerTask(id));
+            await running;
+        }
+        expect(runner.snapshot().state).toBe("finished");
+    });
+
+    test.each(["capacity", "stop", "unknown"])("parallel submissions preserve %s handling while a task is running", async mode => {
+        const submitted: string[] = [];
+        const first = createDeferred<ReturnType<typeof makeRunnerTask>>();
+        const runner = createWorkflowBatchRunner(makeRunnerLog(), {
+            maxConcurrentTasks: 2,
+            save: async () => {}, preflight: async () => {},
+            submit: async (item, _signal, beforePost) => {
+                beforePost();
+                submitted.push(item.shotId);
+                if (submitted.length === 2) {
+                    throw mode === "unknown"
+                        ? new ApiError("Lost response", { status: 504 })
+                        : new ApiError("Full", { status: 400, reason: TASK_SUBMISSION_REASONS.activeLimitExceeded });
+                }
+                return makeRunnerTask(item.shotId, "queued");
+            },
+            query: async taskId => taskId === "task-shot-1" ? first.promise : makeRunnerTask("shot-3", "succeeded", { id: taskId }),
+            hasReadyArtifact: async () => true, isOwnerCurrent: () => true,
+            sleep: async () => { throw new Error("Capacity must wait for the running task"); },
+            now: () => "2026-10-29T00:01:00Z", onChange: () => {},
+        });
+        const running = runner.start(new AbortController().signal);
+        try {
+            await flushMicrotasks(100);
+            expect(submitted).toEqual(["shot-1", "shot-2"]);
+            expect(runner.snapshot().state).toBe(mode === "unknown" ? "paused" : "waiting");
+            if (mode === "stop") await runner.stopRemaining();
+        } finally {
+            first.resolve(makeRunnerTask("shot-1"));
+            await running;
+        }
+        expect(submitted).toEqual(mode === "capacity" ? ["shot-1", "shot-2", "shot-2", "shot-3"] : ["shot-1", "shot-2"]);
+        expect(runner.snapshot().items.map(i => i.state)).toEqual(mode === "capacity"
+            ? ["succeeded", "succeeded", "succeeded"] : mode === "stop"
+                ? ["succeeded", "stopped", "stopped"] : ["succeeded", "unknown", "pending"]);
+    });
+
+    test("observes recovered tasks together without submitting pending items", async () => {
+        const first = createDeferred<ReturnType<typeof makeRunnerTask>>();
+        const log = makeRunnerLog();
+        for (const item of log.items.slice(0, 2)) {
+            item.state = "submitted";
+            item.taskId = `task-${item.shotId}`;
+        }
+        let submits = 0;
+        const runner = createWorkflowBatchRunner(log, {
+            maxConcurrentTasks: 2,
+            save: async () => {}, preflight: async () => {},
+            submit: async () => { submits += 1; return makeRunnerTask("shot-3"); },
+            query: async taskId => taskId === "task-shot-1" ? first.promise : makeRunnerTask("shot-2"),
+            hasReadyArtifact: async () => true, isOwnerCurrent: () => true,
+            sleep: async () => {}, now: () => "2026-10-29T00:01:00Z", onChange: () => {},
+        });
+        const running = runner.start(new AbortController().signal, { observeOnly: true });
+        try {
+            await flushMicrotasks(100);
+            expect(runner.snapshot().items.map(i => i.state)).toEqual(["submitted", "succeeded", "pending"]);
+            expect(submits).toBe(0);
+        } finally {
+            first.resolve(makeRunnerTask("shot-1"));
+            await running;
+        }
+    });
+
+    test("a one-slot runner saves submitting before submit and submitted+taskId immediately after", async () => {
         const submittedShots: string[] = [];
         const savedSnapshots: BatchLog[] = [];
         const taskStatuses = new Map<string, "queued" | "running" | "succeeded" | "failed">([

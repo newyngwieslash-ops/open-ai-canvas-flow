@@ -30,8 +30,8 @@ func (w *taskWorkerCoordinator) processTimelineRender(task *model.Task, ctx cont
 		return w.failTimelineTask(task, "渲染失败", "任务缺少有效的时间线快照")
 	}
 	plan := buildRenderPlan(input.Timeline)
-	if !plan.HasMedia {
-		return w.failTimelineTask(task, "渲染失败", "时间线没有可渲染的媒体片段")
+	if err := validateRenderPlan(input.Timeline, plan); err != nil {
+		return w.failTimelineTask(task, "渲染失败", err.Error())
 	}
 
 	if err := w.progress(task, "准备媒体…", 10); err != nil {

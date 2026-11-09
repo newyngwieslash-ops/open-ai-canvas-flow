@@ -5,6 +5,80 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
+## 短剧项目画风：分镜与媒体生成传递
+
+- 根因：章节拆镜只把画风放在 `input.projectStyle`，通用生成器不读取该字段，实际文本提示词没有项目画风；分镜图与动作预演请求也未传风格快照，后端曾因此直接跳过画风校验。视频及工作流模型分支原先也没有经过同一校验。
+- 已修复：章节拆镜将完整项目画风写入模型可见提示词，要求各镜头保持视觉媒介；媒体生成统一从服务端读取项目画风，调用方漏传快照也执行。动作预演仅转为黑白，保持项目媒介、角色造型和画法；镜头提示词或参考图与项目画风冲突时以项目画风为准。
+- 历史核对：问题项目的 30 个镜头图片提示词均已包含“古风写实”，对应 30 个预演任务均缺少风格快照。代码修复不改写历史镜头、参考图或已生成图片。
+- 自动化验证：先复现缺少风格正文及漏传快照绕过约束，再通过前端章节/镜头生成专项 15 项和后端风格/调度专项 8 项；覆盖分镜图、黑白预演、视频、空元数据、严格资产策略及工作流入口。未调用真实收费模型，未重启现有服务。
+- [ ] 更新前后端后，用国漫 2D 项目重新拆镜，确认每镜图片提示词保持二维媒介，不再自动转成真人写实。
+- [ ] 先核对历史脚本及参考图，再对少量镜头验收单张、批量动作预演、分镜图和视频；核对实际画法与图内标注。自动化测试不替代真实模型视觉验收。
+
+## 章节分镜图与动作预演：并行生成
+
+- 已修复：批次不再等待上一张图片完成才提交下一镜。复用账户活动任务上限和后端队列，逐镜保存提交回执，多张同时生成，任一镜头完成并同步产物后补位；恢复时并行观察已有任务，不自动提交剩余项。
+- 已保留：停止仅影响未提交项；存储失败、提交回执未知或状态核对失败时冻结新增提交，已接受任务继续观察。其他业务占用名额时等待本批在途任务释放，避免慢图耗尽短退避预算；限流仍遵守 Retry-After。
+- 已验证：执行器、恢复日志和真实工作台组件专项 54 项通过，前端类型检查通过；覆盖并发上限、乱序完成补位、名额等待、停止、未知回执冻结、并行恢复观察、账号切换和存储失败。自动化验证未调用真实收费渠道。
+- [x] 真实项目动作预演批次：用户手测确认生成成功、暂无其他问题。任务记录核对 30/30 成功、实际并发峰值 5，从首项提交到末项完成耗时 15 分 59 秒；30 个镜头均有 `ready` 的 `action_board` 产物及资源关联，截图确认时间轴黑白动作预演缩略图回填。此次只核对用户已完成的任务，未额外发起生成。
+- [ ] 真实渠道复测分镜图并发批次，确认多项同时生成、完成后持续补位，并记录整批耗时；实际吞吐受渠道和模型服务限制。
+- [ ] 在多项生成中停止或刷新页面，确认已接受任务保留、未提交项不再自动发送；重新确认仅继续剩余项，失败重试不影响成功图片。
+
+## 章节分镜：任务完成后保存与状态显示
+
+- 已修复：任务成功后的输入精简遗漏 `chapterAssetContext`，导致章节分镜结果已生成，却在资产解析时被拒绝为「生成任务归属、章节、操作或完成状态不匹配」。现在共用精简函数保留服务端创建的章节与资产范围快照，渠道配置和密钥仍被过滤。
+- 已修复：章节按钮以本章实际保存的镜头为「已生成」依据；模型任务成功但尚未保存镜头时显示「结果待保存」。
+- 已验证：新增后端回归先复现失败，再通过真实任务完成、二次输入精简、资产解析和章节镜头保存；前端真实章节组件复现未保存却显示「已生成」，修复后专项 2 项通过，章节生成/资产绑定/恢复专项 22 项及类型检查通过。
+- 已恢复：先在数据库副本演练，再按用户确认的资产取舍，通过真实前端转换与后端校验向当前项目保存 30 条镜头及 140 条引用，每镜不超过 6 项。修正第 14–17 镜头的「长匣」标识；第 8 镜头不绑定「炭」，第 14 镜头不绑定「斩霜剑鞘」「赤狐裘大氅」。逐项核对脚本、时长和镜头版本完整，未新增模型任务；保留恢复前完整数据库备份。
+- 运行核对：经用户确认重新加载本地后端；重启后章节工作区服务仍读取 30 条镜头及 140 条引用，任务上下文和生成结果保留完整，前端代理健康检查通过。尚未以真实浏览器验收页面展示。
+- 验证边界：扩展运行既有 `TestSaveTaskCompletionPersistsRelatedRowsTogether` 时，其旧测试库缺少 `resources` 表而失败；本次新增的完整保存链路及任务输出、生成资产绑定专项通过。
+- [ ] 真实渠道生成分镜后确认章节列表显示镜头；刷新页面后仍能恢复未保存的结果，已保存结果显示「已生成」。
+- [ ] 生成结果包含错误资产 ID、缺图或超过 6 个参考版本时，确认按实际问题提示并明确选择；不能把任务成功当作保存成功。
+
+## 项目资产批量生成：等待名额与后台续派
+
+- 已修复：达到活动任务上限时，其余项保持待派发；后台随名额释放继续提交，预检不再被活动任务占满阻断。等待项持久化加密配置，关闭弹窗及重启后可继续执行，等待不增加尝试次数或预占积分。
+- 已修复：停止批次与任务/积分创建使用事务内校验，过期的状态轮询不能重新激活已停止项；批次详情补齐 `totalCount`，选择器使用当前轮询到的状态。
+- 已验证：后端批次、任务上限、计费、创作提交与预检接口专项回归通过；23 项批次在上限 5 时保留 18 项等待，新后端实例在无页面轮询下通过模拟上游完成全部 23 项且每项仅执行一次。前端批次专项 6 项与 `bun run typecheck` 通过。
+- [ ] 使用真实渠道提交超过活动任务上限的资产批次，确认其余项陆续生成、候选可采用；关闭并重新打开弹窗后状态与总数正确。
+- [ ] 旧批次已标记失败的项需手动重试；确认仅重试失败项，成功候选保留。
+
+## 项目资产批量生成：自定义渠道请求配置
+
+- 已修复：批量生成资产图片原先直接提交 `resolveModelRequestConfig` 展开的整份浏览器配置。缺少 `capabilityConfig` 时，自定义渠道会落到后端默认图片能力，比例尺寸（如 `1:1`）无法映射成像素，预检报「当前比例与分辨率缺少明确的像素尺寸映射」。同一份配置还带上了全部渠道列表及其密钥。现在 `buildProjectAssetBatchRequest` 改用画布同款 `backendProviderConfig`。
+- 已验证：`bun test test/project-asset-batch-request.test.ts` 通过，`tsc --noEmit` 通过。系统渠道路径用开发库中 `gpt-image-2.5` 的能力配置复现后未受影响。
+- 已修复：预检接口原先返回 `data: { preflight: {...} }`，与 OpenAPI 声明的 `data=ProjectAssetBatchPreflightResult` 和前端类型不一致，点击「预检能力与费用」后页面因 `preflight.items` 为 undefined 崩溃。现在 handler 直接返回预检结果；新增 `TestProjectAssetBatchPreflightReturnsResultAsEnvelopeData` 锁定响应合同。
+- [ ] 在项目资产页选自定义渠道图片模型，批量预检角色三视图，确认预检和提交都成功。
+- 已修复：项目图片任务（`character_turnaround` / `project_asset_image`）成功后不再额外生成「生成图片」素材卡；批次视图不再把成功任务保留的媒体检查点误判为待核对，成功项可直接「采用」到对应角色卡。
+- [ ] 批量生成完成后，在批次弹窗逐项点「采用」，确认图片出现在对应角色卡预览框，且素材库不再新增「生成图片」卡。
+- [ ] 用相同模型和比例在画布单节点生成；如果画布也报同样错误，说明问题在该模型的能力配置（没有默认档位的多档 presets），需要单独处理。
+
+## 全仓安全审查整改（9 项已确认漏洞 + 10 项深入加固，2026-11-04）
+
+- 已完成全仓 19 项安全问题的源码级修复与自动化回归验证：
+  - **供应链、Host Updater、令牌隔离与 Socket 权限（Findings #1, #2）**：
+    - `.github/workflows/publish-images.yml` 将 `docker-compose.deploy.yml` 与 `scripts/install-host-updater.sh` 纳入 Release 资产与 `SHA256SUMS`。
+    - `backend/internal/hostupdate/manager_ops.go` 在升级准备阶段改为从对应 GitHub Release 下载 `SHA256SUMS` 与 `docker-compose.deploy.yml` 并校验 SHA-256，不再信任 mutable branch 的 `raw.githubusercontent.com`；并在 `writeComposeEnvOverride` 中强制确保 `YINGCE_AGENT_TOKEN` 独立（长度 `>=32` 且不等于 `CANVAS_UPDATER_TOKEN`）。
+    - `docker-compose.deploy.yml` 移除 `YINGCE_AGENT_TOKEN` 对 `${CANVAS_UPDATER_TOKEN}` 的回退；`scripts/install-host-updater.sh` 与 `scripts/install-server-image.sh` 同步生成独立 `YINGCE_AGENT_TOKEN`、将 `REPOSITORY_REF` 默认锁定为 `"v${CANVAS_IMAGE_TAG}"` 并校验 `SHA256SUMS`；`backend/cmd/host-updater/main.go` 将 Unix socket 目录与文件权限收紧为 `0o750` / `0o660`。
+  - **反代可信边界、CORS、登录账号限流、OAuth State、密码重置与绑定校验（Findings #3, #4, #5, #8, #9）**：
+    - `backend/cmd/server/main.go` 显式配置 `configureTrustedProxies`（默认仅信任本机与私网反代网段，支持 `CANVAS_TRUSTED_PROXIES` 覆盖），在 `parseCORSPolicy` 中拒绝通配符 `*`，并在 `allowedOriginWithPolicy` 中仅对内部反代 Host 信任 `X-Forwarded-Host` 且强制 HTTPS 源匹配；`docker-compose.server.yml` 移除 `CANVAS_CORS_ORIGINS` 的 `*` 默认值。
+    - `backend/internal/handler/auth.go` 与 `backend/internal/handler/system_proxy_stream.go`：登录接口增加与 IP 无关的账号维度限流（`login-account:<subject>`）；LinuxDO OAuth 增加 `yingce_oauth_state` HttpOnly Cookie 雙重绑定校验；系统渠道代理全面对非流式与流式响应及错误日志执行 `channel.APIKey` 脱敏。
+    - `backend/internal/auth/password_reset.go` 与 `backend/internal/repository/repository_users.go`：旧版邮件验证码哈希比对前递增尝试次数并限制 `attempts <= 5`。
+    - `backend/internal/auth/verification.go` 与 `backend/internal/repository/notifications.go`：禁止 `purpose == "bind"` 覆盖已绑定邮箱/手机号，并在事务内校验手机号唯一性。
+  - **前端账号切换隔离（Findings #6, #7）**：
+    - `web/src/lib/user-session.ts` 与 `web/src/pages/canvas/use-canvas-node-operations.ts`：切换或退出账号时重置 `useInspirationStore` 内存态并按当前账号 scope 重新水合，同时为画布节点剪贴板 `sessionStorage` 键增加用户 scope 并在会话切换时清理。
+  - **出站 SSRF、Eagle 符号链接防护、画布分享撤销、时间轴渲染上限、Live2D 缓存、请求体上限与技能包清理（Needs Validation #1–#10）**：
+    - `backend/internal/outbound/outbound.go`：仅在目标 `host:port` 精确匹配已配置代理端点时跳过自定义 DNS 解析，并将 `100.64.0.0/10`（含阿里云元数据 `100.100.100.200`）等保留网段并入全局 `blockedOutboundIP`。
+    - `backend/internal/app/eagle.go`、`backend/internal/app/eagle_thumbnail.go`、`backend/internal/handler/plugin.go`：拦截符号链接并校验 `filepath.EvalSymlinks` 仍在 `libraryRoot` 内，使用 `mime.FormatMediaType` 构造安全的 `Content-Disposition`。
+    - `backend/internal/app/resource_access.go` 与 `backend/internal/canvas/canvas_share.go`：收敛内部资源签名有效期，画布分享资源签名上限缩短至 `min(now+5m, share.ExpiresAt)`，且本地/代理模式统一走受分享令牌校验保护的 `/api/public/canvas-shares/:token/resources/:resourceId`。
+    - `backend/internal/app/timeline_render_plan.go`、`task_timeline.go`、`task_render.go`：校验片段数 `<= 200`、总时长 `<= 30 分钟` 且时间偏移非负。
+    - `backend/internal/handler/appearance_live2d.go`：公开路由设置 `Cache-Control: public, max-age=3600`，管理端预览路由保持 `private, no-store`。
+    - `backend/internal/handler/routes.go`、`skills.go`、`channel_models.go`、`style_profile.go`、`payment.go`：为 JSON 入参补充 `http.MaxBytesReader` 上限；`backend/internal/skills/skill_packages.go` 与 `backend/internal/repository/skill_packages.go` 在发布新版本后自动保留最近 5 个版本并清理旧 `.zip` 包。
+- 自动化验证：
+  - 前端：`cd web && bun run lint && bun run build` 通过（`tsc --noEmit && vite build` exit 0）。
+  - 后端：`go test ./cmd/server ./internal/outbound/... ./internal/skills/... ./internal/canvas` 及 `internal/auth`、`internal/hostupdate`、`internal/app`、`internal/handler` 安全专项测试全部通过。
+- [ ] 生产/预发部署验收：确认 `.env` 中已配置独立 `YINGCE_AGENT_TOKEN` 与明确的 `CANVAS_CORS_ORIGINS`，执行宿主机在线升级验证 `SHA256SUMS` 校验与 Unix socket `0660` 权限生效。
+- [ ] 真实浏览器验收：验证 LinuxDO OAuth 登录回调、跨账号切换后灵感助手对话与画布剪贴板隔离、画布分享删除后资源链接立即失效。
+
 ## 欢迎页刊头与场记式排版
 
 - 已实现：欢迎页按刊头胶片 + 42% 阅读轴线重排，去掉毛玻璃、渐变和卡片壳；卷轴仍按滚动换幕，素材版本可切换，工作台、场记问答、演职员表和页脚为独立章节。

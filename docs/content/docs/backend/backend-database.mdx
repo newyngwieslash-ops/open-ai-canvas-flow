@@ -214,6 +214,8 @@ docker compose -f docker-compose.deploy.yml up -d backend web
 | `project_asset_generation_batch_items` | 保存批量生成批次中每个资产的独立生成项、基准版本、参考来源、当前任务绑定、重试次数及尝试历史 | `(batch_id, position)` 与 `(batch_id, asset_id)` 唯一，非空 `submission_key` 唯一；关联任务以 `tasks.creation_submission_id = submission_key` 实现崩溃安全对账，在途与 `reconcile_required` 项纳入资源删除引用保护 |
 | `workflow_template_versions` / `workflow_instances` / `workflow_step_instances` | 保存短剧生产模板和项目、章节实例 | 短剧分镜工作流 v2 顺序为剧情、资产、分镜、动作预演、视频、交付 |
 
+批次项因活动任务额度不足而等待时保留 `pending`，由后台 worker 在名额释放后继续派发。`input_snapshot_json` 的 `config` 保留脱敏摘要，`encryptedConfig` 使用现有 `.settings-key` 加密完整执行配置（包括自定义渠道凭据和 headers），供重启后的等待项恢复；该快照不对客户端返回。任务创建、积分预占和批次项绑定在同一事务提交，并重新检查批次未停止，避免停止操作与后台派发竞争导致重复任务或额外扣费。
+
 短剧项目状态以这些领域表为准。自由画布可以承载探索节点，但画布 metadata 不作为生产完成度、镜头版本或交付可用性的真相源。
 
 ### 项目参考图与手动图片候选 JSON 合同（首版实施中）

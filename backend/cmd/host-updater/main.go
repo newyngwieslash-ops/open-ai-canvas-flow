@@ -50,7 +50,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o750); err != nil {
 		return err
 	}
 	if err := removeStaleSocket(socketPath); err != nil {
@@ -62,7 +62,7 @@ func run(ctx context.Context) error {
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
-	if err := os.Chmod(socketPath, 0o666); err != nil {
+	if err := os.Chmod(socketPath, 0o660); err != nil {
 		return err
 	}
 	httpServer := &http.Server{Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second}

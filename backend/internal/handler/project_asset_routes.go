@@ -582,7 +582,7 @@ func registerCharacterLibraryRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
-		ok(c, gin.H{"preflight": preflight})
+		ok(c, preflight)
 	})
 	r.POST("/projects/:id/asset-generation-batches", func(c *gin.Context) {
 		user, err := currentUser(c, svc)

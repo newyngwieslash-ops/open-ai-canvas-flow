@@ -326,7 +326,7 @@ func publicTaskInputJSON(raw string) string {
 	}
 	public := map[string]any{}
 	// 任务完成后仍需依靠这些非敏感 ID 恢复项目产物归属；密钥等配置继续被过滤。
-	for _, key := range []string{"mode", "metadata", "workflowStepId", "domainProjectId", "assetVersionId", "resourceId", "mediaType", "role"} {
+	for _, key := range []string{"mode", "metadata", "chapterAssetContext", "workflowStepId", "domainProjectId", "assetVersionId", "resourceId", "mediaType", "role"} {
 		if value, ok := input[key]; ok {
 			public[key] = value
 		}

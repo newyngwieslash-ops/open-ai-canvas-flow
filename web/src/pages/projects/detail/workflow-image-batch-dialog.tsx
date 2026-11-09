@@ -463,7 +463,7 @@ export function WorkflowImageBatchDialog({
                         {log.items.filter(i => i.state === "stopped").length} · 未知{" "}
                         {log.items.filter(i => i.state === "unknown").length}
                     </span>
-                    <span>单活动任务串行调度（账户并发上限 {controller.activeTaskLimit}）</span>
+                    <span>并行生成，完成后自动补位（账户活动任务上限 {controller.activeTaskLimit}）</span>
                 </div>
             ) : null}
             {hasUnknownItems ? (

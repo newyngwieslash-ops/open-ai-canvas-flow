@@ -66,3 +66,48 @@ func (r *Repository) AutoUpdatingGitHubSkills() ([]model.Skill, error) {
 func (r *Repository) SaveSkill(skill *model.Skill) error {
 	return r.db.Save(skill).Error
 }
+
+func (r *Repository) PruneOldSkillVersions(skillID string, currentVersionID string, keepCount int) ([]string, error) {
+	if keepCount < 1 {
+		keepCount = 1
+	}
+	var prunedPackageKeys []string
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var versions []model.SkillVersion
+		if err := tx.Where("skill_id = ?", skillID).Order("created_at desc, id desc").Find(&versions).Error; err != nil {
+			return err
+		}
+		if len(versions) <= keepCount {
+			return nil
+		}
+		var referencedIDs []string
+		if err := tx.Model(&model.UserSkillState{}).
+			Where("skill_id = ? AND installed_version_id <> ''", skillID).
+			Pluck("installed_version_id", &referencedIDs).Error; err != nil {
+			return err
+		}
+		protected := make(map[string]struct{}, len(referencedIDs)+1)
+		if currentVersionID != "" {
+			protected[currentVersionID] = struct{}{}
+		}
+		for _, id := range referencedIDs {
+			protected[id] = struct{}{}
+		}
+		for _, candidate := range versions[keepCount:] {
+			if _, ok := protected[candidate.ID]; ok {
+				continue
+			}
+			if err := tx.Where("skill_version_id = ?", candidate.ID).Delete(&model.SkillFile{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id = ?", candidate.ID).Delete(&model.SkillVersion{}).Error; err != nil {
+				return err
+			}
+			if candidate.PackageKey != "" {
+				prunedPackageKeys = append(prunedPackageKeys, candidate.PackageKey)
+			}
+		}
+		return nil
+	})
+	return prunedPackageKeys, err
+}

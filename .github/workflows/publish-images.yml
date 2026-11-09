@@ -196,8 +196,9 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "../dist/open-ai-canvas-host-updater-linux-$arch" ./cmd/host-updater
           done
+          cp ../docker-compose.deploy.yml ../scripts/install-host-updater.sh ../dist/
           cd ../dist
-          sha256sum open-ai-canvas-host-updater-linux-* > SHA256SUMS
+          sha256sum open-ai-canvas-host-updater-linux-* docker-compose.deploy.yml install-host-updater.sh > SHA256SUMS
       - name: Prepare release notes
         shell: bash
         run: |
@@ -226,6 +227,7 @@ jobs:
             dist/open-ai-canvas-host-updater-linux-arm64
             dist/SHA256SUMS
             docker-compose.deploy.yml
+            scripts/install-host-updater.sh
           )
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber

@@ -375,8 +375,8 @@ func eagleOriginalPath(thumbnailPath string, itemID string, libraryPath string) 
 	stem = strings.TrimSuffix(stem, "_thumbnail")
 	if ext := filepath.Ext(base); ext != "" {
 		candidate := filepath.Join(itemDir, stem+ext)
-		if stat, statErr := os.Stat(candidate); statErr == nil && !stat.IsDir() {
-			return candidate, nil
+		if safePath, safeErr := ensureSafeEagleFilePath(candidate, itemDir); safeErr == nil {
+			return safePath, nil
 		}
 	}
 	entries, err := os.ReadDir(itemDir)
@@ -385,16 +385,38 @@ func eagleOriginalPath(thumbnailPath string, itemID string, libraryPath string) 
 	}
 	candidates := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || strings.EqualFold(entry.Name(), "metadata.json") || strings.Contains(strings.ToLower(entry.Name()), "_thumbnail") {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || strings.EqualFold(entry.Name(), "metadata.json") || strings.Contains(strings.ToLower(entry.Name()), "_thumbnail") {
 			continue
 		}
-		candidates = append(candidates, filepath.Join(itemDir, entry.Name()))
+		if safePath, safeErr := ensureSafeEagleFilePath(filepath.Join(itemDir, entry.Name()), itemDir); safeErr == nil {
+			candidates = append(candidates, safePath)
+		}
 	}
 	if len(candidates) == 0 {
 		return "", errors.New("Eagle 原始文件不存在")
 	}
 	sort.Strings(candidates)
 	return candidates[0], nil
+}
+
+func ensureSafeEagleFilePath(candidate string, itemDir string) (string, error) {
+	info, err := os.Lstat(candidate)
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("Eagle 素材路径无效")
+	}
+	resolvedDir, err := filepath.EvalSymlinks(itemDir)
+	if err != nil {
+		return "", errors.New("Eagle 素材目录无效")
+	}
+	resolvedPath, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", errors.New("Eagle 素材路径无效")
+	}
+	rel, err := filepath.Rel(resolvedDir, resolvedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("Eagle 素材路径不在当前素材库内")
+	}
+	return resolvedPath, nil
 }
 
 func flattenEagleFolders(folders []EagleFolder, parentID string) []EagleFolder {

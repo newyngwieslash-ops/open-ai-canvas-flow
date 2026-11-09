@@ -87,33 +87,44 @@ func (m *Manager) currentVersion() (string, error) {
 }
 
 func (m *Manager) prepareTargetCompose(targetVersion string) (string, error) {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", m.config.Repository, targetVersion, m.config.ComposeFile)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	baseURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/", m.config.Repository, targetVersion)
+	checksums, err := m.downloadReleaseAsset(baseURL+"SHA256SUMS", 1<<20)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("下载目标 Compose 校验清单：%w", err)
 	}
-	response, err := m.httpClient.Do(request)
+	expected, err := lookupReleaseChecksum(checksums, m.config.ComposeFile)
+	if err != nil {
+		return "", fmt.Errorf("目标 Release 的 SHA256SUMS 缺少 %s", m.config.ComposeFile)
+	}
+	data, err := m.downloadReleaseAsset(baseURL+m.config.ComposeFile, 2<<20)
 	if err != nil {
 		return "", fmt.Errorf("下载目标 Compose：%w", err)
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载目标 Compose 返回 HTTP %d", response.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-	if err != nil {
-		return "", err
-	}
 	if len(data) == 0 {
 		return "", errors.New("目标 Compose 文件为空")
+	}
+	hash := sha256.Sum256(data)
+	actual := hex.EncodeToString(hash[:])
+	if actual != expected {
+		return "", fmt.Errorf("目标 Compose 校验失败：期望 %s，实际 %s", expected, actual)
 	}
 	path := filepath.Join(m.config.StateDir, "compose-"+strings.TrimPrefix(targetVersion, "v")+".next.yml")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("保存目标 Compose：%w", err)
 	}
 	return path, nil
+}
+
+func lookupReleaseChecksum(checksums []byte, asset string) (string, error) {
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == asset && len(fields[0]) == 64 {
+			if _, err := hex.DecodeString(fields[0]); err == nil {
+				return strings.ToLower(fields[0]), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("missing checksum for %s", asset)
 }
 
 func (m *Manager) preflight(composePath, targetVersion string) error {
@@ -183,15 +194,8 @@ func (m *Manager) prepareUpdaterBinary(targetVersion string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("下载 Host Updater 校验清单：%w", err)
 	}
-	expected := ""
-	for _, line := range strings.Split(string(checksums), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == asset {
-			expected = fields[0]
-			break
-		}
-	}
-	if len(expected) != 64 {
+	expected, err := lookupReleaseChecksum(checksums, asset)
+	if err != nil {
 		return "", fmt.Errorf("目标 Release 的 SHA256SUMS 缺少 %s", asset)
 	}
 	binary, err := m.downloadReleaseAsset(baseURL+asset, 128<<20)
@@ -336,6 +340,10 @@ func (m *Manager) writeComposeEnvOverride(images deploymentImages) (string, erro
 		cleanup()
 		return "", err
 	}
+	if err := ensureAgentToken(path); err != nil {
+		cleanup()
+		return "", err
+	}
 	return path, nil
 }
 
@@ -393,7 +401,9 @@ func ensureAgentToken(path string) error {
 	if err != nil {
 		return err
 	}
-	if len(strings.TrimSpace(values["YINGCE_AGENT_TOKEN"])) >= 32 {
+	agentToken := strings.TrimSpace(values["YINGCE_AGENT_TOKEN"])
+	updaterToken := strings.TrimSpace(values["CANVAS_UPDATER_TOKEN"])
+	if len(agentToken) >= 32 && (updaterToken == "" || agentToken != updaterToken) {
 		return nil
 	}
 	token := make([]byte, 32)

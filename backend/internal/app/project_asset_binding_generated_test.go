@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"yingce/backend/internal/model"
 	"yingce/backend/internal/repository"
@@ -35,6 +36,53 @@ func generatedFixture(t *testing.T) (*Service, *gorm.DB) {
 		}
 	}
 	return &Service{repo: repository.New(db)}, db
+}
+
+func TestGeneratedStoryboardCanBeSavedAfterTaskCompletion(t *testing.T) {
+	s, db := generatedFixture(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CanvasProject{}, &model.TaskLog{}, &model.Result{}, &model.ApiCallLog{}, &model.TaskTextDelta{}, &model.ProjectAssetCandidate{}, &model.WorkflowInstance{}, &model.WorkflowStepInstance{}, &model.WorkflowStepTask{}, &model.ProductionTaskLink{}); err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{
+		ID: "completed-storyboard", UserID: "u", ProjectID: "p", Type: "canvas_text", Operation: "storyboard", Status: model.TaskStatusRunning,
+		InputJSON: `{"mode":"text","metadata":{"source":"short-drama-chapter-storyboard","chapterId":"unit"},"config":{"apiKey":"private-test-key"},"chapterAssetContext":{"projectId":"p","unitId":"unit","operation":"storyboard","summary":"large catalog","allowedAssetIds":["a"],"totalCount":3,"sentCount":1,"scope":{"kind":"selected","assetIds":["a"]}}}`,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	result := []byte(`{"text":"{\"rows\":[{\"plotDescription\":\"A character enters\",\"durationSeconds\":6,\"projectAssetRefs\":[{\"assetId\":\"a\",\"category\":\"character\"}]}]}"}`)
+	if err := s.saveTaskCompletionWithinStorageQuota(&task, result, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.repo.TaskForUser("u", task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != model.TaskStatusSucceeded || strings.Contains(stored.InputJSON, "private-test-key") || strings.Contains(stored.InputJSON, `"config"`) {
+		t.Fatal("task must finish without retaining provider credentials")
+	}
+	// Public reads and storage maintenance both reapply the same compaction.
+	if err := db.Model(stored).Update("input_json", publicTaskInputJSON(stored.InputJSON)).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := s.ResolveGeneratedProjectUnitShotAssetBindings(context.Background(), "u", "p", "unit", GeneratedBindingRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("completed storyboard must remain saveable: %v", err)
+	}
+	if len(resolution.Rows) != 1 || !reflect.DeepEqual(resolution.Rows[0].AssetVersionIDs, []string{"v"}) {
+		t.Fatalf("original allowed asset scope was lost: %+v", resolution.Rows)
+	}
+	shots, err := s.ReplaceProjectUnitShots("u", "p", "unit", ReplaceProjectUnitShotsRequest{
+		ExpectedShotIDs:  []string{"s"},
+		GeneratedBinding: &GeneratedBindingInput{TaskID: task.ID, Baseline: resolution.Baseline, RowIndices: []int{0}},
+		Shots:            []ReplaceProjectUnitShotInput{{CreateProjectShotRequest: CreateProjectShotRequest{Title: "镜头01", Description: "A character enters", DurationMs: 6000, Revision: ShotRevisionInput{PlotDescription: "A character enters", DurationMs: 6000}}, AssetVersionIDs: []string{"v"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shots) != 1 || shots[0].UnitID != "unit" || shots[0].Description != "A character enters" {
+		t.Fatalf("completed result was not persisted as a chapter shot: %+v", shots)
+	}
 }
 
 func TestStoryboardAssetGeneratedWorkspacePreservesOriginalReference(t *testing.T) {
@@ -400,5 +448,3 @@ func TestStoryboardAssetGeneratedWarnsOnMissingRefsAndMissingEnvironment(t *test
 		t.Fatalf("expected 0 issues on row 2 with environment bound, got %+v", resolved.Rows[2].Issues)
 	}
 }
-
-

@@ -42,6 +42,10 @@ func (s *Service) OpenEagleItemThumbnail(rawBaseURL string, itemID string) (*Eag
 	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return nil, errors.New("Eagle 缩略图路径不在当前素材库内")
 	}
+	thumbnailPath, err = ensureSafeEagleFilePath(thumbnailPath, itemDir)
+	if err != nil {
+		return nil, err
+	}
 	file, err := os.Open(thumbnailPath)
 	if err != nil {
 		return nil, errors.New("无法读取 Eagle 缩略图")

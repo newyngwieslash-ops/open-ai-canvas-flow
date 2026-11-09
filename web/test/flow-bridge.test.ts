@@ -97,7 +97,7 @@ describe("Flow project bridge", () => {
         globalThis.fetch = (async (url, init) => {
             fetchCount++;
             expect(String(url)).toEndWith("/resources/image-1/file");
-            expect(init?.credentials).toBe("include");
+            expect(init?.credentials).toBe("same-origin");
             expect(init?.signal).toBe(controller.signal);
             return new Response(data, { headers: { "content-type": "image/png; charset=binary" } });
         }) as typeof fetch;

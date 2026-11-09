@@ -61,7 +61,7 @@ install_binary() {
 }
 
 ensure_token() {
-    local token temporary
+    local token agent_token temporary
     token="$(sed -n 's/^CANVAS_UPDATER_TOKEN=//p' "${INSTALL_DIR}/.env" | tail -n 1)"
     if [[ -z "$token" ]]; then
         token="$(openssl rand -hex 32)"
@@ -76,13 +76,26 @@ ensure_token() {
         mv "$temporary" "${INSTALL_DIR}/.env"
     fi
     [[ ${#token} -ge 32 ]] || fail "CANVAS_UPDATER_TOKEN 长度不足"
+    agent_token="$(sed -n 's/^YINGCE_AGENT_TOKEN=//p' "${INSTALL_DIR}/.env" | tail -n 1)"
+    if [[ ${#agent_token} -lt 32 || "$agent_token" == "$token" ]]; then
+        agent_token="$(openssl rand -hex 32)"
+        temporary="$(mktemp "${INSTALL_DIR}/.env.XXXXXX")"
+        awk -v token="$agent_token" '
+            BEGIN { updated=0 }
+            /^YINGCE_AGENT_TOKEN=/ { print "YINGCE_AGENT_TOKEN=" token; updated=1; next }
+            { print }
+            END { if (!updated) print "YINGCE_AGENT_TOKEN=" token }
+        ' "${INSTALL_DIR}/.env" > "$temporary"
+        chmod --reference="${INSTALL_DIR}/.env" "$temporary"
+        mv "$temporary" "${INSTALL_DIR}/.env"
+    fi
     umask 077
     printf 'CANVAS_UPDATER_TOKEN=%s\nCANVAS_UPDATER_INSTALL_DIR=%s\nCANVAS_UPDATER_SOCKET=%s/updater.sock\n' "$token" "$INSTALL_DIR" "$SOCKET_DIR" > "$UPDATER_ENV"
 }
 
 install_service() {
     local temporary_service
-    install -d -m 0755 "$SOCKET_DIR"
+    install -d -m 0750 "$SOCKET_DIR"
     install -d -m 0700 /var/lib/open-ai-canvas-updater "${INSTALL_DIR}/backups"
     temporary_service="$(mktemp)"
     printf '%s\n' \

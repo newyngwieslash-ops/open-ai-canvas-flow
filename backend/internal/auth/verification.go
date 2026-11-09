@@ -111,6 +111,12 @@ func (s *Service) StartVerification(ctx context.Context, actor *model.User, req 
 		if !verifyPassword(req.Password, actor.PasswordHash) {
 			return nil, kernel.Unauthorized("当前密码不正确")
 		}
+		if email != "" && strings.TrimSpace(actor.Email) != "" {
+			return nil, kernel.BadAuthRequest("当前账号已绑定邮箱，请通过个人资料修改邮箱")
+		}
+		if phone != "" && strings.TrimSpace(actor.Phone) != "" {
+			return nil, kernel.BadAuthRequest("当前账号已绑定手机号")
+		}
 		userID = actor.ID
 	}
 	// Existing, active, verified contacts only. Responses do not disclose whether
@@ -335,6 +341,12 @@ func (s *Service) BindVerification(actor *model.User, req VerificationConfirm) (
 	}
 	if v.UserID != actor.ID {
 		return nil, invalidVerification()
+	}
+	if v.Email != "" && strings.TrimSpace(actor.Email) != "" {
+		return nil, kernel.BadAuthRequest("当前账号已绑定邮箱，请通过个人资料修改邮箱")
+	}
+	if v.Phone != "" && strings.TrimSpace(actor.Phone) != "" {
+		return nil, kernel.BadAuthRequest("当前账号已绑定手机号")
 	}
 	if err := s.contactAvailable(v.Email, v.Phone, actor.ID); err != nil {
 		return nil, err

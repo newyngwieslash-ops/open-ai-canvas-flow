@@ -58,6 +58,9 @@ func (w *taskWorkerCoordinator) start(ctx context.Context) {
 			if ctx.Err() != nil || s.IsDraining() {
 				return
 			}
+			if err := s.dispatchPendingProjectAssetBatchItems(ctx); err != nil {
+				log.Printf("batch dispatch paused: worker_id=%s error=%v", s.workerID, err)
+			}
 			setting, err := s.runtimeConcurrencySetting()
 			if err != nil {
 				log.Printf("task dispatch paused: stage=runtime_policy worker_id=%s error=%v", s.workerID, err)

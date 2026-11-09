@@ -62,7 +62,11 @@ func registerLive2DRoutes(r *gin.RouterGroup, svc *service.Service) {
 				return
 			}
 			c.Header("X-Content-Type-Options", "nosniff")
-			c.Header("Cache-Control", "private, no-cache")
+			if admin {
+				c.Header("Cache-Control", "private, no-store")
+			} else {
+				c.Header("Cache-Control", "public, max-age=3600")
+			}
 			c.Header("Content-Security-Policy", "default-src 'none'")
 			c.Data(http.StatusOK, mime, data)
 		}

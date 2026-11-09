@@ -2,6 +2,7 @@ package handler
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -244,7 +245,7 @@ func RegisterPluginRoutes(r *gin.RouterGroup, svc *service.Service) {
 		defer file.Body.Close()
 		c.Header("Cache-Control", "private, no-store")
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("Content-Disposition", "attachment; filename=\""+file.Name+"\"")
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": file.Name}))
 		c.DataFromReader(http.StatusOK, file.Size, file.MimeType, file.Body, nil)
 	})
 	pluginRoutes.GET("/eagle/items/:itemId/thumbnail", func(c *gin.Context) {

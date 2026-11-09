@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 	"yingce/backend/internal/assets"
@@ -151,10 +152,24 @@ func (s *Service) PrepareSharedCanvasResourceDelivery(token string, resourceID s
 	if err != nil {
 		return nil, err
 	}
-	if share.ExpiresAt != nil {
-		options.ExpiresAt = *share.ExpiresAt
+	maxExpiresAt := time.Now().UTC().Add(5 * time.Minute)
+	if share.ExpiresAt != nil && share.ExpiresAt.Before(maxExpiresAt) {
+		maxExpiresAt = *share.ExpiresAt
 	}
-	return s.host.PrepareResourceDelivery(userID, resource, options, rangeHeader)
+	options.ExpiresAt = maxExpiresAt
+	delivery, err := s.host.PrepareResourceDelivery(userID, resource, options, rangeHeader)
+	if err != nil {
+		return nil, err
+	}
+	if delivery != nil && delivery.Access != nil && (delivery.Access.Delivery == assets.DeliveryLocal || delivery.Access.Delivery == assets.DeliveryProxy) {
+		sharePath := sharedCanvasResourceURL(token, resource.ID)
+		if delivery.Access.ActualVariant != "" {
+			sharePath += "?variant=" + url.QueryEscape(string(delivery.Access.ActualVariant))
+		}
+		delivery.Access.URL = sharePath
+		delivery.Access.ExpiresAt = share.ExpiresAt
+	}
+	return delivery, nil
 }
 
 func (s *Service) sharedCanvasResource(token string, resourceID string) (string, *model.Resource, *model.CanvasShare, error) {

@@ -7,7 +7,13 @@ description: 信封、错误码与 OpenAPI
 
 ## 章节分镜生成资产合同
 
+章节拆镜必须把完整项目画风写入任务 `prompt`，明确每镜图片提示词沿用项目视觉媒介；仅设置 `input.projectStyle` 不会让通用文本生成器将其发送给模型。风格正文与章节、输出契约、资产目录一起计入完整提示词预算。
+
+项目图片和视频任务执行时，后端通过任务项目或画布所属项目读取已保存的风格快照；请求漏传 `metadata.styleProfileJson` 也不能跳过该快照。普通模型与工作流模型均在分派前重新计算风格执行计划，严格资产策略不可执行时失败。短剧动作预演将项目配色转换为灰阶，保留视觉媒介、角色造型和画法；历史镜头及已有媒体不会因这一规则自动改写。
+
 候选来自 `GET /api/projects/:id/assets?page=1&pageSize=80` 的完整分页（`assets/total/page/pageSize/hasMore/categoryCounts/folderCounts`），不是章节 workspace 的已引用资产子集。章节文本任务的 `chapterAssetContext` 只提交 `projectId/unitId/scope`；服务端重建允许集合与摘要，不接受客户端操作、可信摘要或允许集合。摘要 UTF-8 上限 24 KiB，另检查实际完整 prompt 的模型上下文预算；超限拒绝且不截断目录。
+
+任务完成后的输入精简、任务详情输出和存储迁移保留服务端构建的 `chapterAssetContext`，用于后续校验章节归属及原始允许资产范围；模型渠道配置和密钥仍被移除。文本任务 `succeeded` 表示生成结果已保存到任务记录，不等于镜头已经写入章节：章节按钮仅在本章存在已保存镜头时显示「已生成」，成功任务尚未落库时显示「结果待保存」。
 
 `POST /api/projects/:id/units/:unitId/shot-asset-bindings/resolve-generated` 接收 `{ taskId }`，请求体上限 64 KiB，只读返回 `{ taskId, baseline, rows }`。每行是 `{ rowIndex, candidates, assetVersionIds, issues }`；`rowIndex` 是真实输出零基序号。taskId 不是鉴权凭据：仍需当前登录、项目归属与真实任务 owner；任务必须为本项目本章节的 `canvas_text`、`storyboard`、`mode=text`、`succeeded`，并使用创建时服务端允许集合。
 
@@ -700,6 +706,7 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 | POST | `/api/projects/:id/asset-generation-batches/:batchId/items/:itemId/retry` | `{ batch }` |
 
 - **预检与费用摘要（`preflight`）**：逐项校验项目归属、资产归属、`expectedVersionId == primaryVersionId`、`referenceSource=original|current|none` 的参考图完整性及所选模型的多参考图上限与字节预算，汇总已知积分费用 `totalKnownMicrocredits`、未知价格项数量 `priceUnknownCount` 及 `preflightDigest`，不入队、不扣费。
+- **排队与后台续派**：活动任务达到用户上限时，剩余批次项保持 `pending`，不创建任务、不预占积分、不计作失败或重试；预检仍可执行。后台 worker 在任务完成和定期扫描时继续派发，关闭弹窗或重启后端不影响等待项恢复。派发前重查资产版本、模型能力和价格；价格变化的等待项返回 `batch_preflight_stale`，需要重新确认。批次详情和列表返回 `totalCount`。
 - **幂等创建与对账（`POST /asset-generation-batches`）**：按 `(userId, projectId, idempotencyKey)` 保证幂等。同键同参数重放返回同一批次及已创建的 `taskId`（若因中断存在未绑定 `taskId` 的项，先通过 `tasks.creation_submission_id = submission_key` 对账恢复，仅对确认未创建任务的 `pending` 项补派发）；同键异参返回 HTTP 409 `reason=batch_idempotency_conflict`；预检摘要或资产版本变化返回 HTTP 409 `reason=batch_preflight_stale` 或 `project_asset_version_changed`。
 - **停止未提交项 vs 取消已提交任务分离**：`POST .../stop` 仅将 `status=pending` 且 `taskId=""` 的未派发项原子更新为 `stopped`，阻止后续派发与扣费；`POST .../cancel-tasks` 对已关联的 `queued/running` 任务发起取消，已成功产出的手动候选保持不变。
 - **局部失败重试与 `reconcile_required` 保护**：`POST .../items/:itemId/retry` 仅允许对 `status=failed` 且 `canRetry=true` 的项重试，将旧 `taskId` 归档至 `attemptHistory`、递增 `attempt` 并生成新 `submissionKey` 创建新任务。若任务缺失记录或带有待恢复媒体检查点（`MediaRecoveryJSON` / `CanRecoverMedia`），状态标记为 `reconcile_required` 且 `canRetry=false`，禁止盲目重发收费请求。

@@ -1,9 +1,12 @@
 import type {
+    PreflightProjectAssetBatchRequest,
     ProjectAsset,
     ProjectAssetBatchItemInput,
     ProjectAssetBatchReferenceSource,
     ProjectAssetBatchView,
 } from "@/services/api/projects";
+import { backendProviderConfig } from "@/services/api/generation-task";
+import { logicalModelIDForConfig, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import { currentAssetImageId } from "./project-reference-image";
 import { textValue } from "./shared";
 
@@ -15,6 +18,30 @@ export type BatchDraftItem = ProjectAssetBatchItemInput & {
     referenceCount: number;
     hasCurrentImage: boolean;
 };
+
+export function buildProjectAssetBatchRequest(
+    config: AiConfig,
+    routedModel: string,
+    items: BatchDraftItem[],
+): PreflightProjectAssetBatchRequest {
+    const generationConfig: AiConfig = { ...config, model: routedModel, imageModel: routedModel, count: "1" };
+    const requestConfig = resolveModelRequestConfig(generationConfig, routedModel);
+    const logicalModelId = logicalModelIDForConfig(generationConfig);
+    return {
+        provider: logicalModelId ? "managed" : requestConfig.channelId ? "system" : "custom",
+        model: requestConfig.model || routedModel,
+        logicalModelId: logicalModelId || undefined,
+        // 与画布生成共用后端 Provider 配置：带上模型能力合同和图片参数，只含当前渠道凭据。
+        config: backendProviderConfig(generationConfig, "image") as Record<string, unknown>,
+        items: items.map((item) => ({
+            assetId: item.assetId,
+            expectedVersionId: item.expectedVersionId,
+            referenceSource: item.referenceSource,
+            prompt: item.prompt.trim(),
+            operation: item.operation,
+        })),
+    };
+}
 
 export function isBatchEligibleProjectAsset(asset: ProjectAsset): boolean {
     if (!asset.primaryVersionId) return false;

@@ -157,11 +157,38 @@ func buildRenderSubtitleSRT(project renderProject) string {
 }
 
 const (
-	renderWidth      = 1920
-	renderHeight     = 1080
-	renderFPS        = 30
-	renderSampleRate = 44100
+	renderWidth         = 1920
+	renderHeight        = 1080
+	renderFPS           = 30
+	renderSampleRate    = 44100
+	maxRenderSegments   = 200
+	maxRenderDurationMs = 30 * 60 * 1000
 )
+
+func validateRenderPlan(project renderProject, plan renderPlan) error {
+	if !plan.HasMedia {
+		return BadAuthRequest("时间线没有可渲染的媒体片段")
+	}
+	if len(plan.Segments) > maxRenderSegments {
+		return BadAuthRequest("时间线片段过多，单次最多支持 200 个渲染片段")
+	}
+	for _, clip := range project.Clips {
+		if clip.StartMs < 0 || clip.SourceStartMs < 0 {
+			return BadAuthRequest("时间线片段起始时间不能为负数")
+		}
+	}
+	var totalDurationMs int64
+	for _, seg := range plan.Segments {
+		if seg.DurationMs <= 0 || seg.DurationMs > maxRenderDurationMs {
+			return BadAuthRequest("时间线片段时长超出允许范围")
+		}
+		totalDurationMs += seg.DurationMs
+		if totalDurationMs > maxRenderDurationMs {
+			return BadAuthRequest("时间线总时长超过单次渲染上限（30 分钟）")
+		}
+	}
+	return nil
+}
 
 // buildRenderFFmpegArgs 依据渲染计划生成 ffmpeg 参数（工作目录内相对路径）。
 // 每段固定两个输入：视频源与音频源，末尾 concat 为单路输出。

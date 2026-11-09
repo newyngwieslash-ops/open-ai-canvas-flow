@@ -134,6 +134,9 @@ func RegisterAuthRoutes(r *gin.RouterGroup, svc *service.Service) {
 		if !enforceRateLimit(c, "login:"+c.ClientIP()+":"+subject, policy.Request.LoginAccountPerTenMinutes, 10*time.Minute) {
 			return
 		}
+		if !enforceRateLimit(c, "login-account:"+subject, policy.Request.LoginAccountPerTenMinutes, 10*time.Minute) {
+			return
+		}
 		req.LoginContext = loginRequestContext(c)
 		c.Set("login_audit_handled", true)
 		result, err := svc.Login(req)
@@ -154,6 +157,7 @@ func RegisterAuthRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		setLinuxDOOAuthStateCookie(c, target)
 		c.Redirect(http.StatusFound, target)
 	})
 	r.GET("/auth/linuxdo/callback", rejectedLoginAudit(svc, "linuxdo"), linuxDOCallbackHandler(svc))
@@ -222,16 +226,27 @@ func linuxDOCallbackHandler(svc *service.Service) gin.HandlerFunc {
 		if !enforceRateLimit(c, "linuxdo-callback:"+c.ClientIP(), 30, 10*time.Minute) {
 			return
 		}
-		reauthentication, stateErr := svc.LinuxDOReauthenticationState(c.Query("state"))
+		stateValue := strings.TrimSpace(c.Query("state"))
+		reauthentication, stateErr := svc.LinuxDOReauthenticationState(stateValue)
 		if stateErr != nil {
+			clearLinuxDOOAuthStateCookie(c)
 			if err := svc.RecordRejectedLogin("linuxdo", loginRequestContext(c), 400); err != nil {
 				log.Printf("OAuth rejected login audit write failed: error=%v", err)
 			}
 			c.Redirect(http.StatusFound, "/login?oauth_error="+url.QueryEscape("无法读取身份验证状态，请重试"))
 			return
 		}
+		if !reauthentication && !verifyLinuxDOOAuthStateCookie(c, stateValue) {
+			clearLinuxDOOAuthStateCookie(c)
+			if err := svc.RecordRejectedLogin("linuxdo", loginRequestContext(c), 400); err != nil {
+				log.Printf("OAuth rejected login audit write failed: error=%v", err)
+			}
+			c.Redirect(http.StatusFound, "/login?oauth_error="+url.QueryEscape("OAuth 登录状态与当前浏览器不匹配，请重新发起登录"))
+			return
+		}
+		clearLinuxDOOAuthStateCookie(c)
 		c.Set("login_audit_handled", true)
-		result, err := svc.CompleteLinuxDOLogin(c.Query("state"), c.Query("code"), sessionCookie(c), loginRequestContext(c))
+		result, err := svc.CompleteLinuxDOLogin(stateValue, c.Query("code"), sessionCookie(c), loginRequestContext(c))
 		if err != nil {
 			if reauthentication {
 				c.Redirect(http.StatusFound, "/settings?section=profile&reauth=error")
@@ -464,7 +479,7 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 	resp, err := svc.OutboundHTTPClientForChannel(35*time.Minute, validatedTarget, channel.ProxyURL).Do(upstreamReq)
 	if err != nil {
 		status = model.ApiCallStatusFailed
-		errorText = err.Error()
+		errorText = string(redactRelaySecret([]byte(err.Error()), channel.APIKey))
 		markSystemProxyBillingUncertain(svc, billingOrderID, "系统渠道连接中断，费用状态待核对")
 		logSystemProxyCall(svc, apiCallLog(user, channel, billingOrderID, capability, protocol, c.Request.Method, path, target, body, c.GetHeader("Content-Type"), status, statusCode, time.Since(startedAt), errorText, concurrencyLimit), nil, protocol, "")
 		fail(c, http.StatusBadGateway, errors.New("系统渠道连接失败"))
@@ -483,16 +498,14 @@ func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.Us
 	var responseBody []byte
 	var readErr error
 	if streamed {
-		responseBody, readErr = streamSystemProxyResponse(c, resp, responseLimit)
+		responseBody, readErr = streamSystemProxyResponseWithRedaction(c, resp, responseLimit, channel.APIKey)
 	} else {
 		responseBody, readErr = io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	}
-	if protocol == "fisher-h3-video" {
-		responseBody = redactRelaySecret(responseBody, channel.APIKey)
-	}
+	responseBody = redactRelaySecret(responseBody, channel.APIKey)
 	if readErr != nil {
 		status = model.ApiCallStatusFailed
-		errorText = readErr.Error()
+		errorText = string(redactRelaySecret([]byte(readErr.Error()), channel.APIKey))
 		billingNote := "系统渠道响应读取失败，费用状态待核对"
 		if errors.Is(readErr, errSystemProxyResponseTooLarge) {
 			billingNote = "上游已响应但流式响应体超过限制，费用状态待核对"
@@ -657,6 +670,59 @@ func clearSessionCookie(c *gin.Context) {
 	secure := c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     service.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	})
+}
+
+const linuxDOOAuthStateCookieName = "yingce_oauth_state"
+
+func oauthStateCookieHash(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func setLinuxDOOAuthStateCookie(c *gin.Context, redirectURL string) {
+	parsed, err := url.Parse(redirectURL)
+	if err != nil {
+		return
+	}
+	state := strings.TrimSpace(parsed.Query().Get("state"))
+	if state == "" {
+		return
+	}
+	secure := c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     linuxDOOAuthStateCookieName,
+		Value:    oauthStateCookieHash(state),
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	})
+}
+
+func verifyLinuxDOOAuthStateCookie(c *gin.Context, stateValue string) bool {
+	if stateValue == "" {
+		return false
+	}
+	cookieHash, err := c.Cookie(linuxDOOAuthStateCookieName)
+	if err != nil || cookieHash == "" {
+		return false
+	}
+	expected := oauthStateCookieHash(stateValue)
+	return len(cookieHash) == len(expected) && cookieHash == expected
+}
+
+func clearLinuxDOOAuthStateCookie(c *gin.Context) {
+	secure := c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     linuxDOOAuthStateCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,

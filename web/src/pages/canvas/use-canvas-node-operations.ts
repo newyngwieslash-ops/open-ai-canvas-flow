@@ -18,6 +18,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { workflowProviderPluginEnabled } from "@/lib/plugins/builtin/workflows";
 import { usePluginStore } from "@/stores/use-plugin-store";
+import { scopedStorageKey } from "@/lib/user-scope";
 
 type CanvasClipboard = {
     nodes: CanvasNodeData[];
@@ -457,7 +458,7 @@ export function useCanvasNodeOperations({
         const copiedConnections = connectionsRef.current.filter((connection) => copyIds.has(connection.fromNodeId) && copyIds.has(connection.toNodeId)).map((connection) => ({ ...connection }));
         clipboardRef.current = { nodes: copiedNodes, connections: copiedConnections };
         try {
-            sessionStorage.setItem(CANVAS_NODES_CLIPBOARD_STORAGE_KEY, JSON.stringify(clipboardRef.current));
+            sessionStorage.setItem(scopedStorageKey(CANVAS_NODES_CLIPBOARD_STORAGE_KEY), JSON.stringify(clipboardRef.current));
         } catch {
             // 大型媒体节点可能超过浏览器存储配额，当前页面内仍可正常粘贴。
         }
@@ -556,7 +557,7 @@ export function useCanvasNodeOperations({
         const isLegacyJSON = value.startsWith(CANVAS_NODES_JSON_CLIPBOARD_PREFIX);
         if (!isMarker && !isLegacyJSON) return false;
         try {
-            const serialized = isLegacyJSON ? value.slice(CANVAS_NODES_JSON_CLIPBOARD_PREFIX.length) : sessionStorage.getItem(CANVAS_NODES_CLIPBOARD_STORAGE_KEY);
+            const serialized = isLegacyJSON ? value.slice(CANVAS_NODES_JSON_CLIPBOARD_PREFIX.length) : sessionStorage.getItem(scopedStorageKey(CANVAS_NODES_CLIPBOARD_STORAGE_KEY));
             if (!serialized) return false;
             const parsed = JSON.parse(serialized) as Partial<CanvasClipboard>;
             if (!parsed.nodes?.length) return false;

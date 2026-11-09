@@ -2,7 +2,8 @@
 
 set -Eeuo pipefail
 
-REPOSITORY_REF="${REPOSITORY_REF:-main}"
+REPOSITORY="${REPOSITORY:-ddcat-ai/open-ai-canvas}"
+REPOSITORY_REF="${REPOSITORY_REF:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/open-ai-canvas}"
 CANVAS_HTTP_PORT="${CANVAS_HTTP_PORT:-3000}"
 REQUESTED_IMAGE_TAG="${CANVAS_IMAGE_TAG:-}"
@@ -11,8 +12,9 @@ IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-ghcr.io/ddcat-ai/open-ai-canvas}"
 CANVAS_BACKEND_IMAGE=""
 CANVAS_WEB_IMAGE=""
 COMPOSE_FILE="docker-compose.deploy.yml"
-COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/ddcat-ai/open-ai-canvas/${REPOSITORY_REF}/${COMPOSE_FILE}}"
-UPDATER_INSTALL_URL="${UPDATER_INSTALL_URL:-https://raw.githubusercontent.com/ddcat-ai/open-ai-canvas/${REPOSITORY_REF}/scripts/install-host-updater.sh}"
+COMPOSE_URL="${COMPOSE_URL:-}"
+UPDATER_INSTALL_URL="${UPDATER_INSTALL_URL:-}"
+RELEASE_CHECKSUMS_FILE=""
 
 step() {
     printf '\n==> %s\n' "$1"
@@ -173,11 +175,45 @@ set_env_value() {
     mv "$temporary" "$path"
 }
 
+verify_release_asset_checksum() {
+    local asset_name="$1"
+    local file_path="$2"
+    if [[ -z "$RELEASE_CHECKSUMS_FILE" || ! -f "$RELEASE_CHECKSUMS_FILE" ]]; then
+        return 0
+    fi
+    local expected
+    expected="$(awk -v asset="$asset_name" '$2 == asset { print $1 }' "$RELEASE_CHECKSUMS_FILE")"
+    [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || fail "Release 校验清单缺少 ${asset_name}"
+    printf '%s  %s\n' "$expected" "$file_path" | sha256sum -c - >/dev/null || fail "${asset_name} SHA-256 校验失败"
+}
+
+resolve_release_urls() {
+    command -v sha256sum >/dev/null 2>&1 || fail "缺少 sha256sum"
+    local release_tag="v${CANVAS_IMAGE_TAG#v}"
+    if [[ -z "$REPOSITORY_REF" ]]; then
+        REPOSITORY_REF="$release_tag"
+    fi
+    local use_release_checksums=0
+    if [[ -z "$COMPOSE_URL" ]]; then
+        COMPOSE_URL="https://github.com/${REPOSITORY}/releases/download/${release_tag}/${COMPOSE_FILE}"
+        use_release_checksums=1
+    fi
+    if [[ -z "$UPDATER_INSTALL_URL" ]]; then
+        UPDATER_INSTALL_URL="https://github.com/${REPOSITORY}/releases/download/${release_tag}/install-host-updater.sh"
+        use_release_checksums=1
+    fi
+    if ((use_release_checksums)); then
+        RELEASE_CHECKSUMS_FILE="$(mktemp)"
+        curl -fsSL "https://github.com/${REPOSITORY}/releases/download/${release_tag}/SHA256SUMS" -o "$RELEASE_CHECKSUMS_FILE" || fail "下载 Release SHA256SUMS 失败"
+    fi
+}
+
 download_compose() {
     step "下载 GHCR 镜像部署配置"
     local temporary_file
     temporary_file="$(mktemp "${INSTALL_DIR}/.docker-compose.deploy.XXXXXX")"
     curl -fsSL "$COMPOSE_URL" -o "$temporary_file"
+    verify_release_asset_checksum "$COMPOSE_FILE" "$temporary_file"
     mv "$temporary_file" "$COMPOSE_FILE"
 }
 
@@ -186,8 +222,9 @@ install_host_updater() {
     local installer
     installer="$(mktemp)"
     curl -fsSL "$UPDATER_INSTALL_URL" -o "$installer"
+    verify_release_asset_checksum "install-host-updater.sh" "$installer"
     INSTALL_DIR="$INSTALL_DIR" bash "$installer"
-    rm -f "$installer"
+    rm -f "$installer" "$RELEASE_CHECKSUMS_FILE"
 
     step "重建 backend 以启用在线更新"
     docker compose --env-file .env -f "$COMPOSE_FILE" up -d --no-deps --force-recreate --wait --wait-timeout 600 backend
@@ -230,6 +267,7 @@ main() {
     install_docker
     login_ghcr
     prepare_environment
+    resolve_release_urls
     download_compose
     start_services
     install_host_updater

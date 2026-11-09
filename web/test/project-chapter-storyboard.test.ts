@@ -83,19 +83,21 @@ describe("章节分镜写入分镜制作", () => {
         expect(requests).toBe(0);
     });
 
-    test("真实生成请求只消费完整候选，81 项均传到 canvasAssets", async () => {
+    test("真实生成请求保留完整候选并把项目画风写入模型可见提示词", async () => {
         const assets = Array.from({ length: 81 }, (_, index) => ({ ...projectDetail().assets[2], id: `asset-${index}` }));
         const stop = new Error("stop after observing real task request");
         let submitted: any;
         apiClient.defaults.adapter = async (config) => { submitted = JSON.parse(config.data); throw stop; };
         await expect(generateChapterStoryboard({
             projectId: "project-1", chapterId: "chapter-1", chapterTitle: "章节", sourceText: "正文",
-            projectStyle: { presetId: "style", title: "画风", prompt: "画风" }, characters: [],
+            projectStyle: { presetId: "style", title: "国漫 2D", prompt: "稳定线稿、两至三阶赛璐璐明暗；禁止真人照片。" }, characters: [],
             assetCandidates: { status: "complete", assets }, config: defaultConfig, skills: [], selectedSkillIds: [],
         })).rejects.toBe(stop);
         expect(submitted.input.canvasAssets).toHaveLength(81);
         expect(submitted.input.canvasAssets[80].id).toBe("asset-80");
         expect(submitted.input.chapterAssetContext).toEqual({ projectId: "project-1", unitId: "chapter-1", scope: { kind: "all", assetIds: [] } });
+        expect(submitted.prompt).toContain("国漫 2D");
+        expect(submitted.prompt).toContain("稳定线稿、两至三阶赛璐璐明暗；禁止真人照片。");
     });
 
     test("明确 selected 范围只发送所选资产，超额目录不提交任务", async () => {

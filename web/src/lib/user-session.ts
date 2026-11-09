@@ -13,6 +13,7 @@ import { defaultModelCapabilityConfig, STANDARD_IMAGE_SIZE_VALUES, type ModelCap
 import { imageSizeConfigWithPresets } from "@/lib/image-size-presets";
 import { useUserStore } from "@/stores/use-user-store";
 import { PLUGIN_STORE_KEY, usePluginStore } from "@/stores/use-plugin-store";
+import { INSPIRATION_STORE_KEY, useInspirationStore } from "@/stores/use-inspiration-store";
 import { useGlobalAgentStore } from "@/stores/use-global-agent-store";
 import { initializeRemoteUserDataSession, installRemoteUserDataAutoSync, resetRemoteUserDataSync, withRemoteUserDataSyncExclusive } from "@/services/user-data-sync";
 import { clearResourceAccessCache } from "@/services/api/resources";
@@ -68,19 +69,41 @@ function resetUserScopedMemory() {
     useAssetStore.setState({ assets: [], hydrated: false });
     useConfigStore.setState({ config: normalizeConfigSnapshot({ config: defaultConfig }).config });
     usePluginStore.setState({ hydrated: false, installations: [], runtimeStatuses: {}, pluginStates: {} });
+    useInspirationStore.setState({ hydrated: false, custom: [], overrides: {}, hidden: [], favorites: [] });
     useCreationPreferencesStore.setState({ hydrated: false, preferences: {} });
+    clearCanvasClipboardSessionStorage();
     // 全局 Agent 的开合与待投递消息属于账号会话，切换账号必须清空。
     useGlobalAgentStore.getState().reset();
+}
+
+function clearCanvasClipboardSessionStorage() {
+    if (typeof window === "undefined") return;
+    try {
+        const storage = window.sessionStorage;
+        if (!storage) return;
+        const prefix = "open-ai-canvas:nodes-clipboard";
+        const keysToRemove: string[] = [];
+        for (let index = 0; index < storage.length; index += 1) {
+            const key = storage.key(index);
+            if (key && (key === prefix || key.startsWith(`${prefix}:user:`))) {
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach((key) => storage.removeItem(key));
+    } catch {
+        // 忽略受限浏览器环境下的 sessionStorage 清理异常。
+    }
 }
 
 async function hydrateUserSessionData(payload: AuthSessionPayload, generation: number) {
     const startedAt = performance.now();
     const userId = payload.user?.id || "";
-    const [canvas, canvasHistory, assets, plugins] = await Promise.allSettled([
+    const [canvas, canvasHistory, assets, plugins, inspirations] = await Promise.allSettled([
         localForageStorage.getItem(CANVAS_STORE_KEY),
         localForageStorage.getItem(CANVAS_HISTORY_STORE_KEY),
         localForageStorage.getItem(ASSET_STORE_KEY),
         localForageStorage.getItem(PLUGIN_STORE_KEY),
+        localForageStorage.getItem(INSPIRATION_STORE_KEY),
     ]);
     if (!isCurrentSession(generation, userId)) return;
     const persistedConfig = safeScopedStorageGet(CONFIG_STORE_KEY);
@@ -91,6 +114,7 @@ async function hydrateUserSessionData(payload: AuthSessionPayload, generation: n
         useAssetStore.persist.rehydrate(),
         useConfigStore.persist.rehydrate(),
         usePluginStore.persist.rehydrate(),
+        useInspirationStore.persist.rehydrate(),
         useCreationPreferencesStore.persist.rehydrate(),
     ]);
     if (!isCurrentSession(generation, userId)) return;
@@ -99,6 +123,7 @@ async function hydrateUserSessionData(payload: AuthSessionPayload, generation: n
     if (!hasPersistedValue(canvasHistory)) useCanvasHistoryStore.setState({ deletedProjects: [] });
     if (!hasPersistedValue(assets)) useAssetStore.setState({ assets: [] });
     if (!hasPersistedValue(plugins)) usePluginStore.setState({ installations: [], runtimeStatuses: {}, pluginStates: {} });
+    if (!hasPersistedValue(inspirations)) useInspirationStore.setState({ custom: [], overrides: {}, hidden: [], favorites: [] });
     if (!persistedCreationPreferences) useCreationPreferencesStore.setState({ preferences: {} });
 
     if (userId) {

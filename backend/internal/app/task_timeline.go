@@ -267,8 +267,8 @@ func (s *Service) CreateTimelineRenderTask(userID string, req TimelineRenderCrea
 		return nil, &AppError{Status: 503, Code: 503, Message: "服务正在维护，暂不接受新的生成任务", Retryable: true}
 	}
 	plan := buildRenderPlan(req.Timeline)
-	if !plan.HasMedia {
-		return nil, BadAuthRequest("时间线没有可渲染的媒体片段")
+	if err := validateRenderPlan(req.Timeline, plan); err != nil {
+		return nil, err
 	}
 	policy, err := s.RuntimePolicy()
 	if err != nil {

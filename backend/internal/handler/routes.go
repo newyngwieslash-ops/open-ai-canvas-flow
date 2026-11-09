@@ -150,6 +150,7 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		var req struct {
 			Content string `json:"content"`
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 		if err := c.ShouldBindJSON(&req); err != nil {
 			fail(c, http.StatusBadRequest, err)
 			return
@@ -267,6 +268,7 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		var req struct {
 			Text string `json:"text"`
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8<<20)
 		if err := c.ShouldBindJSON(&req); err != nil {
 			fail(c, http.StatusBadRequest, err)
 			return

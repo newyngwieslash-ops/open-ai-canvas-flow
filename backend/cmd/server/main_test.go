@@ -57,15 +57,15 @@ func TestEnsureBuiltinWorkbenchCatalogStartupWiring(t *testing.T) {
 	}
 }
 
-func TestAllowedOriginWildcard(t *testing.T) {
+func TestAllowedOriginWildcardRejected(t *testing.T) {
 	t.Setenv("CANVAS_CORS_ORIGINS", "*")
+	if _, err := parseCORSPolicy("*"); err == nil {
+		t.Fatal("wildcard CORS must be rejected for credentialed requests")
+	}
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest("GET", "http://backend/api/health", nil)
-	if !allowedOrigin(context, "https://example.com") {
-		t.Fatal("wildcard CORS should allow a valid HTTPS origin")
-	}
-	if allowedOrigin(context, "ftp://example.com") {
-		t.Fatal("wildcard CORS should reject non-HTTP origins")
+	if allowedOrigin(context, "https://example.com") {
+		t.Fatal("wildcard CORS must not allow arbitrary HTTPS origins")
 	}
 }
 
@@ -89,6 +89,16 @@ func TestAllowedOriginUsesForwardedHost(t *testing.T) {
 	context.Request.Header.Set("X-Forwarded-Host", " canvas.example.com, proxy.internal")
 	if !allowedOrigin(context, "https://canvas.example.com") {
 		t.Fatal("forwarded public host should be treated as same-origin")
+	}
+	context.Request.Header.Set("X-Forwarded-Proto", "https")
+	if allowedOrigin(context, "http://canvas.example.com") {
+		t.Fatal("http origin must not be treated as same-origin when X-Forwarded-Proto is https")
+	}
+	directCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	directCtx.Request = httptest.NewRequest("GET", "https://canvas.example.com/api/health", nil)
+	directCtx.Request.Header.Set("X-Forwarded-Host", "evil.example.com")
+	if allowedOrigin(directCtx, "https://evil.example.com") {
+		t.Fatal("mismatched X-Forwarded-Host on direct public host must not be trusted")
 	}
 }
 

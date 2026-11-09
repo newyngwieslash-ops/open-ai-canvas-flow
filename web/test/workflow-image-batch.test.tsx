@@ -765,6 +765,26 @@ describe("workflow image batch workbench", () => {
         }
     });
 
+    test("chapter storyboard completion status waits for persisted shots", async () => {
+        const savedDetail = detailState;
+        detailState = { ...detailState, shots: [] };
+        tasksById.set("unsaved-chapter-result", {
+            ...makeBatchTask("s1", "succeeded", "storyboard"), id: "unsaved-chapter-result", type: "canvas_text",
+            clientContext: { domainProjectId: "p1", chapterId: "u1", chapterOperation: "storyboard" },
+            resultJson: JSON.stringify({ rows: [{ plotDescription: "Unsaved shot", durationSeconds: 3 }] }),
+        });
+        customBindingResolveHandler = async () => { throw new Error("Cannot save generated result"); };
+        const mounted = await mountWorkbench({ chapters: true });
+        try {
+            await act(async () => { await settle(100); });
+            expect(findButton("生成到分镜制作")?.textContent).not.toContain("已生成");
+            expect(findButton("生成到分镜制作")?.textContent).toContain("结果待保存");
+            expect(recordedRequests.filter(r => r.method === "PUT" && r.pathname.endsWith("/shots"))).toHaveLength(0);
+            await mounted.rerender({ detail: savedDetail });
+            expect(findButton("生成到分镜制作")?.textContent).toContain("已生成");
+        } finally { await mounted.dispose(); }
+    });
+
     test("ordinary chapters automatic recovery cannot replace shots while the chapter batch is unsettled", async () => {
         await seedPausedBatch();
         tasksById.set("ordinary-chapter-result", {
@@ -999,7 +1019,8 @@ describe("workflow image batch workbench", () => {
         }
     });
 
-    test("workbench: 双槽时间轴按(shotId,artifactType)精确显示待提交/生成中/待核对且不污染另一槽位，竞争写操作锁定当前涉事镜头", async () => {
+    test.each([1, 5])("workbench: 账户上限 %s 时双槽时间轴准确显示待提交或并行生成，竞争写操作锁定当前涉事镜头", async activeTaskLimit => {
+        useUserStore.setState({ runtimeLimits: { ...useUserStore.getState().runtimeLimits!, activeTaskLimit } });
         let releaseFirstTask: (() => void) | null = null;
         customPostTaskHandler = async body => {
             const inputObj = (body?.input || {}) as Record<string, any>;
@@ -1049,7 +1070,8 @@ describe("workflow image batch workbench", () => {
             expect(firstCardRows[1]?.textContent).toContain("待生成");
 
             expect(secondCardRows[0]?.textContent).toContain("分镜图");
-            expect(secondCardRows[0]?.textContent).toContain("待提交");
+            expect(secondCardRows[0]?.textContent).toContain(activeTaskLimit === 1 ? "待提交" : "生成中");
+            expect(imagePosts()).toHaveLength(activeTaskLimit === 1 ? 1 : 2);
             expect(secondCardRows[1]?.textContent).toContain("动作预演");
             expect(secondCardRows[1]?.textContent).toContain("待生成");
         } finally {
@@ -1696,7 +1718,8 @@ describe("workflow image batch lifecycle", () => {
         }
     });
 
-    test("lifecycle: 首个任务running时下一镜零提交，终态且ready产物同步后补一个；已成功但产物稍晚出现时保持syncing不重复提交", async () => {
+    test("lifecycle: 上限为1时首镜完成且产物同步后补位；产物稍晚出现时保持syncing不重复提交", async () => {
+        useUserStore.setState({ runtimeLimits: { ...useUserStore.getState().runtimeLimits!, activeTaskLimit: 1 } });
         let s1PollCount = 0;
         let releaseRunning!: () => void;
         let releaseSyncing!: () => void;

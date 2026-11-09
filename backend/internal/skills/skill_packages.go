@@ -408,6 +408,13 @@ func (s *Service) addSkillArchiveVersion(skill *model.Skill, archive skillPackag
 		_ = os.Remove(filepath.Join(s.dataDir, "skill-packages", filepath.FromSlash(packageKey)))
 		return err
 	}
+	if prunedKeys, pruneErr := s.repo.PruneOldSkillVersions(skill.ID, skill.CurrentVersionID, 5); pruneErr == nil {
+		for _, oldKey := range prunedKeys {
+			if strings.TrimSpace(oldKey) != "" {
+				_ = os.Remove(filepath.Join(s.dataDir, "skill-packages", filepath.FromSlash(oldKey)))
+			}
+		}
+	}
 	return nil
 }
 

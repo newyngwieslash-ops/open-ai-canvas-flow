@@ -121,6 +121,9 @@ func (s *Service) ResetPassword(req PasswordResetRequest) error {
 	if time.Now().After(record.ExpiresAt) {
 		return invalidPasswordResetCode()
 	}
+	if err := s.repo.AttemptLegacyEmailVerification(record.ID); err != nil {
+		return invalidPasswordResetCode()
+	}
 	expectedHash, err := s.emailVerificationCodeHash(passwordResetEmailPurpose, email, code)
 	if err != nil {
 		return err

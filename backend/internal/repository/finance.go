@@ -136,7 +136,7 @@ func (r *Repository) CreateTaskWithCreditReservation(task *model.Task, order *mo
 		if err := reserveBillingOrder(tx, order); err != nil {
 			return err
 		}
-		if err := tx.Create(task).Error; err != nil {
+		if err := repo.createTaskAndBindBatchItem(task); err != nil {
 			return err
 		}
 		if task.Operation == "cloud_agent" && task.ProjectID != "" {
@@ -164,7 +164,7 @@ func (r *Repository) CreateTaskWithActiveLimit(task *model.Task, activeTaskLimit
 		if err := enforceActiveTaskLimit(tx, task.UserID, activeTaskLimit); err != nil {
 			return err
 		}
-		if err := tx.Create(task).Error; err != nil {
+		if err := repo.createTaskAndBindBatchItem(task); err != nil {
 			return err
 		}
 		if task.Operation == "cloud_agent" && task.ProjectID != "" {

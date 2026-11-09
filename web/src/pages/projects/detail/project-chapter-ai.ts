@@ -111,7 +111,10 @@ export async function generateChapterStoryboard(input: ChapterStoryboardGenerati
         selectedSkillIds: input.selectedSkillIds,
     });
     // 技能上下文只描述工作流，不会约束输出结构；必须显式带上输出契约，否则模型返回 Markdown 表格。
-    const prompt = withStoryboardOutputContract(skillExecution.prompt);
+    const prompt = withStoryboardOutputContract([
+        skillExecution.prompt,
+        input.projectStyle.prompt.trim() ? `【项目画风（必须遵循）】\n${input.projectStyle.title}\n${input.projectStyle.prompt}\n每个 imageGenerationPrompt 必须明确沿用上述视觉媒介；角色造型和镜头质感不得替换项目媒介，videoMotionPrompt 也不得改变画风。` : "",
+    ].filter(Boolean).join("\n\n"));
     const task = await createGenerationTask({
         projectId: input.projectId,
         type: "canvas_text",

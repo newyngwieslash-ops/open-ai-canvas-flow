@@ -22,8 +22,6 @@ import {
 import { ApiError } from "@/services/api/request";
 import {
     configuredModelMatchesCapability,
-    logicalModelIDForConfig,
-    resolveModelRequestConfig,
     useConfigStore,
     useEffectiveConfig,
 } from "@/stores/use-config-store";
@@ -32,6 +30,7 @@ import { referenceModelError } from "./project-reference-image";
 import {
     MAX_PROJECT_ASSET_BATCH_ITEMS,
     buildDefaultBatchDraftItems,
+    buildProjectAssetBatchRequest,
     formatBatchPreflightCostSummary,
     summarizeBatchExecution,
     validateBatchDraftItems,
@@ -85,6 +84,8 @@ export function ProjectAssetBatchExecutionList({
     onRetryItem,
     onAdoptCandidate,
 }: ProjectAssetBatchExecutionListProps) {
+    const [previewItemId, setPreviewItemId] = useState<string | null>(null);
+    const previewItem = batch.items.find((item) => item.id === previewItemId);
     const stats = summarizeBatchExecution(batch);
     const costSummary = formatBatchPreflightCostSummary({
         totalKnownMicrocredits: batch.totalKnownMicrocredits,
@@ -157,11 +158,20 @@ export function ProjectAssetBatchExecutionList({
 
                             <div className="flex items-center gap-3">
                                 {item.outputUrl ? (
-                                    <img
-                                        src={item.outputUrl}
-                                        alt={`${item.assetName} 候选预览`}
-                                        className="h-14 w-14 rounded border border-border object-cover"
-                                    />
+                                    <button
+                                        type="button"
+                                        aria-label={`放大查看 ${item.assetName} 候选图片`}
+                                        aria-haspopup="dialog"
+                                        title="点击放大预览"
+                                        className="shrink-0 cursor-zoom-in overflow-hidden rounded border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
+                                        onClick={() => setPreviewItemId(item.id)}
+                                    >
+                                        <img
+                                            src={item.outputUrl}
+                                            alt={`${item.assetName} 候选预览`}
+                                            className="block h-14 w-14 object-cover"
+                                        />
+                                    </button>
                                 ) : null}
                                 {isAdopted ? (
                                     <span className="text-xs font-medium text-success">已采用为当前成品</span>
@@ -189,6 +199,32 @@ export function ProjectAssetBatchExecutionList({
                     );
                 })}
             </div>
+            <AppModal
+                open={Boolean(previewItem?.outputUrl)}
+                title={previewItem ? `${previewItem.assetName} · 候选预览` : "候选预览"}
+                footer={null}
+                centered
+                width="min(1160px, calc(100vw - 32px))"
+                onCancel={() => setPreviewItemId(null)}
+            >
+                {previewItem?.outputUrl ? (
+                    <button
+                        type="button"
+                        aria-label={`收起 ${previewItem.assetName} 候选图片`}
+                        title="点击图片收起"
+                        className="flex w-full cursor-zoom-out justify-center rounded-[var(--r-md)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
+                        onClick={() => setPreviewItemId(null)}
+                    >
+                        <img
+                            src={previewItem.outputUrl}
+                            alt={`${previewItem.assetName} 候选大图`}
+                            draggable={false}
+                            className="block max-h-[75vh] max-w-full object-contain"
+                        />
+                    </button>
+                ) : null}
+                <p className="mt-3 text-center text-xs text-foreground/60">点击图片、空白处或按 Esc 收起预览</p>
+            </AppModal>
         </div>
     );
 }
@@ -348,30 +384,11 @@ export function ProjectAssetBatchModal({ project, assets, onClose, onSaved }: Mo
         const validationError = validateBatchDraftItems(selectedItems);
         if (validationError) throw new Error(validationError);
         if (modelError) throw new Error(modelError);
-        const generationConfig = {
-            ...config,
-            model: routedModel,
-            imageModel: routedModel,
-            count: "1",
-        };
+        const generationConfig = { ...config, model: routedModel, imageModel: routedModel, count: "1" };
         if (!useConfigStore.getState().isAiConfigReady(generationConfig, routedModel)) {
             throw new Error("请先配置可用的图片模型");
         }
-        const requestConfig = resolveModelRequestConfig(generationConfig, routedModel);
-        const logicalModelId = logicalModelIDForConfig(generationConfig);
-        return {
-            provider: logicalModelId ? "managed" : requestConfig.channelId ? "system" : "custom",
-            model: requestConfig.model || routedModel,
-            logicalModelId: logicalModelId || undefined,
-            config: requestConfig as unknown as Record<string, unknown>,
-            items: selectedItems.map((item) => ({
-                assetId: item.assetId,
-                expectedVersionId: item.expectedVersionId,
-                referenceSource: item.referenceSource,
-                prompt: item.prompt.trim(),
-                operation: item.operation,
-            })),
-        };
+        return buildProjectAssetBatchRequest(config, routedModel, selectedItems);
     };
 
     const handlePreflight = async () => {
@@ -517,10 +534,13 @@ export function ProjectAssetBatchModal({ project, assets, onClose, onSaved }: Mo
                             placeholder="查看近期批次执行状态"
                             allowClear
                             onChange={(val) => setActiveBatchId(val || "")}
-                            options={batchesQuery.data.batches.map((b) => ({
-                                value: b.id,
-                                label: `批次 ${b.id.slice(0, 8)} · ${b.status} (${b.totalCount}项)`,
-                            }))}
+                            options={batchesQuery.data.batches.map((listed) => {
+                                const b = activeBatch?.id === listed.id ? activeBatch : listed;
+                                return {
+                                    value: b.id,
+                                    label: `批次 ${b.id.slice(0, 8)} · ${b.status} (${b.totalCount}项)`,
+                                };
+                            })}
                         />
                     ) : null}
                 </div>
@@ -540,6 +560,7 @@ export function ProjectAssetBatchModal({ project, assets, onClose, onSaved }: Mo
                             </Button>
                         </div>
                         <ProjectAssetBatchExecutionList
+                            key={activeBatch.id}
                             batch={activeBatch}
                             adoptingTaskId={adoptingTaskId}
                             retryingItemId={retryingItemId}

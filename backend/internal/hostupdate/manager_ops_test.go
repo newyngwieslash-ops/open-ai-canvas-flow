@@ -187,22 +187,40 @@ func TestWriteComposeEnvOverrideReplacesImageRefs(t *testing.T) {
 	}
 }
 
-// v1.5.8.x 的 Host Updater 只注入 backend/web 镜像，也不会生成 Agent Token。
-// 部署 Compose 中 Agent 相关变量必须有回退值，否则旧更新器的预检会直接失败。
+// 部署 Compose 中 Agent 镜像需要回退值，而 YINGCE_AGENT_TOKEN 必须与宿主机 CANVAS_UPDATER_TOKEN 严格隔离。
 func TestDeployComposeAgentVariablesFallbackForLegacyUpdater(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "docker-compose.deploy.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	compose := string(data)
-	for _, required := range []string{"${CANVAS_YINGCE_AGENT_IMAGE:?", "${YINGCE_AGENT_TOKEN:?"} {
-		if strings.Contains(compose, required) {
-			t.Errorf("docker-compose.deploy.yml must not hard-require %s…}", required)
-		}
+	if strings.Contains(compose, "${CANVAS_YINGCE_AGENT_IMAGE:?") {
+		t.Errorf("docker-compose.deploy.yml must not hard-require ${CANVAS_YINGCE_AGENT_IMAGE:?…}")
 	}
-	for _, fallback := range []string{"${CANVAS_YINGCE_AGENT_IMAGE:-", "${YINGCE_AGENT_TOKEN:-${CANVAS_UPDATER_TOKEN:?"} {
-		if !strings.Contains(compose, fallback) {
-			t.Errorf("docker-compose.deploy.yml is missing fallback %s…}", fallback)
-		}
+	if !strings.Contains(compose, "${CANVAS_YINGCE_AGENT_IMAGE:-") {
+		t.Errorf("docker-compose.deploy.yml is missing fallback ${CANVAS_YINGCE_AGENT_IMAGE:-…}")
+	}
+	if strings.Contains(compose, "${YINGCE_AGENT_TOKEN:-${CANVAS_UPDATER_TOKEN") {
+		t.Errorf("docker-compose.deploy.yml must not fall back YINGCE_AGENT_TOKEN to CANVAS_UPDATER_TOKEN")
+	}
+	if !strings.Contains(compose, "${YINGCE_AGENT_TOKEN:?") {
+		t.Errorf("docker-compose.deploy.yml must require explicit YINGCE_AGENT_TOKEN")
+	}
+}
+
+func TestLookupReleaseChecksumVerifiesHexDigest(t *testing.T) {
+	composeDigest := strings.Repeat("a", 64)
+	updaterDigest := strings.Repeat("b", 64)
+	manifest := []byte(composeDigest + "  docker-compose.deploy.yml\n" + updaterDigest + "  *open-ai-canvas-host-updater-linux-amd64\n")
+	got, err := lookupReleaseChecksum(manifest, "docker-compose.deploy.yml")
+	if err != nil || got != composeDigest {
+		t.Fatalf("lookupReleaseChecksum(docker-compose.deploy.yml) = %q, %v", got, err)
+	}
+	got, err = lookupReleaseChecksum(manifest, "open-ai-canvas-host-updater-linux-amd64")
+	if err != nil || got != updaterDigest {
+		t.Fatalf("lookupReleaseChecksum(updater) = %q, %v", got, err)
+	}
+	if _, err := lookupReleaseChecksum(manifest, "missing.yml"); err == nil {
+		t.Fatal("expected error for missing asset")
 	}
 }

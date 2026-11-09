@@ -28,6 +28,10 @@ func copySystemProxyResponseHeaders(c *gin.Context, resp *http.Response) {
 }
 
 func streamSystemProxyResponse(c *gin.Context, resp *http.Response, responseLimit int64) ([]byte, error) {
+	return streamSystemProxyResponseWithRedaction(c, resp, responseLimit, "")
+}
+
+func streamSystemProxyResponseWithRedaction(c *gin.Context, resp *http.Response, responseLimit int64, apiKey string) ([]byte, error) {
 	copySystemProxyResponseHeaders(c, resp)
 	// 同时通知镜像内和可能存在的外层 Nginx，不得重新缓冲模型事件流。
 	c.Header("Cache-Control", "no-cache, no-store, no-transform")
@@ -36,6 +40,7 @@ func streamSystemProxyResponse(c *gin.Context, resp *http.Response, responseLimi
 	c.Writer.WriteHeaderNow()
 	c.Writer.Flush()
 
+	redactor := newRelayStreamRedactor(apiKey)
 	var captured bytes.Buffer
 	buffer := make([]byte, 32<<10)
 	remaining := responseLimit
@@ -50,17 +55,29 @@ func streamSystemProxyResponse(c *gin.Context, resp *http.Response, responseLimi
 		read, readErr := resp.Body.Read(buffer[:int(readLimit)])
 		if read > 0 {
 			if int64(read) > remaining {
+				if tail := redactor.Push(nil, true); len(tail) > 0 {
+					_, _ = captured.Write(tail)
+				}
 				return captured.Bytes(), errSystemProxyResponseTooLarge
 			}
-			chunk := buffer[:read]
-			_, _ = captured.Write(chunk)
-			if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
-				return captured.Bytes(), writeErr
+			chunk := redactor.Push(buffer[:read], false)
+			if len(chunk) > 0 {
+				_, _ = captured.Write(chunk)
+				if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
+					return captured.Bytes(), writeErr
+				}
+				c.Writer.Flush()
 			}
-			c.Writer.Flush()
 			remaining -= int64(read)
 		}
 		if readErr != nil {
+			if tail := redactor.Push(nil, true); len(tail) > 0 {
+				_, _ = captured.Write(tail)
+				if _, writeErr := c.Writer.Write(tail); writeErr != nil {
+					return captured.Bytes(), writeErr
+				}
+				c.Writer.Flush()
+			}
 			if errors.Is(readErr, io.EOF) {
 				return captured.Bytes(), nil
 			}

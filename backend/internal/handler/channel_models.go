@@ -24,6 +24,7 @@ func RegisterChannelModelRoutes(r *gin.RouterGroup, svc *service.Service) {
 		if !enforceRateLimit(c, "channel-models:"+user.ID, 30, time.Minute) {
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 		var input service.ChannelModelsRequest
 		if err := c.ShouldBindJSON(&input); err != nil {
 			fail(c, http.StatusBadRequest, errors.New("模型渠道参数格式错误"))

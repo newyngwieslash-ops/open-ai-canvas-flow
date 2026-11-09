@@ -111,6 +111,47 @@ func (r *Repository) TaskByCreationSubmissionID(userID, submissionKey string) (*
 	return &task, nil
 }
 
+func (r *Repository) PendingProjectAssetBatchItems(limit, activeTaskLimit int) ([]model.ProjectAssetGenerationBatchItem, error) {
+	var items []model.ProjectAssetGenerationBatchItem
+	err := r.db.Model(&model.ProjectAssetGenerationBatchItem{}).
+		Select("project_asset_generation_batch_items.*").
+		Joins("JOIN project_asset_generation_batches AS batch ON batch.id = project_asset_generation_batch_items.batch_id").
+		Where("project_asset_generation_batch_items.status = ? AND project_asset_generation_batch_items.task_id = ? AND batch.stop_requested_at IS NULL", "pending", "").
+		Where("(SELECT COUNT(*) FROM tasks WHERE tasks.user_id = project_asset_generation_batch_items.user_id AND tasks.status IN ?) < ?", []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}, activeTaskLimit).
+		Order("batch.created_at ASC, project_asset_generation_batch_items.position ASC").Limit(limit).Find(&items).Error
+	return items, err
+}
+
+// Called inside the task/credit transaction: stop, task creation and item binding
+// must share one commit so a prepared dispatcher cannot charge after stop wins.
+func (r *Repository) createTaskAndBindBatchItem(task *model.Task) error {
+	if task.CreationSubmissionID != nil && strings.HasPrefix(*task.CreationSubmissionID, "pab-") {
+		var item model.ProjectAssetGenerationBatchItem
+		if err := r.db.Where("submission_key = ? AND user_id = ? AND project_id = ?", *task.CreationSubmissionID, task.UserID, task.ProjectID).First(&item).Error; err != nil {
+			return err
+		}
+		res := r.db.Model(&model.ProjectAssetGenerationBatch{}).
+			Where("id = ? AND stop_requested_at IS NULL AND status <> ?", item.BatchID, "stopped").
+			Update("updated_at", time.Now())
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return ErrBatchItemAlreadyDispatched
+		}
+		res = r.db.Model(&model.ProjectAssetGenerationBatchItem{}).
+			Where("id = ? AND submission_key = ? AND status = ? AND task_id = ?", item.ID, *task.CreationSubmissionID, "pending", "").
+			Updates(map[string]any{"task_id": task.ID, "status": "running", "error_reason": "", "error_message": "", "updated_at": time.Now()})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return ErrBatchItemAlreadyDispatched
+		}
+	}
+	return r.db.Create(task).Error
+}
+
 func (r *Repository) CanDispatchProjectAssetBatchItem(batchID, itemID string, attempt int) (bool, error) {
 	var allowed bool
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -149,7 +190,7 @@ func (r *Repository) BindProjectAssetBatchItemTask(batchID, itemID string, attem
 			updates["task_id"] = taskID
 		}
 		res := tx.Model(&model.ProjectAssetGenerationBatchItem{}).
-			Where("id = ? AND batch_id = ? AND attempt = ? AND (status = ? OR task_id = ?)", itemID, batchID, attempt, "pending", taskID).
+			Where("id = ? AND batch_id = ? AND attempt = ? AND (status = ? OR (? <> '' AND task_id = ?))", itemID, batchID, attempt, "pending", taskID, taskID).
 			Updates(updates)
 		if res.Error != nil {
 			return res.Error
@@ -176,8 +217,11 @@ func (r *Repository) UpdateProjectAssetBatchAndItems(batch *model.ProjectAssetGe
 		}
 		for i := range items {
 			item := &items[i]
+			if item.TaskID == "" {
+				continue
+			}
 			if err := tx.Model(&model.ProjectAssetGenerationBatchItem{}).
-				Where("id = ? AND batch_id = ?", item.ID, batch.ID).
+				Where("id = ? AND batch_id = ? AND attempt = ? AND (task_id = ? OR (task_id = '' AND status = ?))", item.ID, batch.ID, item.Attempt, item.TaskID, "pending").
 				Updates(map[string]any{
 					"status":        item.Status,
 					"task_id":       item.TaskID,
@@ -226,7 +270,7 @@ func (r *Repository) StopUnsubmittedProjectAssetBatchItems(userID, projectID, ba
 	return r.ProjectAssetGenerationBatchWithItems(userID, projectID, batchID)
 }
 
-func (r *Repository) PrepareRetryProjectAssetBatchItem(userID, projectID, batchID, itemID string, expectedAttempt int, nextSubmissionKey, nextHistoryJSON string) (*model.ProjectAssetGenerationBatchItem, error) {
+func (r *Repository) PrepareRetryProjectAssetBatchItem(userID, projectID, batchID, itemID string, expectedAttempt int, nextSubmissionKey, nextHistoryJSON, nextSnapshotJSON string) (*model.ProjectAssetGenerationBatchItem, error) {
 	now := time.Now()
 	var updatedItem model.ProjectAssetGenerationBatchItem
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -254,6 +298,7 @@ func (r *Repository) PrepareRetryProjectAssetBatchItem(userID, projectID, batchI
 				"attempt":              nextAttempt,
 				"submission_key":       nextSubmissionKey,
 				"attempt_history_json": nextHistoryJSON,
+				"input_snapshot_json":  nextSnapshotJSON,
 				"error_reason":         "",
 				"error_message":        "",
 				"updated_at":           now,

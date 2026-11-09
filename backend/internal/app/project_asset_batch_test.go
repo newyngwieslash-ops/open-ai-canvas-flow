@@ -2,15 +2,21 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
 	"yingce/backend/internal/database"
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/platform"
+	"yingce/backend/internal/repository"
 )
 
 func batchTestService(t *testing.T) (*Service, *gorm.DB, string) {
@@ -31,6 +37,340 @@ func batchTestService(t *testing.T) (*Service, *gorm.DB, string) {
 		t.Fatal(err)
 	}
 	return svc, db, projectID
+}
+
+func batchQueueTestRequest(t *testing.T, svc *Service, projectID string, count int) CreateProjectAssetBatchRequest {
+	t.Helper()
+	req := PreflightProjectAssetBatchRequest{
+		Provider: "custom", Model: "gemini-2.5-flash-image",
+		Config: map[string]any{
+			"interfaceType": "gemini-image", "baseUrl": "https://api.example.com/v1",
+			"apiKey": "sk-batch-queue-test", "model": "gemini-2.5-flash-image",
+		},
+	}
+	for i := 0; i < count; i++ {
+		asset, err := svc.CreateProjectAssetEntity("user-1", projectID, CreateProjectAssetEntityRequest{
+			Category: model.AssetCategoryProp, Name: fmt.Sprintf("queued prop %d", i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Items = append(req.Items, ProjectAssetBatchItemInput{
+			AssetID: asset.ID, ExpectedVersionID: asset.PrimaryVersionID,
+			ReferenceSource: "none", Prompt: asset.Title, Operation: "project_asset_image",
+		})
+	}
+	preflight, err := svc.PreflightProjectAssetBatch("user-1", projectID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CreateProjectAssetBatchRequest{
+		IdempotencyKey: newID(), PreflightDigest: preflight.PreflightDigest,
+		PreflightProjectAssetBatchRequest: req,
+	}
+}
+
+func TestProjectAssetBatchQueuesAboveActiveLimit(t *testing.T) {
+	svc, db, projectID := batchTestService(t)
+	req := batchQueueTestRequest(t, svc, projectID, 23)
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, item := range batch.Items {
+		counts[item.Status]++
+		if item.Status == "pending" && (item.TaskID != "" || item.CanRetry || item.Attempt != 1) {
+			t.Fatalf("waiting item was submitted or treated as a retry: %+v", item)
+		}
+	}
+	if counts["running"] != 5 || counts["pending"] != 18 || counts["failed"] != 0 {
+		t.Fatalf("capacity must defer remaining items, got %v", counts)
+	}
+	var tasks int64
+	if err := db.Model(&model.Task{}).Count(&tasks).Error; err != nil || tasks != 5 {
+		t.Fatalf("active limit was bypassed: tasks=%d err=%v", tasks, err)
+	}
+	encoded, err := json.Marshal(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(encoded, &response); err != nil || response["totalCount"] != float64(23) {
+		t.Fatalf("batch response missing totalCount: %v err=%v", response["totalCount"], err)
+	}
+}
+
+func TestProjectAssetBatchPreflightAtCapacity(t *testing.T) {
+	svc, _, projectID := batchTestService(t)
+	req := batchQueueTestRequest(t, svc, projectID, 1)
+	for i := 0; i < 5; i++ {
+		if _, err := svc.CreateProjectAssetBatch("user-1", projectID, req); err != nil {
+			t.Fatal(err)
+		}
+		req.IdempotencyKey = newID()
+	}
+	if _, err := svc.PreflightProjectAssetBatch("user-1", projectID, req.PreflightProjectAssetBatchRequest); err != nil {
+		t.Fatalf("preflight must remain available while waiting for capacity: %v", err)
+	}
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, req)
+	if err != nil || batch.Items[0].Status != "pending" {
+		t.Fatalf("full queue must accept a waiting batch: batch=%+v err=%v", batch, err)
+	}
+}
+
+type batchImageExecutionProbe struct {
+	*Service
+	calls atomic.Int32
+}
+
+func (p *batchImageExecutionProbe) processTask(_ context.Context, task model.Task) (map[string]interface{}, []map[string]interface{}, error) {
+	p.calls.Add(1)
+	input, err := p.decryptTaskInputJSON(task.InputJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	var parsed canvasGenerationInput
+	if err := json.Unmarshal([]byte(input), &parsed); err != nil {
+		return nil, nil, err
+	}
+	if parsed.Config.APIKey != "sk-batch-queue-test" {
+		return nil, nil, errors.New("queued task lost its credentials after restart")
+	}
+	return map[string]interface{}{"images": []map[string]interface{}{{"resourceId": "image-out-1", "storageKey": "resource:image-out-1"}}}, nil, nil
+}
+
+func TestProjectAssetBatchWorkerContinuesAfterRestart(t *testing.T) {
+	// The concurrent worker needs the same WAL locking behavior as the local server.
+	svc, db := newMediaRecoveryTestService(t)
+	project, _ := seedWorkflowProject(t, db)
+	projectID := project.ID
+	if err := db.Save(&model.SystemSetting{Key: "feature_availability", ValueJSON: `{"customChannelsEnabled":true}`}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Resource{ID: "image-out-1", UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady, Width: 800, Height: 600, Size: 100, MimeType: "image/png"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	req := batchQueueTestRequest(t, svc, projectID, 23)
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, items, err := svc.repo.ProjectAssetGenerationBatchWithItems("user-1", projectID, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if strings.Contains(item.InputSnapshotJSON, "sk-batch-queue-test") {
+			t.Fatal("batch snapshot leaked plaintext credentials")
+		}
+	}
+
+	// No original request or browser polling is available to the new worker.
+	t.Setenv("REDIS_URL", "")
+	coordinator, err := platform.NewCoordinator("sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Service{
+		repo: svc.repo, dataDir: svc.dataDir, coordinator: coordinator,
+		activeCancels: make(map[string]context.CancelFunc), taskDispatcherWake: make(chan struct{}, 1),
+	}
+	probe := &batchImageExecutionProbe{Service: restarted}
+	restarted.taskRouteExecutor = &taskRouteExecutor{port: probe}
+	ctx, _ := restarted.backgroundWorkers().Start()
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := restarted.StopWorker(stopCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	restarted.taskWorker().start(ctx)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var succeeded int64
+		if err := db.Model(&model.Task{}).Where("status = ?", model.TaskStatusSucceeded).Count(&succeeded).Error; err != nil {
+			t.Fatal(err)
+		}
+		active, err := svc.repo.ActiveTaskCountForUser("user-1")
+		if err != nil || active > 5 {
+			t.Fatalf("worker exceeded user capacity: active=%d err=%v", active, err)
+		}
+		if succeeded == 23 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker did not drain the batch after restart: succeeded=%d providerCalls=%d", succeeded, probe.calls.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	view, err := restarted.GetProjectAssetBatch("user-1", projectID, batch.ID)
+	if err != nil || view.Status != "completed" || probe.calls.Load() != 23 {
+		t.Fatalf("batch did not complete exactly once: batch=%+v calls=%d err=%v", view, probe.calls.Load(), err)
+	}
+	for _, item := range view.Items {
+		if item.Attempt != 1 || item.Candidate == nil {
+			t.Fatalf("queue wait must preserve the attempt and manual candidate: %+v", item)
+		}
+	}
+}
+
+func TestProjectAssetBatchStopWinsOverPreparedDispatch(t *testing.T) {
+	svc, db, projectID := batchTestService(t)
+	req := batchQueueTestRequest(t, svc, projectID, 6)
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, prepared, err := svc.evaluateProjectAssetBatch("user-1", projectID, req.PreflightProjectAssetBatchRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, items, err := svc.repo.ProjectAssetGenerationBatchWithItems("user-1", projectID, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StopProjectAssetBatch("user-1", projectID, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Task{}).Where("user_id = ?", "user-1").Update("status", model.TaskStatusCancelled).Error; err != nil {
+		t.Fatal(err)
+	}
+	// A dispatcher may have prepared its request just before the stop committed.
+	taskReq := prepared[5].TaskReq
+	taskReq.creationSubmissionID = items[5].SubmissionKey
+	if _, err := svc.CreateTask("user-1", taskReq); !errors.Is(err, repository.ErrBatchItemAlreadyDispatched) {
+		t.Fatalf("stopped item was admitted after stop: %v", err)
+	}
+	var tasks int64
+	if err := db.Model(&model.Task{}).Count(&tasks).Error; err != nil || tasks != 5 {
+		t.Fatalf("stopped item created a task: tasks=%d err=%v", tasks, err)
+	}
+}
+
+func TestProjectAssetBatchStaleViewCannotRestoreStoppedItems(t *testing.T) {
+	svc, db, projectID := batchTestService(t)
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, batchQueueTestRequest(t, svc, projectID, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleBatch, staleItems, err := svc.repo.ProjectAssetGenerationBatchWithItems("user-1", projectID, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StopProjectAssetBatch("user-1", projectID, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", staleItems[0].TaskID).Update("status", model.TaskStatusCancelled).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.reconcileAndBuildBatchView("user-1", staleBatch, staleItems); err != nil {
+		t.Fatal(err)
+	}
+	_, items, err := svc.repo.ProjectAssetGenerationBatchWithItems("user-1", projectID, batch.ID)
+	if err != nil || items[5].Status != "stopped" {
+		t.Fatalf("stale view resurrected stopped work: status=%s err=%v", items[5].Status, err)
+	}
+}
+
+func TestProjectAssetBatchBillableQueueReservesOnlyAdmittedTasks(t *testing.T) {
+	svc, db, projectID := batchTestService(t)
+	req := batchQueueTestRequest(t, svc, projectID, 6)
+	profile := mustEncodeModelCapabilityConfig(t, DefaultModelCapabilityConfigForModel(string(model.ChannelInterfaceGeminiImage), req.Model))
+	for _, row := range []any{
+		&model.ModelChannel{ID: "batch-channel", Scope: model.ChannelScopeSystem, Enabled: true},
+		&model.ChannelModel{ID: "batch-model", ChannelID: "batch-channel", ModelKey: req.Model, Capability: "image", Protocol: model.ChannelInterfaceGeminiImage, CapabilityConfigJSON: profile, Enabled: true},
+		&model.ChannelModelPriceTier{ID: "batch-price", ChannelModelID: "batch-model", SelectorKey: "{}", SelectorJSON: "{}", BillingMode: "fixed_request", UnitPriceMicrocredits: 100, PriceConfigured: true, Enabled: true},
+		&model.CreditAccount{UserID: "user-1", AvailableMicrocredits: 10000},
+	} {
+		if err := db.Save(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	req.Provider = "system"
+	req.Config = map[string]any{"channelId": "batch-channel", "model": req.Model}
+	preflight, err := svc.PreflightProjectAssetBatch("user-1", projectID, req.PreflightProjectAssetBatchRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.PreflightDigest = preflight.PreflightDigest
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := captureTaskBillingAccounting(t, db, "user-1")
+	if before.tasks != 5 || before.billingOrders != 5 || before.availableMicrocredits != 9500 || batch.Items[5].Status != "pending" {
+		t.Fatalf("waiting work reserved credits or bypassed capacity: %+v status=%s", before, batch.Items[5].Status)
+	}
+	_, prepared, err := svc.evaluateProjectAssetBatch("user-1", projectID, req.PreflightProjectAssetBatchRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, items, err := svc.repo.ProjectAssetGenerationBatchWithItems("user-1", projectID, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StopProjectAssetBatch("user-1", projectID, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CancelProjectAssetBatchTasks(context.Background(), "user-1", projectID, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	before = captureTaskBillingAccounting(t, db, "user-1")
+	taskReq := prepared[5].TaskReq
+	taskReq.creationSubmissionID = items[5].SubmissionKey
+	if _, err := svc.CreateTask("user-1", taskReq); !errors.Is(err, repository.ErrBatchItemAlreadyDispatched) {
+		t.Fatalf("stopped billable task was admitted: %v", err)
+	}
+	if after := captureTaskBillingAccounting(t, db, "user-1"); after != before {
+		t.Fatalf("stop rejection changed billing: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestProjectAssetBatchRetryWaitsForCapacity(t *testing.T) {
+	svc, db, projectID := batchTestService(t)
+	batch, err := svc.CreateProjectAssetBatch("user-1", projectID, batchQueueTestRequest(t, svc, projectID, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := batch.Items[0]
+	if err := db.Model(&model.Task{}).Where("id = ?", first.TaskID).Updates(map[string]any{"status": model.TaskStatusFailed, "error": "upstream failed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Task{ID: "other-active-task", UserID: "user-1", Status: model.TaskStatusQueued}).Error; err != nil {
+		t.Fatal(err)
+	}
+	retried, err := svc.RetryProjectAssetBatchItem("user-1", projectID, batch.ID, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := retried.Items[0]
+	if item.Status != "pending" || item.TaskID != "" || item.Attempt != 2 || len(item.AttemptHistory) != 1 {
+		t.Fatalf("retry should wait without another failed attempt: %+v", item)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", "other-active-task").Update("status", model.TaskStatusCancelled).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.dispatchPendingProjectAssetBatchItems(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := svc.GetProjectAssetBatch("user-1", projectID, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = resumed.Items[0]
+	if item.Status != "running" || item.TaskID == "" || item.TaskID == first.TaskID || item.Attempt != 2 || resumed.Items[5].Status != "pending" {
+		t.Fatalf("retry did not resume once capacity returned: %+v", item)
+	}
+	task, err := svc.repo.Task(item.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := svc.decryptTaskInputJSON(task.InputJSON)
+	if err != nil || !strings.Contains(input, "sk-batch-queue-test") {
+		t.Fatalf("queued retry lost its execution credentials: %v", err)
+	}
 }
 
 func TestProjectAssetBatchMigrationAndIdempotency(t *testing.T) {
@@ -343,8 +683,15 @@ func TestProjectAssetBatchStopCancelRetryAndResourceProtection(t *testing.T) {
 	if err := db.Save(task0).Error; err != nil {
 		t.Fatalf("update task0 running: %v", err)
 	}
+	// Real backend-saved media keeps its checkpoint after success.
+	if err := svc.saveMediaCheckpoint(task0, &mediaCheckpoint{Mode: "image", Items: []mediaCheckpointItem{{ResourceID: "image-out-1"}}}, "register"); err != nil {
+		t.Fatalf("save task0 media checkpoint: %v", err)
+	}
 	if err := svc.saveTaskCompletionWithinStorageQuota(task0, []byte(`{"images":[{"resourceId":"image-out-1","storageKey":"resource:image-out-1"}]}`), nil, false); err != nil {
 		t.Fatalf("finalize manual candidate for task0: %v", err)
+	}
+	if _, err := svc.repo.AssetForUser("user-1", generationMediaAssetID(task0.ID, 0)); err == nil {
+		t.Fatalf("project asset image result must stay a candidate, not become a separate material asset")
 	}
 
 	task1, err := svc.repo.Task(stoppedBatch.Items[1].TaskID)

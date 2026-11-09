@@ -206,6 +206,11 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 		input.OnTextDelta = textPublisher.Publish
 		defer textPublisher.Close()
 	}
+	if input.Mode == "image" || input.Mode == "video" {
+		if err := s.applyGenerationStyleProfile(userID, taskProjectID, &input); err != nil {
+			return nil, err
+		}
+	}
 	if isWorkflowProviderInterface(input.Config.InterfaceType) {
 		if err := s.RequireWorkflowPluginForInterface(input.Config.InterfaceType); err != nil {
 			return nil, err
@@ -223,11 +228,6 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 			}
 		}
 		return s.runWorkflowProviderTask(ctx, input)
-	}
-	if input.Mode == "image" && input.Metadata != nil {
-		if err := s.applyGenerationStyleProfile(userID, taskProjectID, &input); err != nil {
-			return nil, err
-		}
 	}
 	if input.Config.APIFormat == "gemini" && input.Config.InterfaceType != string(model.ChannelInterfaceGeminiVeo) && input.Config.InterfaceType != string(model.ChannelInterfaceGeminiImage) {
 		_, hasDeclarativeAgent := agentProtocolAdapterForContext(ctx, input.Config.InterfaceType)

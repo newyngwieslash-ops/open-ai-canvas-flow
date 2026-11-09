@@ -99,6 +99,11 @@ func (s *Service) prepareResourceDelivery(userID string, resource *model.Resourc
 	if resource == nil || resource.UserID != userID {
 		return nil, Forbidden("资源不可访问")
 	}
+	normalizedOptions, err := assets.NormalizeAccessOptions(options, false)
+	if err != nil {
+		return nil, err
+	}
+	options = normalizedOptions
 	access, err := s.resolveResourceAccess(resource, options)
 	if err != nil {
 		return nil, err

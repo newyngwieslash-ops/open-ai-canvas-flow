@@ -514,6 +514,7 @@ export function useWorkflowImageBatch(input: {
                 }
 
                 const runner = createWorkflowBatchRunner(activeLog, {
+                    maxConcurrentTasks: useUserStore.getState().runtimeLimits?.activeTaskLimit ?? 5,
                     save: async nextLog => {
                         await storage.write(nextLog);
                     },

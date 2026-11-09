@@ -4,6 +4,7 @@ import type { GenerationTask } from "../../../services/api/task-center";
 import type { BatchItem, BatchLog } from "./workflow-batch-plan";
 
 export type BatchRunnerDependencies = {
+    maxConcurrentTasks?: number;
     save(log: BatchLog): Promise<void>;
     preflight(item: BatchItem, signal: AbortSignal): Promise<void>;
     submit(item: BatchItem, signal: AbortSignal, beforePost: () => void, savePreparation: () => Promise<void>): Promise<GenerationTask>;
@@ -269,21 +270,31 @@ export function createWorkflowBatchRunner(
         options?: { observeOnly?: boolean },
     ): Promise<void> => {
         const observeOnly = options?.observeOnly === true;
+        const maxConcurrentTasks = Math.max(1, Math.floor(deps.maxConcurrentTasks ?? 1));
+        const observations = new Set<Promise<void>>();
+        let observationFailed = false;
+        const isBatchStopped = () => stopRequested || (log.state as BatchLog["state"]) === "stopped";
+        const isBatchPaused = () => observationFailed || (log.state as BatchLog["state"]) === "paused";
+        const cannotSubmit = () => signal.aborted || !deps.isOwnerCurrent() || isBatchStopped() || isBatchPaused() || storageFailed;
+        const observe = (item: BatchItem, task?: GenerationTask) => {
+            const observation = observeTask(item, signal, task).then(ok => {
+                if (!ok) observationFailed = true;
+            }).finally(() => observations.delete(observation));
+            observations.add(observation);
+        };
 
-        // First observe any already submitted or syncing items
+        // 恢复时并行观察已有任务；新提交仍逐项保存回执，生成占用有界槽位。
         for (const item of log.items) {
             if (signal.aborted || !deps.isOwnerCurrent() || storageFailed) {
-                return;
+                break;
             }
             if (item.state === "submitted" || item.state === "syncing") {
-                const ok = await observeTask(item, signal);
-                if (!ok) {
-                    return;
-                }
+                observe(item);
             }
         }
 
         if (observeOnly) {
+            await Promise.all(observations);
             return;
         }
 
@@ -294,12 +305,12 @@ export function createWorkflowBatchRunner(
                 log.updatedAt = deps.now();
                 await persist();
             }
+            await Promise.all(observations);
             return;
         }
 
-        const isBatchStopped = () => stopRequested || (log.state as BatchLog["state"]) === "stopped";
-
         if (isBatchStopped()) {
+            await Promise.all(observations);
             return;
         }
 
@@ -307,34 +318,26 @@ export function createWorkflowBatchRunner(
             log.state = "running";
             log.updatedAt = deps.now();
             if (!(await persist())) {
+                await Promise.all(observations);
                 return;
             }
         }
 
         for (const item of log.items) {
-            if (
-                signal.aborted ||
-                !deps.isOwnerCurrent() ||
-                isBatchStopped() ||
-                storageFailed
-            ) {
-                break;
-            }
             if (item.state !== "pending") {
                 continue;
             }
+            while (observations.size >= maxConcurrentTasks && !cannotSubmit()) {
+                await Promise.race(observations);
+            }
+            if (cannotSubmit()) break;
 
             let rejectionAttempt = 0;
             let submittedTask: GenerationTask | null = null;
             let shouldBreakBatch = false;
 
             while (true) {
-                if (
-                    signal.aborted ||
-                    !deps.isOwnerCurrent() ||
-                    isBatchStopped() ||
-                    storageFailed
-                ) {
+                if (cannotSubmit()) {
                     shouldBreakBatch = true;
                     break;
                 }
@@ -343,9 +346,7 @@ export function createWorkflowBatchRunner(
                     await deps.preflight(item, signal);
                 } catch (error) {
                     if (
-                        signal.aborted ||
-                        !deps.isOwnerCurrent() ||
-                        isBatchStopped() ||
+                        cannotSubmit() ||
                         isAbortError(error)
                     ) {
                         if (isBatchStopped()) {
@@ -366,11 +367,7 @@ export function createWorkflowBatchRunner(
                     break;
                 }
 
-                if (
-                    signal.aborted ||
-                    !deps.isOwnerCurrent() ||
-                    isBatchStopped()
-                ) {
+                if (cannotSubmit()) {
                     if (isBatchStopped()) {
                         item.state = "stopped";
                         item.updatedAt = deps.now();
@@ -395,11 +392,7 @@ export function createWorkflowBatchRunner(
                 }
 
                 // 必须再次检查：存储 await 期间可能停止、离开或换号。
-                if (
-                    signal.aborted ||
-                    !deps.isOwnerCurrent() ||
-                    isBatchStopped()
-                ) {
+                if (cannotSubmit()) {
                     item.state = isBatchStopped() ? "stopped" : "pending";
                     item.updatedAt = deps.now();
                     log.updatedAt = deps.now();
@@ -410,7 +403,7 @@ export function createWorkflowBatchRunner(
 
                 let postStarted = false;
                 const beforePost = () => {
-                    if (signal.aborted || !deps.isOwnerCurrent() || isBatchStopped() || storageFailed) {
+                    if (cannotSubmit()) {
                         throw new DOMException("Aborted", "AbortError");
                     }
                     postStarted = true;
@@ -438,7 +431,7 @@ export function createWorkflowBatchRunner(
                 } catch (error) {
                     inFlightSubmitItemIds.delete(item.itemId);
                     if (!postStarted) {
-                        item.state = isBatchStopped() ? "stopped" : signal.aborted || !deps.isOwnerCurrent() ? "pending" : "blocked";
+                        item.state = isBatchStopped() ? "stopped" : cannotSubmit() ? "pending" : "blocked";
                         item.issueCode = item.state === "blocked" ? extractIssueCode(error) ?? "preflight_blocked" : undefined;
                         item.updatedAt = deps.now();
                         if (!isBatchStopped()) log.state = "paused";
@@ -459,7 +452,7 @@ export function createWorkflowBatchRunner(
                                 ? "capacity_wait"
                                 : "rate_wait";
                         item.updatedAt = deps.now();
-                        if (!isBatchStopped()) {
+                        if (!isBatchStopped() && !isBatchPaused()) {
                             log.state = "waiting";
                         }
                         log.updatedAt = deps.now();
@@ -467,12 +460,18 @@ export function createWorkflowBatchRunner(
                             shouldBreakBatch = true;
                             break;
                         }
-                        if (isBatchStopped()) {
+                        if (cannotSubmit()) {
                             shouldBreakBatch = true;
                             break;
                         }
                         try {
-                            await sleepWithBackoffAbort(delay, signal);
+                            if (item.issueCode === "capacity_wait" && observations.size > 0) {
+                                // 本批仍有在途任务时等实际释放名额，避免慢图耗尽短退避预算。
+                                await Promise.race(observations);
+                                rejectionAttempt = 0;
+                            } else {
+                                await sleepWithBackoffAbort(delay, signal);
+                            }
                         } catch {
                             if (isBatchStopped()) {
                                 item.state = "stopped";
@@ -538,18 +537,17 @@ export function createWorkflowBatchRunner(
             }
 
             if (submittedTask) {
-                const ok = await observeTask(item, signal, submittedTask);
-                if (!ok) {
-                    break;
-                }
+                observe(item, submittedTask);
             }
         }
 
+        await Promise.all(observations);
         if (
             !signal.aborted &&
             deps.isOwnerCurrent() &&
             !storageFailed &&
             !isBatchStopped() &&
+            !observationFailed &&
             log.state !== "paused"
         ) {
             const allDone = log.items.every(

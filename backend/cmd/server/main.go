@@ -110,6 +110,9 @@ func run(ctx context.Context) error {
 		slog.Info("storage migration completed", "tasks", summary.Tasks, "assets", summary.Assets, "projects", summary.Projects, "backup", summary.Backup)
 	}
 	r := gin.New()
+	if err := configureTrustedProxies(r); err != nil {
+		return err
+	}
 	// 访问日志：成功的查询类请求只在 debug 级别输出，避免轮询和列表查询把日志打爆。
 	r.Use(logging.AccessLog(redactCanvasSharePath), logging.Recovery())
 	r.Use(handler.RequestCorrelationMiddleware())
@@ -229,8 +232,33 @@ const corsAllowedHeaders = "Accept, Content-Type, Authorization, X-Requested-Wit
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 type corsPolicy struct {
-	origins  map[string]struct{}
-	allowAny bool
+	origins map[string]struct{}
+}
+
+var defaultTrustedProxies = []string{
+	"127.0.0.0/8",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+}
+
+func configureTrustedProxies(r *gin.Engine) error {
+	r.RemoteIPHeaders = []string{"X-Real-IP", "X-Forwarded-For"}
+	raw := strings.TrimSpace(os.Getenv("CANVAS_TRUSTED_PROXIES"))
+	if raw == "" {
+		return r.SetTrustedProxies(defaultTrustedProxies)
+	}
+	if strings.EqualFold(raw, "none") || strings.EqualFold(raw, "false") {
+		return r.SetTrustedProxies(nil)
+	}
+	var proxies []string
+	for _, item := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			proxies = append(proxies, trimmed)
+		}
+	}
+	return r.SetTrustedProxies(proxies)
 }
 
 func cors() (gin.HandlerFunc, error) {
@@ -277,8 +305,7 @@ func parseCORSPolicy(raw string) (corsPolicy, error) {
 			continue
 		}
 		if value == "*" {
-			policy.allowAny = true
-			continue
+			return corsPolicy{}, fmt.Errorf("CANVAS_CORS_ORIGINS must not use wildcard * with credentialed requests")
 		}
 		normalized, err := normalizeCORSOrigin(value)
 		if err != nil {
@@ -313,14 +340,15 @@ func allowedOriginWithPolicy(c *gin.Context, origin string, policy corsPolicy) b
 	if err != nil {
 		return false
 	}
-	requestHost := c.Request.Host
-	if forwardedHost := strings.TrimSpace(c.GetHeader("X-Forwarded-Host")); forwardedHost != "" {
-		requestHost = strings.TrimSpace(strings.Split(forwardedHost, ",")[0])
+	requestHost := strings.TrimSpace(c.Request.Host)
+	if forwardedHost := firstForwardedHeaderValue(c.GetHeader("X-Forwarded-Host")); forwardedHost != "" {
+		if isInternalRequestHost(requestHost) || strings.EqualFold(forwardedHost, requestHost) {
+			requestHost = forwardedHost
+		}
 	}
-	if strings.EqualFold(parsed.Host, strings.TrimSpace(requestHost)) {
-		return true
-	}
-	if policy.allowAny {
+	forwardedProto := strings.ToLower(firstForwardedHeaderValue(c.GetHeader("X-Forwarded-Proto")))
+	requireHTTPS := c.Request.TLS != nil || forwardedProto == "https"
+	if strings.EqualFold(parsed.Host, requestHost) && (!requireHTTPS || parsed.Scheme == "https") {
 		return true
 	}
 	if _, ok := policy.origins[normalizedOrigin]; ok {
@@ -331,4 +359,22 @@ func allowedOriginWithPolicy(c *gin.Context, origin string, policy corsPolicy) b
 	}
 	host := strings.ToLower(parsed.Hostname())
 	return (host == "localhost" || host == "127.0.0.1" || host == "::1") && (parsed.Scheme == "http" || parsed.Scheme == "https")
+}
+
+func firstForwardedHeaderValue(raw string) string {
+	if trimmed := strings.TrimSpace(raw); trimmed != "" {
+		return strings.TrimSpace(strings.Split(trimmed, ",")[0])
+	}
+	return ""
+}
+
+func isInternalRequestHost(host string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(host))
+	if trimmed == "" {
+		return true
+	}
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = strings.Trim(h, "[]")
+	}
+	return trimmed == "backend" || trimmed == "localhost" || trimmed == "127.0.0.1" || trimmed == "::1"
 }

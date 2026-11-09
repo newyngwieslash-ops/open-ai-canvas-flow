@@ -120,6 +120,13 @@ func (r *Repository) CompleteAuthVerification(v *model.AuthVerification, bind bo
 				return err
 			}
 		}
+		if bind && v.Phone != "" {
+			if existing, err := New(tx).UserByPhone(v.Phone); err == nil && existing.ID != v.UserID {
+				return ErrVerificationInvalid
+			} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
 		now := time.Now()
 		if err := consumeVerification(tx, v.ID, now); err != nil {
 			return err
@@ -128,9 +135,11 @@ func (r *Repository) CompleteAuthVerification(v *model.AuthVerification, bind bo
 		updates := map[string]any{"updated_at": now}
 		if bind {
 			if v.Email != "" {
+				query = query.Where("(email = '' OR email IS NULL)")
 				updates["email"], updates["email_verified_at"] = v.Email, now
 			}
 			if v.Phone != "" {
+				query = query.Where("(phone = '' OR phone IS NULL)")
 				updates["phone"], updates["phone_verified_at"] = v.Phone, now
 			}
 		} else {

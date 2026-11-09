@@ -144,12 +144,15 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	if err != nil {
 		return nil, err
 	}
-	activeTasks, err := s.repo.ActiveTaskCountForUser(userID)
-	if err != nil {
-		return nil, err
-	}
-	if activeTasks >= int64(policy.Task.ActiveTaskLimit) {
-		return nil, taskActiveLimitError(policy.Task.ActiveTaskLimit)
+	// 预检只校验和报价，不占活动名额；真正入队仍由事务内的上限校验兜住竞争。
+	if req.creationPrepare == nil {
+		activeTasks, err := s.repo.ActiveTaskCountForUser(userID)
+		if err != nil {
+			return nil, err
+		}
+		if activeTasks >= int64(policy.Task.ActiveTaskLimit) {
+			return nil, taskActiveLimitError(policy.Task.ActiveTaskLimit)
+		}
 	}
 	// 媒体任务在扣费和调用上游前确认账号文件容量，避免容量已满仍然计费却无法回存产物。
 	// 调用方已持锁时走不加锁的版本；这里不能再抢同一把 storageMu。

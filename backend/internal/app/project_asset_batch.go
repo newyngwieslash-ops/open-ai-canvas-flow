@@ -13,6 +13,7 @@ import (
 
 	"gorm.io/gorm"
 	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 const MaxProjectAssetBatchItems = 50
@@ -101,6 +102,7 @@ type ProjectAssetBatchView struct {
 	ProjectID              string                      `json:"projectId"`
 	IdempotencyKey         string                      `json:"idempotencyKey"`
 	Status                 string                      `json:"status"`
+	TotalCount             int                         `json:"totalCount"`
 	TotalKnownMicrocredits int64                       `json:"totalKnownMicrocredits"`
 	PriceUnknownCount      int                         `json:"priceUnknownCount"`
 	StopRequestedAt        *time.Time                  `json:"stopRequestedAt,omitempty"`
@@ -120,12 +122,27 @@ type projectAssetBatchItemSnapshot struct {
 	Model                string         `json:"model"`
 	LogicalModelID       string         `json:"logicalModelId,omitempty"`
 	Config               map[string]any `json:"config,omitempty"`
+	EncryptedConfig      string         `json:"encryptedConfig,omitempty"`
 }
 
 type preparedBatchItem struct {
 	Summary  ProjectAssetBatchPreflightItem
 	TaskReq  CreateTaskRequest
 	Snapshot projectAssetBatchItemSnapshot
+}
+
+func (s *Service) encodeBatchItemSnapshot(item preparedBatchItem) (string, error) {
+	config, err := json.Marshal(item.TaskReq.Input["config"])
+	if err != nil {
+		return "", err
+	}
+	// 等待项尚无 task 可恢复凭据；整份配置加密也覆盖自定义 headers。
+	item.Snapshot.EncryptedConfig, err = s.encryptSettingSecret(string(config))
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(item.Snapshot)
+	return string(raw), err
 }
 
 func sanitizeBatchConfigForPersistence(raw map[string]any) map[string]any {
@@ -496,7 +513,10 @@ func (s *Service) CreateProjectAssetBatch(userID, projectID string, req CreatePr
 
 	itemModels := make([]model.ProjectAssetGenerationBatchItem, len(prepared))
 	for i, p := range prepared {
-		snapBytes, _ := json.Marshal(p.Snapshot)
+		snapshot, err := s.encodeBatchItemSnapshot(p)
+		if err != nil {
+			return nil, err
+		}
 		itemModels[i] = model.ProjectAssetGenerationBatchItem{
 			ID:                 newID(),
 			BatchID:            batchID,
@@ -508,7 +528,7 @@ func (s *Service) CreateProjectAssetBatch(userID, projectID string, req CreatePr
 			AssetCategory:      p.Summary.AssetCategory,
 			BaseVersionID:      p.Summary.BaseVersionID,
 			ReferenceSource:    p.Summary.ReferenceSource,
-			InputSnapshotJSON:  string(snapBytes),
+			InputSnapshotJSON:  snapshot,
 			Status:             "pending",
 			Attempt:            1,
 			SubmissionKey:      batchSubmissionKey(batchID, p.Summary.Position, 1),
@@ -541,8 +561,14 @@ func (s *Service) CreateProjectAssetBatch(userID, projectID string, req CreatePr
 		limit = s.batchDispatchLimitForTest
 	}
 	for i := 0; i < limit; i++ {
-		s.dispatchBatchItem(userID, savedBatch.ID, &savedItems[i], prepared[i].TaskReq)
+		if err := s.dispatchBatchItem(userID, savedBatch.ID, &savedItems[i], &prepared[i].TaskReq); err != nil {
+			if extractAppErrorReason(err) == string(ReasonTaskActiveLimitExceeded) {
+				break
+			}
+			return nil, err
+		}
 	}
+	s.wakeTaskDispatcher()
 
 	freshBatch, freshItems, err := s.repo.ProjectAssetGenerationBatchWithItems(userID, projectID, savedBatch.ID)
 	if err != nil {
@@ -551,30 +577,83 @@ func (s *Service) CreateProjectAssetBatch(userID, projectID string, req CreatePr
 	return s.reconcileAndBuildBatchView(userID, freshBatch, freshItems)
 }
 
-func (s *Service) dispatchBatchItem(userID, batchID string, item *model.ProjectAssetGenerationBatchItem, taskReq CreateTaskRequest) {
+func (s *Service) dispatchBatchItem(userID, batchID string, item *model.ProjectAssetGenerationBatchItem, taskReq *CreateTaskRequest) error {
 	allowed, err := s.repo.CanDispatchProjectAssetBatchItem(batchID, item.ID, item.Attempt)
 	if err != nil || !allowed {
-		return
+		return err
 	}
 	if existingTask, findErr := s.repo.TaskByCreationSubmissionID(userID, item.SubmissionKey); findErr == nil && existingTask != nil {
-		_ = s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, existingTask.ID, "running", "", "")
-		return
+		return s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, existingTask.ID, "running", "", "")
+	} else if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return findErr
 	}
-	taskReq.creationSubmissionID = item.SubmissionKey
-	createdTask, createErr := s.CreateTask(userID, taskReq)
+	var createdTask *model.Task
+	var createErr error
+	if taskReq == nil {
+		var prepared *preparedBatchItem
+		prepared, createErr = s.preparePersistedBatchItem(userID, item)
+		if createErr == nil {
+			if prepared.Summary.PriceUnknown != item.PriceUnknown || prepared.Summary.KnownMicrocredits != item.KnownMicrocredits {
+				createErr = &AppError{Status: 409, Code: 409, Reason: "batch_preflight_stale", Message: "等待期间模型价格已变化，请重新预检确认"}
+			} else {
+				taskReq = &prepared.TaskReq
+			}
+		}
+	}
+	if createErr == nil {
+		taskReq.creationSubmissionID = item.SubmissionKey
+		createdTask, createErr = s.CreateTask(userID, *taskReq)
+	}
 	if createErr != nil {
 		if existingTask, findErr := s.repo.TaskByCreationSubmissionID(userID, item.SubmissionKey); findErr == nil && existingTask != nil {
-			_ = s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, existingTask.ID, "running", "", "")
-			return
+			return s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, existingTask.ID, "running", "", "")
+		} else if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		if errors.Is(createErr, repository.ErrBatchItemAlreadyDispatched) {
+			return nil
 		}
 		reason := extractAppErrorReason(createErr)
+		if reason == string(ReasonTaskActiveLimitExceeded) {
+			return createErr
+		}
 		if reason == "" {
 			reason = "task_submission_failed"
 		}
-		_ = s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, "", "failed", reason, sanitizeBatchErrorMessage(createErr.Error()))
-		return
+		return s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, "", "failed", reason, sanitizeBatchErrorMessage(createErr.Error()))
 	}
-	_ = s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, createdTask.ID, "running", "", "")
+	return s.repo.BindProjectAssetBatchItemTask(batchID, item.ID, item.Attempt, createdTask.ID, "running", "", "")
+}
+
+func (s *Service) dispatchPendingProjectAssetBatchItems(ctx context.Context) error {
+	policy, err := s.RuntimePolicy()
+	if err != nil {
+		return err
+	}
+	items, err := s.repo.WithContext(ctx).PendingProjectAssetBatchItems(MaxProjectAssetBatchItems, policy.Task.ActiveTaskLimit)
+	if err != nil {
+		return err
+	}
+	fullUsers := make(map[string]bool)
+	for i := range items {
+		if ctx.Err() != nil || s.IsDraining() {
+			return ctx.Err()
+		}
+		item := &items[i]
+		if fullUsers[item.UserID] {
+			continue
+		}
+		if err := s.dispatchBatchItem(item.UserID, item.BatchID, item, nil); err != nil {
+			if extractAppErrorReason(err) == string(ReasonTaskActiveLimitExceeded) {
+				fullUsers[item.UserID] = true
+				continue
+			}
+			if !errors.Is(err, repository.ErrBatchItemAlreadyDispatched) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func sanitizeBatchErrorMessage(raw string) string {
@@ -686,45 +765,11 @@ func (s *Service) RetryProjectAssetBatchItem(userID, projectID, batchID, itemID 
 		return nil, BadAuthRequest("仅已确认失败且无待核对账单或候选的生成项支持重试")
 	}
 
-	var snap projectAssetBatchItemSnapshot
-	if err := json.Unmarshal([]byte(targetModel.InputSnapshotJSON), &snap); err != nil {
-		return nil, BadAuthRequest("批次项快照损坏，无法重试")
+	prepared, err := s.preparePersistedBatchItem(userID, targetModel)
+	if err != nil {
+		return nil, err
 	}
-
-	retryConfig := maps.Clone(snap.Config)
-	if retryConfig == nil {
-		retryConfig = map[string]any{}
-	}
-	if targetModel.TaskID != "" {
-		if origTask, err := s.repo.Task(targetModel.TaskID); err == nil && origTask != nil {
-			var origInput map[string]any
-			if json.Unmarshal([]byte(origTask.InputJSON), &origInput) == nil {
-				if origCfg, ok := origInput["config"].(map[string]any); ok {
-					for _, secretKey := range []string{"apiKey", "secretKey", "headers", "runningHubWalletApiKey", "runningHubUploadApiKey"} {
-						if val, exists := origCfg[secretKey]; exists && retryConfig[secretKey] == nil {
-							retryConfig[secretKey] = val
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Build task request from snapshot + current asset check
-	preflightReq := PreflightProjectAssetBatchRequest{
-		Provider:       snap.Provider,
-		Model:          snap.Model,
-		LogicalModelID: snap.LogicalModelID,
-		Config:         retryConfig,
-		Items: []ProjectAssetBatchItemInput{{
-			AssetID:           snap.AssetID,
-			ExpectedVersionID: snap.BaseVersionID,
-			ReferenceSource:   snap.ReferenceSource,
-			Prompt:            snap.Prompt,
-			Operation:         snap.Operation,
-		}},
-	}
-	_, prepared, err := s.evaluateProjectAssetBatch(userID, projectID, preflightReq)
+	snapshot, err := s.encodeBatchItemSnapshot(*prepared)
 	if err != nil {
 		return nil, err
 	}
@@ -741,18 +786,66 @@ func (s *Service) RetryProjectAssetBatchItem(userID, projectID, batchID, itemID 
 	historyBytes, _ := json.Marshal(history)
 	nextSubmissionKey := batchSubmissionKey(batch.ID, targetModel.Position, targetModel.Attempt+1)
 
-	updatedItem, err := s.repo.PrepareRetryProjectAssetBatchItem(userID, projectID, batch.ID, targetModel.ID, targetModel.Attempt, nextSubmissionKey, string(historyBytes))
+	updatedItem, err := s.repo.PrepareRetryProjectAssetBatchItem(userID, projectID, batch.ID, targetModel.ID, targetModel.Attempt, nextSubmissionKey, string(historyBytes), snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	s.dispatchBatchItem(userID, batch.ID, updatedItem, prepared[0].TaskReq)
+	if err := s.dispatchBatchItem(userID, batch.ID, updatedItem, &prepared.TaskReq); err != nil && extractAppErrorReason(err) != string(ReasonTaskActiveLimitExceeded) {
+		return nil, err
+	}
+	s.wakeTaskDispatcher()
 
 	freshBatch, freshItems, err := s.repo.ProjectAssetGenerationBatchWithItems(userID, projectID, batch.ID)
 	if err != nil {
 		return nil, err
 	}
 	return s.reconcileAndBuildBatchView(userID, freshBatch, freshItems)
+}
+
+func (s *Service) preparePersistedBatchItem(userID string, item *model.ProjectAssetGenerationBatchItem) (*preparedBatchItem, error) {
+	var snap projectAssetBatchItemSnapshot
+	if err := json.Unmarshal([]byte(item.InputSnapshotJSON), &snap); err != nil {
+		return nil, BadAuthRequest("批次项快照损坏，无法派发")
+	}
+	config := maps.Clone(snap.Config)
+	if snap.EncryptedConfig != "" {
+		raw, err := s.decryptSettingSecret(snap.EncryptedConfig)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &config); err != nil {
+			return nil, BadAuthRequest("批次项配置损坏，无法派发")
+		}
+	}
+	if config == nil {
+		config = map[string]any{}
+	}
+	if item.TaskID != "" {
+		if origTask, err := s.repo.Task(item.TaskID); err == nil && origTask != nil {
+			var origInput map[string]any
+			if json.Unmarshal([]byte(origTask.InputJSON), &origInput) == nil {
+				if origCfg, ok := origInput["config"].(map[string]any); ok {
+					for _, key := range []string{"apiKey", "secretKey", "headers", "runningHubWalletApiKey", "runningHubUploadApiKey"} {
+						if val, exists := origCfg[key]; exists && config[key] == nil {
+							config[key] = val
+						}
+					}
+				}
+			}
+		}
+	}
+	_, prepared, err := s.evaluateProjectAssetBatch(userID, item.ProjectID, PreflightProjectAssetBatchRequest{
+		Provider: snap.Provider, Model: snap.Model, LogicalModelID: snap.LogicalModelID, Config: config,
+		Items: []ProjectAssetBatchItemInput{{
+			AssetID: snap.AssetID, ExpectedVersionID: snap.BaseVersionID, ReferenceSource: snap.ReferenceSource,
+			Prompt: snap.Prompt, Operation: snap.Operation,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &prepared[0], nil
 }
 
 func extractTaskOutputImageURL(raw string) string {
@@ -839,7 +932,8 @@ func (s *Service) reconcileAndBuildBatchView(userID string, batch *model.Project
 						item.ErrorMessage = ""
 					}
 				case model.TaskStatusSucceeded:
-					if hasMediaCheckpoint || candidate == nil {
+					// 成功任务会保留媒体检查点用于重放去重，不代表待恢复；只看候选是否落地。
+					if candidate == nil {
 						item.Status = "reconcile_required"
 						item.ErrorReason = "candidate_or_media_reconcile_required"
 						item.ErrorMessage = "上游已返回结果但媒体或候选状态待恢复核对，禁止盲目重发"
@@ -945,7 +1039,9 @@ func (s *Service) reconcileAndBuildBatchView(userID string, batch *model.Project
 	}
 
 	if dirty {
-		_ = s.repo.UpdateProjectAssetBatchAndItems(batch, items)
+		if err := s.repo.UpdateProjectAssetBatchAndItems(batch, items); err != nil {
+			return nil, err
+		}
 	}
 
 	return &ProjectAssetBatchView{
@@ -953,6 +1049,7 @@ func (s *Service) reconcileAndBuildBatchView(userID string, batch *model.Project
 		ProjectID:              batch.ProjectID,
 		IdempotencyKey:         batch.IdempotencyKey,
 		Status:                 batch.Status,
+		TotalCount:             len(items),
 		TotalKnownMicrocredits: batch.TotalKnownMicrocredits,
 		PriceUnknownCount:      batch.PriceUnknownCount,
 		StopRequestedAt:        batch.StopRequestedAt,

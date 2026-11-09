@@ -200,6 +200,10 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 			if err := writer.RegisterTaskOutputFromTask(completed); err != nil {
 				return err
 			}
+			// 项目图片结果归属目标资产（待确认候选或已绑定版本），不再另建一张素材卡。
+			if visualImage {
+				return nil
+			}
 			return writer.registerRecoveredMediaAssets(completed)
 		}
 	}

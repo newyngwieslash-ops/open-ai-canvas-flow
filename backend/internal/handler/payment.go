@@ -54,6 +54,7 @@ func RegisterPaymentRoutes(r *gin.RouterGroup, svc *service.Service) {
 		if !enforceRateLimit(c, "payment-order:"+user.ID, 20, time.Hour) {
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 		var request service.CreatePaymentOrderRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -204,6 +205,7 @@ func RegisterPaymentRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 		var request service.UpdatePaymentProviderConfigRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -235,6 +237,7 @@ func RegisterPaymentRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 		var request service.TopupProductRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -253,6 +256,7 @@ func RegisterPaymentRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 		var request service.TopupProductRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -315,6 +319,7 @@ func RegisterPaymentRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 		var request service.RunPaymentReconciliationRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, err)

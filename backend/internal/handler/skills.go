@@ -122,6 +122,7 @@ func RegisterSkillRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 		var req service.SkillLibraryCategoryMutationRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			failService(c, service.BadAuthRequest("技能库分类数据格式无效"))
@@ -192,6 +193,7 @@ func RegisterSkillRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 		var req service.SkillLibraryCategoryAssignmentRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			failService(c, service.BadAuthRequest("技能库分类数据格式无效"))
@@ -300,6 +302,7 @@ func RegisterSkillRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 		var req service.SkillMutationRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			failService(c, service.BadAuthRequest("技能数据格式无效"))
@@ -319,6 +322,7 @@ func RegisterSkillRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 		var req service.SkillMutationRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			failService(c, service.BadAuthRequest("技能数据格式无效"))

@@ -83,7 +83,9 @@ export function pingFlowExtension(signal?: AbortSignal) {
 }
 
 async function readMedia(media: FlowExportMedia, remainingBytes: number, signal?: AbortSignal) {
-    const response = await fetch(resourceFileUrl(media.id), { credentials: "include", signal });
+    // Use same-origin credentials so /api/resources/:id/file receives the session cookie,
+    // while a 307 redirect to cross-origin OSS/CDN omits credentials and passes wildcard CORS.
+    const response = await fetch(resourceFileUrl(media.id), { credentials: "same-origin", signal });
     if (!response.ok) throw new Error(`读取“${media.name}”失败（HTTP ${response.status}），提交未完成`);
     const mimeType = (response.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
     const limit = Math.min(FLOW_FILE_MAX_BYTES, remainingBytes);

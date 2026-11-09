@@ -25,7 +25,15 @@ type styleExecutionPlanDocument struct {
 }
 
 func (s *Service) applyGenerationStyleProfile(userID string, taskProjectID string, input *canvasGenerationInput) error {
+	storedProfileJSON, storedPresetID, belongsToProject, err := s.taskProjectStyleProfile(userID, taskProjectID)
+	if err != nil {
+		return fmt.Errorf("读取项目画风失败：%w", err)
+	}
 	styleProfileJSON := metadataString(input.Metadata, "styleProfileJson")
+	// 项目画风以服务端保存值为准，调用方漏传快照不能绕过约束。
+	if strings.TrimSpace(styleProfileJSON) == "" {
+		styleProfileJSON = storedProfileJSON
+	}
 	if strings.TrimSpace(styleProfileJSON) == "" {
 		return nil
 	}
@@ -35,10 +43,6 @@ func (s *Service) applyGenerationStyleProfile(userID string, taskProjectID strin
 	var profile styleProfileDocument
 	if err := json.Unmarshal([]byte(styleProfileJSON), &profile); err != nil {
 		return fmt.Errorf("项目画风执行配置解析失败：%w", err)
-	}
-	storedProfileJSON, storedPresetID, belongsToProject, err := s.taskProjectStyleProfile(userID, taskProjectID)
-	if err != nil {
-		return fmt.Errorf("读取项目画风失败：%w", err)
 	}
 	if belongsToProject {
 		if strings.TrimSpace(storedProfileJSON) == "" {
@@ -64,9 +68,15 @@ func (s *Service) applyGenerationStyleProfile(userID string, taskProjectID strin
 	// 因此后端必须以最终模型重新编译，不能要求用户手动“刷新配置”来同步内部路由。
 	plan, _ := decodeStyleExecutionPlan(input.Metadata["styleExecutionPlan"])
 	stylePrompt, expectedStatus, warnings := resolveGenerationStyleExecution(profile, input.Config.Model, firstNonEmpty(input.Config.InterfaceType, input.Config.APIFormat))
+	if metadataString(input.Metadata, "source") == "short-drama-workflow" {
+		stylePrompt += "\n项目画风是本次生成的视觉基线；镜头提示词或参考图中与其冲突的媒介、画法和风格标注均以项目画风为准，保留镜头剧情、动作与构图。"
+		if metadataString(input.Metadata, "artifactType") == "action_board" {
+			stylePrompt += "\n动作预演使用黑白分镜草图，仅将项目配色转换为灰阶，必须保留项目视觉媒介、角色造型和画法；黑白不代表改成真人写实。"
+		}
+	}
 	input.Prompt = reconcileGenerationStylePrompt(input.Prompt, plan.Prompt, stylePrompt)
 	if expectedStatus == "blocked" {
-		return fmt.Errorf("当前图片模型无法完整执行项目画风：%s。请切换图片模型，或在项目设置中停用对应画风资产", strings.Join(warnings, "；"))
+		return fmt.Errorf("当前模型无法完整执行项目画风：%s。请切换模型，或在项目设置中停用对应画风资产", strings.Join(warnings, "；"))
 	}
 	return nil
 }

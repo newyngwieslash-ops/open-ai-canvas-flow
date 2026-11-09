@@ -315,7 +315,7 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 				return nil, err
 			}
 			// 代理地址由部署者通过环境变量配置；目标 URL 仍在请求前经过 SSRF 校验。
-			if configuredProxyHost(host) {
+			if configuredProxyEndpoint(host, port) {
 				return dialer.DialContext(ctx, network, address)
 			}
 			addresses, err := resolveHost(ctx, host)
@@ -385,7 +385,12 @@ func newOutboundTransportWithProxy(proxyURL string) *http.Transport {
 }
 
 func configuredProxyHost(host string) bool {
+	return configuredProxyEndpoint(host, "")
+}
+
+func configuredProxyEndpoint(host, port string) bool {
 	host = normalizeOutboundHost(host)
+	port = strings.TrimSpace(port)
 	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
 		raw := strings.TrimSpace(os.Getenv(name))
 		if raw == "" {
@@ -395,7 +400,21 @@ func configuredProxyHost(host string) bool {
 			raw = "http://" + raw
 		}
 		parsed, err := url.Parse(raw)
-		if err == nil && normalizeOutboundHost(parsed.Hostname()) == host {
+		if err != nil || normalizeOutboundHost(parsed.Hostname()) != host {
+			continue
+		}
+		if port == "" {
+			return true
+		}
+		proxyPort := parsed.Port()
+		if proxyPort == "" {
+			if strings.EqualFold(parsed.Scheme, "https") {
+				proxyPort = "443"
+			} else {
+				proxyPort = "80"
+			}
+		}
+		if proxyPort == port {
 			return true
 		}
 	}
@@ -466,11 +485,7 @@ func resolveOutboundHostWithPolicy(ctx context.Context, host string, allowPrivat
 }
 
 func blockedOutboundIP(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()
-}
-
-func blockedCustomRelayIP(ip net.IP) bool {
-	if blockedOutboundIP(ip) {
+	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
 	address, ok := netip.AddrFromSlice(ip)
@@ -484,6 +499,10 @@ func blockedCustomRelayIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+func blockedCustomRelayIP(ip net.IP) bool {
+	return blockedOutboundIP(ip)
 }
 
 func allowPrivateUpstreams() bool {
